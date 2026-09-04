@@ -7,6 +7,7 @@ class AddBookState(StatesGroup):
     waiting_for_category = State()
     waiting_for_emoji = State()
     waiting_for_description = State()
+    waiting_for_inner_images = State()
 
 
 class EditBookState(StatesGroup):

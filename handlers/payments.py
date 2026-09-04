@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 
 import db
 from db.orders import save_admin_notification_ids, clear_admin_notifications
-from config.settings import ADMIN_IDS
+from config import settings
 from states import PaymentSettingsState
 
 router = Router()
@@ -14,7 +14,7 @@ print("✅ payments.py загружен")
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in settings.ADMIN_IDS
 
 
 # ============================================
@@ -325,7 +325,7 @@ async def process_successful_payment(message: Message, bot: Bot):
         parse_mode="HTML"
     )
 
-    for admin_id in ADMIN_IDS:
+    for admin_id in settings.ADMIN_IDS:
         try:
             await bot.send_message(
                 admin_id,
@@ -384,13 +384,16 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
     )
     await callback.answer("✅ Информация отправлена администратору!", show_alert=True)
 
-    # Уведомляем админов
-    for admin_id in ADMIN_IDS:
+    # Уведомляем админов и сохраняем ID сообщений для последующего удаления
+    admin_ids = []
+    message_ids = []
+    
+    for admin_id in settings.ADMIN_IDS:
         try:
             builder = InlineKeyboardBuilder()
             builder.button(text="✅ Подтвердить оплату", callback_data=f"admin_paid_{order_id}")
 
-            await bot.send_message(
+            msg = await bot.send_message(
                 admin_id,
                 f"💰 <b>Пользователь сообщил об оплате!</b>\n\n"
                 f"📦 Заказ: #{order_id}\n"
@@ -400,9 +403,15 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
             )
-            print(f"✅ Уведомление отправлено админу {admin_id}")
+            print(f"✅ Уведомление отправлено админу {admin_id}, message_id={msg.message_id}")
+            admin_ids.append(admin_id)
+            message_ids.append(msg.message_id)
         except Exception as e:
             print(f"❌ Ошибка отправки админу {admin_id}: {e}")
+    
+    # Сохраняем ID сообщений в БД
+    if admin_ids and message_ids:
+        await save_admin_notification_ids(order_id, admin_ids, message_ids)
 
 
 @router.callback_query(F.data.startswith("admin_paid_"))
@@ -440,6 +449,13 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
         print(f"❌ Ошибка обновления статуса: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
         return
+
+    # Удаляем уведомления у всех админов
+    try:
+        await clear_admin_notifications(order_id, bot)
+        print(f"✅ Уведомления админам для заказа #{order_id} удалены")
+    except Exception as e:
+        print(f"⚠️ Не удалось удалить уведомления: {e}")
 
     # Обновляем сообщение
     try:
