@@ -86,6 +86,12 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Добавляем колонку для хранения ID сообщений уведомлений админам
+        try:
+            await db.execute("ALTER TABLE orders ADD COLUMN admin_notification_ids TEXT DEFAULT '[]'")
+        except Exception:
+            pass  # Колонка уже существует
 
         # Таблица позиций заказа
         await db.execute("""
