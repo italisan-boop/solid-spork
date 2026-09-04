@@ -4,7 +4,7 @@ import logging
 import colorlog
 from aiogram import Bot, Dispatcher
 
-import database as db
+import db
 from config import BOT_TOKEN, WEBAPP_URL, RUN_MODE, ADMIN_IDS
 from handlers import user, admin_orders, catalog, categories, payments
 
@@ -36,9 +36,6 @@ class CallbackLoggerMiddleware(BaseMiddleware):
 # Добавляем middleware
 dp.callback_query.middleware(CallbackLoggerMiddleware())
 
-# Подключаем роутеры
-# Подключаем роутеры
-# ВАЖНО: payments должен быть ПЕРВЫМ, чтобы его FSM-хендлеры срабатывали раньше универсального текстового
 # Подключаем роутеры
 # ВАЖНО: payments должен быть ПЕРВЫМ, чтобы его callback-хендлеры срабатывали раньше
 dp.include_router(payments.router)

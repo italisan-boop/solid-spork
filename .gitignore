@@ -1,26 +1,26 @@
-# Секреты и конфигурация
+```
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
 .env
-config.py # Если там есть реальные токены, лучше вынести их в .env
-
-# База данных
-*.db
-*.sqlite3
-
-# Виртуальное окружение Python
+.env.local
+.env.*
+node_modules/
 venv/
 .venv/
-env/
-
-# Кэш и временные файлы Python
-__pycache__/
-*.py[cod]
-*$py.class
-
-# IDE и редакторы
-.idea/
+dist/
+build/
+.coverage
+coverage/
+htmlcov/
+.mypy_cache/
+.pytest_cache/
 .vscode/
-*.swp
-*.swo
-
-# Логи
-*.log
+.idea/
+```

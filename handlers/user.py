@@ -6,7 +6,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
-import database as db
+import db
 # ↓ ОБНОВИ ЭТУ СТРОКУ, добавив broadcast_pending_users и support_pending_users
 from config import BOT_TOKEN, WEBAPP_URL, ADMIN_IDS, broadcast_pending_users, support_pending_users
 from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
