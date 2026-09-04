@@ -46,6 +46,15 @@ async def get_order_full(order_id: int) -> dict:
         )
         items = await cursor.fetchall()
 
+        # Получаем ID сообщений уведомлений
+        admin_notification_ids = []
+        if 'admin_notification_ids' in order.keys() and order['admin_notification_ids']:
+            try:
+                import json
+                admin_notification_ids = json.loads(order['admin_notification_ids'])
+            except Exception:
+                admin_notification_ids = []
+
         return {
             'id': order['id'],
             'user_id': order['user_id'],
@@ -53,6 +62,7 @@ async def get_order_full(order_id: int) -> dict:
             'total': order['total'],
             'status': order['status'],
             'created_at': order['created_at'],
+            'admin_notification_ids': admin_notification_ids,
             'items': [dict(item) for item in items]
         }
 
@@ -78,6 +88,66 @@ async def update_order_status(order_id: int, status: str):
         )
         await db.commit()
     print(f"✅ Статус заказа #{order_id} изменён на '{status}'")
+
+
+async def save_admin_notification_ids(order_id: int, admin_ids: list, message_ids: list):
+    """Сохранить ID сообщений уведомлений админам для последующего удаления"""
+    import json
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Получаем текущие ID
+        cursor = await db.execute("SELECT admin_notification_ids FROM orders WHERE id = ?", (order_id,))
+        row = await cursor.fetchone()
+        current_ids = []
+        if row and row[0]:
+            try:
+                current_ids = json.loads(row[0])
+            except Exception:
+                current_ids = []
+        
+        # Добавляем новые пары (admin_id, message_id)
+        for admin_id, msg_id in zip(admin_ids, message_ids):
+            if msg_id:
+                current_ids.append({"admin_id": admin_id, "message_id": msg_id})
+        
+        await db.execute(
+            "UPDATE orders SET admin_notification_ids = ? WHERE id = ?",
+            (json.dumps(current_ids), order_id)
+        )
+        await db.commit()
+
+
+async def clear_admin_notifications(order_id: int, bot):
+    """Удалить уведомления у всех админов после подтверждения одним из них"""
+    import json
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT admin_notification_ids FROM orders WHERE id = ?", (order_id,))
+        row = await cursor.fetchone()
+        
+        if not row or not row[0]:
+            return
+        
+        try:
+            notifications = json.loads(row[0])
+        except Exception:
+            return
+        
+        # Удаляем сообщения у всех админов
+        for notif in notifications:
+            admin_id = notif.get('admin_id')
+            msg_id = notif.get('message_id')
+            if admin_id and msg_id:
+                try:
+                    await bot.delete_message(chat_id=admin_id, message_id=msg_id)
+                    print(f"✅ Уведомление удалено у админа {admin_id}")
+                except Exception as e:
+                    print(f"⚠️ Не удалось удалить уведомление у админа {admin_id}: {e}")
+        
+        # Очищаем поле в БД
+        await db.execute(
+            "UPDATE orders SET admin_notification_ids = ? WHERE id = ?",
+            ('[]', order_id)
+        )
+        await db.commit()
 
 
 async def get_all_orders(limit: int = 20, offset: int = 0, status: str = None) -> list:
