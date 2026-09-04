@@ -4,7 +4,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
-import database as db
+import db
 from config import ADMIN_IDS
 from states import AddBookState, EditBookState
 from utils import parseBookImages

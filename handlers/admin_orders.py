@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
-import database as db
+import db
 from config import ADMIN_IDS, broadcast_pending_users, support_pending_users
 
 router = Router()
