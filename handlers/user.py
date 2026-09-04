@@ -1,5 +1,5 @@
 import json
-import asyncio  # ← ДОБАВЬ ЭТО (было пропущено, из-за чего падала рассылка)
+import asyncio
 from aiogram import Bot, Router, F
 from aiogram.types import Message, WebAppInfo, CallbackQuery, LabeledPrice
 from aiogram.filters import CommandStart, Command
@@ -7,25 +7,17 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
 import db
-# ↓ ОБНОВИ ЭТУ СТРОКУ, добавив broadcast_pending_users и support_pending_users
-from config import BOT_TOKEN, WEBAPP_URL, ADMIN_IDS, broadcast_pending_users, support_pending_users
+from config import settings
 from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
 from utils import format_local_time, parseBookImages
 
 router = Router()
-# !!! УДАЛИ отсюда эти две строки, если они остались:
-# broadcast_pending_users = set()
-# support_pending_users = set()
-
-router = Router()
-
-# Глобальные множества для рассылки и поддержки
-
-
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in settings.settings.ADMIN_IDS
+
+
 
 
 @router.message(CommandStart(deep_link=True))
@@ -67,7 +59,7 @@ async def cmd_start(message: Message):
 async def _send_start_menu(message: Message):
     """Отправка стартового меню"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=WEBAPP_URL))
+    builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=settings.WEBAPP_URL))
     builder.button(text="📜 Мои заказы", callback_data="my_orders")
     builder.button(text="👥 Пригласить друга", callback_data="invite_friend")
     builder.button(text="🆘 Поддержка", callback_data="support")
@@ -119,7 +111,7 @@ async def about_callback(callback: CallbackQuery):
 @router.callback_query(F.data == "support")
 async def support_callback(callback: CallbackQuery):
     """Обработка кнопки поддержки"""
-    support_pending_users.add(callback.from_user.id)
+    settings.support_pending_users.add(callback.from_user.id)
     await callback.message.answer(
         "🆘 <b>Служба поддержки</b>\n\n"
         "Напишите ваш вопрос, и администратор ответит!\n\n"
@@ -158,7 +150,7 @@ async def cancel_order(callback: CallbackQuery):
 @router.callback_query(F.data == "main_menu")
 async def back_to_menu(callback: CallbackQuery):
     builder = InlineKeyboardBuilder()
-    builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=WEBAPP_URL))
+    builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=settings.WEBAPP_URL))
     builder.button(text="📜 Мои заказы", callback_data="my_orders")
     builder.button(text="🆘 Поддержка", callback_data="support")
     builder.button(text="ℹ️ О магазине", callback_data="about")
@@ -802,8 +794,8 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
 
     # === РАССЫЛКА ===
     # === РАССЫЛКА ===
-    if is_admin(user_id) and user_id in broadcast_pending_users:
-        broadcast_pending_users.discard(user_id)
+    if is_admin(user_id) and user_id in settings.broadcast_pending_users:
+        settings.broadcast_pending_users.discard(user_id)
         user_ids = await db.get_all_unique_users()
 
         if not user_ids:
@@ -833,9 +825,9 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         return
 
     # === ПОДДЕРЖКА ===
-    if user_id in support_pending_users:
-        support_pending_users.discard(user_id)
-        for admin_id in ADMIN_IDS:
+    if user_id in settings.support_pending_users:
+        settings.support_pending_users.discard(user_id)
+        for admin_id in settings.ADMIN_IDS:
             try:
                 await bot.send_message(
                     admin_id,
@@ -915,8 +907,8 @@ async def cancel_action(message: Message, state: FSMContext):
         await state.clear()
         was_active = True
 
-    broadcast_pending_users.discard(user_id)
-    support_pending_users.discard(user_id)
+    settings.broadcast_pending_users.discard(user_id)
+    settings.support_pending_users.discard(user_id)
 
     if was_active:
         await message.answer("✅ Действие отменено.")
