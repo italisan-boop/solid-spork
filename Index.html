@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Семена Знаний</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Marck+Script&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --tg-bg: var(--tg-theme-bg-color, #f5f1e8);
+            --tg-text: var(--tg-theme-text-color, #2c3e2d);
+            --tg-hint: var(--tg-theme-hint-color, #5a6b5c);
+            --tg-link: var(--tg-theme-link-color, #2d5a27);
+            --tg-button: var(--tg-theme-button-color, #2d5a27);
+            --tg-button-text: var(--tg-theme-button-text-color, #ffffff);
+            --tg-secondary-bg: var(--tg-theme-secondary-bg-color, #e8e4d9);
+
+            --primary-green: var(--tg-button, #2d5a27);
+            --light-green: #4a7c43;
+            --accent-green: #7cb342;
+            --bg-cream: var(--tg-bg, #f5f1e8);
+            --card-bg: var(--tg-secondary-bg, #fffef9);
+            --text-dark: var(--tg-text, #2c3e2d);
+            --text-light: var(--tg-hint, #5a6b5c);
+            --border-sage: #c5d5c0;
+            --heart-color: #e53935;
+        }
+
+        body {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            background: var(--bg-cream);
+            color: var(--text-dark);
+            padding: 16px;
+            padding-bottom: 110px;
+            min-height: 100vh;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .header {
+            text-align: center;
+            padding: 24px 0;
+            margin-bottom: 20px;
+            position: relative;
+        }
+        .header::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 32px; opacity: 0.3; }
+        .header::after { content: ""; position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 32px; opacity: 0.3; }
+        .header h1 {
+            font-family: 'Caveat', 'Marck Script', cursive;
+            font-size: 42px;
+            color: var(--primary-green);
+            margin-bottom: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-shadow: 2px 2px 4px rgba(45, 90, 39, 0.1);
+        }
+        .header p {
+            font-family: 'Caveat', cursive;
+            font-size: 22px;
+            color: var(--accent-green);
+            font-style: italic;
+            font-weight: 600;
+            letter-spacing: 2px;
+            position: relative;
+            display: inline-block;
+            padding: 0 20px;
+        }
+        .header p::before,
+        .header p::after {
+            content: "🌿";
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 18px;
+            opacity: 0.6;
+        }
+        .header p::before { left: -5px; }
+        .header p::after { right: -5px; }
+
+        .header-buttons {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            display: flex;
+            gap: 10px;
+            z-index: 100;
+        }
+        .header-btn {
+            background: var(--card-bg);
+            border: 2px solid var(--border-sage);
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            position: relative;
+        }
+        .header-btn:active { transform: scale(0.95); }
+        .header-btn.active {
+            background: var(--heart-color);
+            border-color: var(--heart-color);
+        }
+        .header-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: var(--heart-color);
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+            min-width: 20px;
+            height: 20px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 4px;
+            border: 2px solid var(--bg-cream);
+        }
+        .header-badge.cart-badge {
+            background: var(--primary-green);
+        }
+
+        .search-container { position: relative; margin-bottom: 16px; }
+        .search-input {
+            width: 100%; padding: 14px 48px 14px 48px;
+            border: 2px solid var(--border-sage); border-radius: 25px;
+            font-size: 15px; background: var(--card-bg); color: var(--text-dark);
+            outline: none; transition: all 0.3s; box-shadow: 0 2px 8px rgba(45, 90, 39, 0.1);
+        }
+        .search-input:focus { border-color: var(--accent-green); box-shadow: 0 4px 12px rgba(124, 179, 66, 0.2); }
+        .search-icon { position: absolute; left: 18px; top: 50%; transform: translateY(-50%); font-size: 20px; opacity: 0.5; }
+        .search-clear {
+            position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+            background: var(--light-green); border: none; border-radius: 50%;
+            width: 28px; height: 28px; font-size: 16px; cursor: pointer;
+            display: none; align-items: center; justify-content: center; color: white;
+        }
+        .search-clear.visible { display: flex; }
+
+        .price-filter {
+            display: flex; gap: 10px; margin-bottom: 16px;
+        }
+        .price-wrapper { position: relative; flex: 1; }
+        .price-input {
+            width: 100%; padding: 12px;
+            border: 2px solid var(--border-sage); border-radius: 12px;
+            background: var(--card-bg); color: var(--text-dark);
+            font-size: 14px; outline: none; transition: all 0.3s;
+        }
+        .price-input:focus { border-color: var(--accent-green); }
+        .price-label {
+            position: absolute; top: -8px; left: 12px;
+            background: var(--bg-cream); padding: 0 4px;
+            font-size: 11px; color: var(--text-light);
+        }
+
+        /* СОРТИРОВКА */
+        .sort-container {
+            margin-bottom: 16px;
+        }
+        .sort-select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid var(--border-sage);
+            border-radius: 12px;
+            background: var(--card-bg);
+            color: var(--text-dark);
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .sort-select:focus {
+            border-color: var(--accent-green);
+        }
+
+        .categories-scroll {
+            display: flex; gap: 10px; overflow-x: auto;
+            padding: 8px 4px 12px; margin-bottom: 16px;
+            scrollbar-width: thin; scrollbar-color: var(--accent-green) var(--bg-cream);
+        }
+        .categories-scroll::-webkit-scrollbar { height: 6px; }
+        .categories-scroll::-webkit-scrollbar-thumb { background: var(--accent-green); border-radius: 3px; }
+
+        .category-tab {
+            flex-shrink: 0; padding: 10px 20px; border-radius: 20px;
+            border: 2px solid var(--border-sage); background: var(--card-bg);
+            color: var(--text-light); font-size: 14px; font-weight: 600;
+            cursor: pointer; transition: all 0.3s; white-space: nowrap;
+        }
+        .category-tab.active {
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            color: var(--tg-button-text); border-color: var(--primary-green);
+        }
+
+        .books-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 20px; margin-bottom: 20px;
+        }
+
+        .book-card {
+            background: var(--card-bg); border-radius: 16px; overflow: hidden;
+            box-shadow: 0 4px 12px rgba(45, 90, 39, 0.15);
+            cursor: pointer; transition: all 0.3s;
+            border: 2px solid transparent; position: relative;
+        }
+        .book-card:active { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(45, 90, 39, 0.25); }
+        .book-card.in-cart { border-color: var(--accent-green); }
+
+        .book-card .check-mark {
+            position: absolute; top: 10px; right: 10px;
+            width: 32px; height: 32px;
+            background: linear-gradient(135deg, var(--accent-green), var(--light-green));
+            color: white; border-radius: 50%;
+            display: none; align-items: center; justify-content: center;
+            font-size: 18px; font-weight: bold; z-index: 3;
+        }
+        .book-card.in-cart .check-mark { display: flex; }
+
+        .heart-btn {
+            position: absolute; top: 10px; left: 10px;
+            width: 32px; height: 32px;
+            background: rgba(255,255,255,0.9);
+            border: none; border-radius: 50%;
+            font-size: 18px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 4; transition: all 0.2s;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .heart-btn:active { transform: scale(0.9); }
+        .heart-btn.in-wishlist { color: var(--heart-color); }
+
+        .share-btn-card {
+            position: absolute; top: 10px; left: 50px;
+            width: 32px; height: 32px;
+            background: rgba(255,255,255,0.9);
+            border: none; border-radius: 50%;
+            font-size: 16px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 4; transition: all 0.2s;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .share-btn-card:active { transform: scale(0.9); }
+
+        .book-cover {
+            width: 100%;
+            height: 200px;
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 64px;
+        }
+        .book-cover img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;  /* ← Изображение полностью помещается, не обрезается */
+            object-position: center;
+        }
+        .book-cover .photo-count {
+            position: absolute; bottom: 8px; right: 8px;
+            background: rgba(0,0,0,0.7); color: white;
+            padding: 4px 8px; border-radius: 12px;
+            font-size: 11px; font-weight: 600;
+        }
+
+        .book-info { padding: 14px; }
+        .book-title {
+            font-size: 15px; font-weight: 700; margin-bottom: 6px; line-height: 1.3;
+            color: var(--text-dark); display: -webkit-box;
+            -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .book-category { font-size: 12px; color: var(--text-light); margin-bottom: 8px; font-style: italic; }
+        .book-price-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+        .book-price { font-size: 18px; font-weight: 700; color: var(--primary-green); }
+        .book-hint { font-size: 11px; color: var(--text-light); opacity: 0.7; }
+
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.85); display: none;
+            align-items: center; justify-content: center;
+            z-index: 2000; padding: 20px; backdrop-filter: blur(4px);
+        }
+        .modal-overlay.active { display: flex; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        .modal-content {
+            background: var(--card-bg); border-radius: 20px;
+            max-width: 500px; width: 100%; max-height: 90vh; overflow-y: auto;
+            position: relative; animation: slideUp 0.3s ease;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+        }
+        @keyframes slideUp { from { transform: translateY(50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        .modal-close {
+            position: absolute; top: 12px; right: 12px;
+            width: 36px; height: 36px; background: rgba(255,255,255,0.95);
+            border: none; border-radius: 50%; font-size: 24px; cursor: pointer;
+            z-index: 10; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .modal-images {
+            width: 100%;
+            height: 320px;
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            touch-action: pan-y;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-images img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;  /* ← Изображение полностью помещается */
+            object-position: center;
+        }
+        .modal-images-slider { display: flex; transition: transform 0.3s ease; height: 100%; }
+        .modal-image-slide { min-width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 120px; }
+        .modal-image-slide img { width: 100%; height: 100%; object-fit: cover; }
+        .modal-image-nav { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; }
+        .modal-image-dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.5); cursor: pointer; transition: all 0.2s; }
+        .modal-image-dot.active { background: white; width: 24px; border-radius: 5px; }
+
+        .modal-body { padding: 24px; }
+        .modal-title { font-size: 24px; font-weight: 700; color: var(--primary-green); margin-bottom: 8px; }
+        .modal-category { font-size: 14px; color: var(--text-light); font-style: italic; margin-bottom: 16px; }
+        .modal-description {
+            font-size: 15px; line-height: 1.7; color: var(--text-dark); margin-bottom: 20px;
+            padding: 18px; background: var(--bg-cream); border-radius: 12px;
+            border-left: 4px solid var(--accent-green); white-space: pre-line;
+        }
+        .modal-price-row { display: flex; justify-content: space-between; align-items: center; padding-top: 16px; border-top: 2px solid var(--border-sage); }
+        .modal-price { font-size: 28px; font-weight: 700; color: var(--primary-green); }
+        .modal-add-btn {
+            padding: 14px 28px; background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            color: var(--tg-button-text); border: none; border-radius: 25px; font-size: 16px; font-weight: 600;
+            cursor: pointer; transition: all 0.3s;
+        }
+        .modal-add-btn:active { transform: scale(0.95); }
+        .modal-add-btn.in-cart { background: linear-gradient(135deg, var(--accent-green), #9ccc65); }
+
+        .cart-items { max-height: 400px; overflow-y: auto; margin-bottom: 16px; }
+        .cart-item {
+            display: flex; align-items: center; padding: 12px;
+            background: var(--bg-cream); border-radius: 12px;
+            margin-bottom: 10px; gap: 12px;
+        }
+        .cart-item-info { flex: 1; }
+        .cart-item-title { font-size: 14px; font-weight: 600; color: var(--text-dark); margin-bottom: 4px; }
+        .cart-item-price { font-size: 13px; color: var(--primary-green); font-weight: 600; }
+        .cart-item-controls { display: flex; align-items: center; gap: 8px; }
+        .cart-qty-btn {
+            width: 28px; height: 28px;
+            border: 2px solid var(--border-sage); border-radius: 50%;
+            background: var(--card-bg); color: var(--text-dark);
+            font-size: 16px; font-weight: bold; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .cart-qty-btn:active { transform: scale(0.9); }
+        .cart-qty { font-size: 14px; font-weight: 600; min-width: 20px; text-align: center; }
+        .cart-remove-btn {
+            width: 28px; height: 28px; border: none; border-radius: 50%;
+            background: var(--heart-color); color: white;
+            font-size: 16px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .cart-remove-btn:active { transform: scale(0.9); }
+
+        .cart-summary-box {
+            background: var(--bg-cream); border-radius: 12px;
+            padding: 16px; margin-bottom: 16px;
+        }
+        .cart-total-row {
+            display: flex; justify-content: space-between;
+            align-items: center; margin-bottom: 8px;
+        }
+        .cart-total-label { font-size: 14px; color: var(--text-light); }
+        .cart-total-value { font-size: 18px; font-weight: 700; color: var(--primary-green); }
+        .cart-discount { color: var(--accent-green); }
+
+        .cart-actions { display: flex; gap: 10px; }
+        .cart-clear-btn {
+            flex: 1; padding: 14px;
+            background: var(--card-bg); color: var(--heart-color);
+            border: 2px solid var(--heart-color); border-radius: 12px;
+            font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+        }
+        .cart-clear-btn:active { transform: scale(0.95); }
+        .cart-checkout-btn {
+            flex: 2; padding: 14px;
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            color: var(--tg-button-text); border: none; border-radius: 12px;
+            font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+        }
+        .cart-checkout-btn:active { transform: scale(0.95); }
+        .cart-checkout-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .cart-summary {
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            border-radius: 16px; padding: 16px 20px; margin-bottom: 16px;
+            display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 4px 12px rgba(45, 90, 39, 0.3); font-weight: 600; color: var(--tg-button-text);
+        }
+        .cart-summary .count { background: rgba(255,255,255,0.2); padding: 4px 12px; border-radius: 12px; }
+
+        .promo-section {
+            background: var(--card-bg); border-radius: 16px;
+            padding: 16px; margin-bottom: 16px;
+            box-shadow: 0 4px 12px rgba(45, 90, 39, 0.15);
+        }
+        .promo-input-wrapper { display: flex; gap: 10px; }
+        .promo-input {
+            flex: 1; padding: 12px;
+            border: 2px solid var(--border-sage); border-radius: 12px;
+            font-size: 14px; background: var(--bg-cream); color: var(--text-dark);
+            outline: none; text-transform: uppercase; font-family: inherit;
+        }
+        .promo-input:focus { border-color: var(--accent-green); }
+        .promo-apply-btn {
+            padding: 12px 20px;
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            color: var(--tg-button-text); border: none; border-radius: 12px;
+            font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+        }
+        .promo-apply-btn:active { transform: scale(0.95); }
+        .promo-apply-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .promo-message { margin-top: 10px; font-size: 13px; min-height: 18px; }
+        .promo-message.success { color: var(--accent-green); font-weight: 600; }
+        .promo-message.error { color: var(--heart-color); }
+        .promo-discount {
+            margin-top: 10px; padding: 10px;
+            background: var(--bg-cream); border-radius: 8px;
+            font-size: 14px; font-weight: 600; color: var(--primary-green);
+        }
+
+        .main-button {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            color: var(--tg-button-text); border: none; padding: 18px 24px; font-size: 17px; font-weight: 700;
+            cursor: pointer; width: 100%; display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 -4px 20px rgba(45, 90, 39, 0.4);
+        }
+        .main-button:active { transform: translateY(2px); }
+        .main-button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .main-button .badge { background: rgba(255,255,255,0.25); padding: 6px 14px; border-radius: 16px; font-size: 15px; }
+
+        .empty-state { text-align: center; padding: 60px 20px; opacity: 0.6; }
+        .empty-state .emoji { font-size: 64px; margin-bottom: 16px; }
+        .empty-state .text { font-size: 16px; color: var(--text-light); }
+
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8); display: none;
+            align-items: center; justify-content: center; z-index: 3000;
+            flex-direction: column; gap: 20px;
+        }
+        .loading-overlay.active { display: flex; }
+        .loading-spinner {
+            width: 60px; height: 60px; border: 5px solid rgba(255,255,255,0.2);
+            border-top-color: var(--accent-green); border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { color: white; font-size: 18px; font-weight: 600; }
+
+        .payment-order-info {
+            background: var(--bg-cream); padding: 16px;
+            border-radius: 12px; margin-bottom: 16px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .payment-methods { margin-bottom: 16px; }
+        .payment-method {
+            background: var(--bg-cream); padding: 14px;
+            border-radius: 12px; margin-bottom: 10px;
+        }
+        .payment-method-title {
+            font-size: 15px; font-weight: 700;
+            color: var(--primary-green); margin-bottom: 8px;
+        }
+        .payment-details { margin-top: 8px; }
+        .payment-label { font-size: 12px; color: var(--text-light); margin-bottom: 4px; }
+        .payment-value {
+            font-size: 16px; font-weight: 600; color: var(--text-dark);
+            word-break: break-all; padding: 8px;
+            background: var(--card-bg); border-radius: 8px; margin-bottom: 8px;
+        }
+        .copy-btn-small {
+            padding: 6px 12px;
+            background: var(--primary-green); color: var(--tg-button-text);
+            border: none; border-radius: 8px; font-size: 12px;
+            cursor: pointer; font-family: inherit;
+        }
+        .copy-btn-small:active { transform: scale(0.95); }
+        .payment-instructions {
+            background: var(--bg-cream); padding: 12px;
+            border-radius: 12px; font-size: 13px;
+            color: var(--text-light); margin-bottom: 12px; font-style: italic;
+        }
+        .payment-warning {
+            background: rgba(229, 57, 53, 0.1);
+            border-left: 3px solid var(--heart-color);
+            padding: 10px 12px; border-radius: 8px;
+            font-size: 13px; color: var(--heart-color); margin-bottom: 16px;
+        }
+        .payment-confirm-btn {
+            width: 100%; padding: 16px;
+            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            color: var(--tg-button-text); border: none; border-radius: 12px;
+            font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit;
+        }
+        .payment-confirm-btn:active { transform: scale(0.98); }
+        .payment-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        @media (max-width: 480px) {
+            .books-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+            .book-cover { height: 160px; }
+            .modal-images { height: 260px; }
+        }
+                /* Адаптивная высота для разных экранов */
+        @media (max-width: 480px) {
+            .book-cover {
+                height: 180px;  /* Чуть меньше на маленьких экранах */
+            }
+            .modal-images {
+                height: 280px;  /* Чуть меньше на маленьких экранах */
+            }
+        }
+
+        @media (min-height: 800px) {
+            .book-cover {
+                height: 240px;  /* Больше на высоких экранах */
+            }
+            .modal-images {
+                height: 380px;  /* Больше на высоких экранах */
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1> Семена Знаний 📚</h1>
+        <p>органика <span style="color: var(--primary-green); font-size: 26px;">=</span> ботаника</p>
+    </div>
+
+    <div class="header-buttons">
+        <button class="header-btn" id="wishlistBtn" onclick="toggleWishlistView()">
+            ❤️
+            <span class="header-badge" id="wishlistBadge" style="display: none;">0</span>
+        </button>
+        <button class="header-btn" id="cartBtn" onclick="openCartModal()">
+            🛒
+            <span class="header-badge cart-badge" id="cartBadge" style="display: none;">0</span>
+        </button>
+    </div>
+
+    <div class="search-container">
+        <span class="search-icon">🔍</span>
+        <input type="text" class="search-input" id="searchInput" placeholder="🔍 Поиск по названию, описанию..." autocomplete="off">
+        <button class="search-clear" id="searchClear">✕</button>
+    </div>
+
+    <div class="price-filter">
+        <div class="price-wrapper">
+            <span class="price-label">От, ₽</span>
+            <input type="number" class="price-input" id="priceMin" placeholder="0" min="0">
+        </div>
+        <div class="price-wrapper">
+            <span class="price-label">До, ₽</span>
+            <input type="number" class="price-input" id="priceMax" placeholder="10000" min="0">
+        </div>
+    </div>
+
+    <div class="sort-container">
+        <select class="sort-select" id="sortSelect" onchange="changeSort()">
+            <option value="default">📊 По умолчанию</option>
+            <option value="price_asc">💰 Сначала дешёвые</option>
+            <option value="price_desc">💎 Сначала дорогие</option>
+            <option value="title">🔤 По названию</option>
+        </select>
+    </div>
+
+    <div class="categories-scroll" id="categoriesScroll"></div>
+    <div class="books-grid" id="booksGrid"></div>
+
+    <div class="empty-state" id="emptyState" style="display: none;">
+        <div class="emoji" id="emptyEmoji">🌱</div>
+        <div class="text" id="emptyText">Ничего не найдено</div>
+    </div>
+
+    <div class="cart-summary" id="cartSummary" style="display: none;">
+        <span>🛒 В корзине: <span class="count" id="cartCount">0</span></span>
+        <span><span id="cartTotal">0</span> ₽</span>
+    </div>
+
+    <div class="promo-section" id="promoSection" style="display: none;">
+        <div class="promo-input-wrapper">
+            <input type="text" class="promo-input" id="promoInput" placeholder="Введите промокод" autocomplete="off">
+            <button class="promo-apply-btn" id="promoApplyBtn">Применить</button>
+        </div>
+        <div class="promo-message" id="promoMessage"></div>
+        <div class="promo-discount" id="promoDiscount" style="display: none;">
+            🎟️ Скидка: <span id="discountAmount">0</span> ₽
+        </div>
+    </div>
+
+    <button class="main-button" id="mainButton" disabled>
+        <span id="buttonText">Корзина пуста</span>
+        <span class="badge" id="buttonBadge" style="display: none;">0</span>
+    </button>
+
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-content">
+            <button class="modal-close" id="modalClose">&times;</button>
+            <div class="modal-images" id="modalImages">
+                <div class="modal-images-slider" id="modalImagesSlider"></div>
+                <div class="modal-image-nav" id="modalImageNav"></div>
+            </div>
+            <div class="modal-body">
+                <h2 class="modal-title" id="modalTitle"></h2>
+                <div class="modal-category" id="modalCategory"></div>
+                <div class="modal-description" id="modalDescription"></div>
+                <div class="modal-price-row">
+                    <div class="modal-price" id="modalPrice"></div>
+                    <button class="modal-add-btn" id="modalAddBtn">Добавить в корзину</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="cartOverlay">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeCartModal()">&times;</button>
+            <div class="modal-body">
+                <h2 class="modal-title">🛒 Ваша корзина</h2>
+                <div class="cart-items" id="cartItems"></div>
+                <div class="cart-summary-box">
+                    <div class="cart-total-row">
+                        <span class="cart-total-label">Товары:</span>
+                        <span class="cart-total-value" id="cartSubtotal">0 ₽</span>
+                    </div>
+                    <div class="cart-total-row cart-discount" id="cartDiscountRow" style="display: none;">
+                        <span class="cart-total-label">Скидка:</span>
+                        <span class="cart-total-value" id="cartDiscountValue">-0 ₽</span>
+                    </div>
+                    <div class="cart-total-row" style="margin-top: 12px; padding-top: 12px; border-top: 2px solid var(--border-sage);">
+                        <span class="cart-total-label" style="font-size: 16px; font-weight: 700;">Итого:</span>
+                        <span class="cart-total-value" id="cartFinalTotal" style="font-size: 22px;">0 ₽</span>
+                    </div>
+                </div>
+                <div class="cart-actions">
+                    <button class="cart-clear-btn" onclick="clearCart()">🗑️ Очистить</button>
+                    <button class="cart-checkout-btn" id="cartCheckoutBtn" onclick="checkoutFromModal()">Оформить заказ</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="paymentOverlay">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closePaymentModal()">&times;</button>
+            <div class="modal-body">
+                <h2 class="modal-title">💳 Оплата заказа</h2>
+                <div class="payment-order-info">
+                    <div>Заказ: <b id="paymentOrderId">#0</b></div>
+                    <div>К оплате: <b id="paymentAmount" style="font-size: 22px; color: var(--primary-green);">0 ₽</b></div>
+                </div>
+                <div class="payment-methods">
+                    <div class="payment-method" id="paymentCard" style="display: none;">
+                        <div class="payment-method-title">💳 Перевод на карту</div>
+                        <div class="payment-details">
+                            <div class="payment-label">Номер карты:</div>
+                            <div class="payment-value" id="paymentCardNumber"></div>
+                            <button class="copy-btn-small" onclick="copyToClipboard('paymentCardNumber')">📋 Копировать</button>
+                        </div>
+                    </div>
+                    <div class="payment-method" id="paymentSBP" style="display: none;">
+                        <div class="payment-method-title">📱 Перевод по СБП</div>
+                        <div class="payment-details">
+                            <div class="payment-label">Телефон:</div>
+                            <div class="payment-value" id="paymentSBPPhone"></div>
+                            <button class="copy-btn-small" onclick="copyToClipboard('paymentSBPPhone')">📋 Копировать</button>
+                            <div class="payment-label" style="margin-top: 8px;">Банк:</div>
+                            <div class="payment-value" id="paymentSBPBank"></div>
+                        </div>
+                    </div>
+                    <div class="payment-method">
+                        <div class="payment-method-title">👤 Получатель</div>
+                        <div class="payment-value" id="paymentRecipient"></div>
+                    </div>
+                </div>
+                <div class="payment-instructions" id="paymentInstructions"></div>
+                <div class="payment-warning">
+                    ⚠️ Обязательно укажите номер заказа в комментарии к переводу!
+                </div>
+                <button class="payment-confirm-btn" id="paymentConfirmBtn" onclick="confirmPayment()">
+                    ✅ Я оплатил
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Отправляем заказ...</div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        const userId = tg.initDataUnsafe?.user?.id;
+        const userName = tg.initDataUnsafe?.user?.first_name || 'Неизвестно';
+
+        // ⚠️ ВАЖНО: замени на username твоего бота (без @)
+        const BOT_USERNAME = 'bookseed_bot';
+
+        let books = [];
+        let categories = [];
+        let cart = [];
+        let wishlist = JSON.parse(localStorage.getItem('semena_wishlist') || '[]');
+
+        let activeCategory = 'all';
+        let searchQuery = '';
+        let priceMin = 0;
+        let priceMax = 100000;
+        let viewMode = 'all';
+        let currentSort = 'default';
+
+        let currentModalBook = null;
+        let currentImageIndex = 0;
+        let touchStartX = 0;
+        let touchEndX = 0;
+
+        let promoCode = '';
+        let discount = 0;
+        let finalTotal = 0;
+
+        function parseBookImages(field) {
+            if (!field || field === '') return [];
+            if (Array.isArray(field)) return field;
+            if (typeof field === 'string') {
+                if (field.startsWith('[')) {
+                    try {
+                        const parsed = JSON.parse(field);
+                        return Array.isArray(parsed) ? parsed : [parsed];
+                    } catch (e) {}
+                }
+                if (field.startsWith('http')) return [field];
+                return [field];
+            }
+            return [];
+        }
+
+        async function loadCategories() {
+            try {
+                const response = await fetch('/api/categories?t=' + Date.now());
+                const data = await response.json();
+                if (data.categories) categories = data.categories;
+            } catch (error) { console.error("Ошибка загрузки категорий:", error); }
+        }
+
+        async function loadBooks() {
+            try {
+                const response = await fetch(`/api/books?sort=${currentSort}&t=${Date.now()}`);
+                const data = await response.json();
+
+                if (data.books && data.books.length > 0) {
+                    books = data.books.map(b => {
+                        // Парсим галерею фото (images)
+                        let imgs = [];
+                        if (b.images && b.images !== '[]' && b.images !== '') {
+                            try {
+                                const parsed = JSON.parse(b.images);
+                                if (Array.isArray(parsed) && parsed.length > 0) imgs = parsed;
+                            } catch (e) {}
+                        }
+
+                        // Обложка (emoji) — отдельное поле, НЕ смешиваем с images
+                        let cover = b.emoji || '📚';
+
+                        // Если обложка — это URL, используем её как первое фото в галерее
+                        if (cover.startsWith('http') && !imgs.includes(cover)) {
+                            imgs = [cover, ...imgs];
+                        }
+
+                        return {
+                            id: b.id,
+                            title: b.title,
+                            price: b.price,
+                            category: b.category,
+                            category_emoji: b.category_emoji || '',
+                            emoji: cover,  // Обложка (эмодзи или URL)
+                            description: b.description || '',
+                            images: imgs   // Галерея фото (отдельно!)
+                        };
+                    });
+                } else { books = []; }
+
+                renderCategories();
+                applyFiltersAndRender();
+            } catch (error) {
+                console.error("Ошибка загрузки:", error);
+                document.getElementById('booksGrid').innerHTML = '<div class="empty-state"><div class="emoji">⚠️</div><div class="text">Ошибка загрузки</div></div>';
+            }
+        }
+
+        function getUniqueCategories() {
+            if (categories.length > 0) return ['all', ...categories.map(c => c.name)];
+            const cats = new Set(books.map(b => b.category));
+            return ['all', ...Array.from(cats)];
+        }
+
+        function getCategoryName(key) {
+            if (key === 'all') return '📚 Все книги';
+            const cat = categories.find(c => c.name === key);
+            if (cat) return `${cat.emoji || ''} ${cat.name}`.trim();
+            return key;
+        }
+
+        function renderCategories() {
+            const container = document.getElementById('categoriesScroll');
+            const cats = getUniqueCategories();
+            container.innerHTML = cats.map(cat => `
+                <button class="category-tab ${cat === activeCategory ? 'active' : ''}"
+                        data-category="${cat}" onclick="selectCategory('${cat}')">
+                    ${getCategoryName(cat)}
+                </button>
+            `).join('');
+        }
+
+        function selectCategory(cat) {
+            activeCategory = cat;
+            renderCategories();
+            applyFiltersAndRender();
+        }
+
+        const searchInput = document.getElementById('searchInput');
+        const searchClear = document.getElementById('searchClear');
+        const priceMinInput = document.getElementById('priceMin');
+        const priceMaxInput = document.getElementById('priceMax');
+
+        searchInput.addEventListener('input', (e) => {
+            searchQuery = e.target.value.toLowerCase().trim();
+            searchClear.classList.toggle('visible', searchQuery.length > 0);
+            applyFiltersAndRender();
+        });
+
+        searchClear.addEventListener('click', () => {
+            searchInput.value = ''; searchQuery = '';
+            searchClear.classList.remove('visible');
+            applyFiltersAndRender();
+        });
+
+        priceMinInput.addEventListener('input', (e) => {
+            priceMin = parseInt(e.target.value) || 0;
+            applyFiltersAndRender();
+        });
+
+        priceMaxInput.addEventListener('input', (e) => {
+            priceMax = parseInt(e.target.value) || 100000;
+            applyFiltersAndRender();
+        });
+
+        function changeSort() {
+            currentSort = document.getElementById('sortSelect').value;
+            loadBooks();
+        }
+
+        function toggleWishlistView() {
+            viewMode = viewMode === 'all' ? 'wishlist' : 'all';
+            document.getElementById('wishlistBtn').classList.toggle('active', viewMode === 'wishlist');
+
+            const emptyText = document.getElementById('emptyText');
+            const emptyEmoji = document.getElementById('emptyEmoji');
+
+            if (viewMode === 'wishlist') {
+                emptyText.textContent = 'Список избранного пуст';
+                emptyEmoji.textContent = '💔';
+            } else {
+                emptyText.textContent = 'Ничего не найдено';
+                emptyEmoji.textContent = '🌱';
+            }
+
+            applyFiltersAndRender();
+        }
+
+        function updateWishlistBadge() {
+            const badge = document.getElementById('wishlistBadge');
+            if (wishlist.length > 0) {
+                badge.textContent = wishlist.length;
+                badge.style.display = 'flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
+        function getFilteredBooks() {
+            let filtered = [...books];
+
+            if (viewMode === 'wishlist') {
+                filtered = filtered.filter(b => wishlist.includes(b.id));
+            } else {
+                if (activeCategory !== 'all') {
+                    filtered = filtered.filter(b => b.category === activeCategory);
+                }
+            }
+
+            if (searchQuery) {
+                const query = searchQuery.toLowerCase();
+                filtered = filtered.filter(b => {
+                    if (b.title.toLowerCase().includes(query)) return true;
+                    if (b.category.toLowerCase().includes(query)) return true;
+                    if (b.description && b.description.toLowerCase().includes(query)) return true;
+                    if (b.emoji && b.emoji.toLowerCase().includes(query)) return true;
+                    return false;
+                });
+            }
+
+            filtered = filtered.filter(b => b.price >= priceMin && b.price <= priceMax);
+            return filtered;
+        }
+
+        function highlightText(text, query) {
+            if (!query || !text) return text;
+            const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+            return text.replace(regex, '<mark style="background: #ffeb3b; padding: 0 2px; border-radius: 3px; color: #000;">$1</mark>');
+        }
+        function renderBookCover(book) {
+            const cover = book.emoji || '📚';
+
+            // Если обложка — URL, показываем как изображение
+            if (cover.startsWith('http')) {
+                return `<img src="${cover}" alt="${book.title}" loading="lazy" onerror="this.outerHTML='📚'">`;
+            }
+
+            // Иначе — это эмодзи
+            return cover;
+        }
+
+        function renderBooks(filteredBooks) {
+            const grid = document.getElementById('booksGrid');
+            const emptyState = document.getElementById('emptyState');
+
+            if (filteredBooks.length === 0) {
+                grid.innerHTML = '';
+                emptyState.style.display = 'block';
+                return;
+            }
+
+            emptyState.style.display = 'none';
+            grid.innerHTML = filteredBooks.map(book => {
+                const inCartClass = cart.some(c => c.id === book.id) ? 'in-cart' : '';
+                const inWishlistClass = wishlist.includes(book.id) ? 'in-wishlist' : '';
+                const heartIcon = wishlist.includes(book.id) ? '❤️' : '🤍';
+                const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
+
+                const titleHtml = searchQuery ? highlightText(book.title, searchQuery) : book.title;
+                const categoryHtml = searchQuery ? highlightText(categoryDisplay, searchQuery) : categoryDisplay;
+
+                return `
+                    <div class="book-card ${inCartClass}" data-id="${book.id}" onclick="openBookModal(${book.id})">
+                        <button class="heart-btn ${inWishlistClass}" onclick="toggleWishlistItem(${book.id}, event)">${heartIcon}</button>
+                        <button class="share-btn-card" onclick="shareBook(${book.id}, event)" title="Поделиться">📤</button>
+                        <div class="check-mark">✓</div>
+                        <div class="book-cover">${renderBookCover(book)}</div>
+                        <div class="book-info">
+                            <div class="book-title">${titleHtml}</div>
+                            <div class="book-category">${categoryHtml}</div>
+                            <div class="book-price-row">
+                                <div class="book-price">${book.price} ₽</div>
+                                <div class="book-hint">Нажми для деталей</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleWishlistItem(bookId, event) {
+            if (event) event.stopPropagation();
+
+            const index = wishlist.indexOf(bookId);
+            if (index > -1) {
+                wishlist.splice(index, 1);
+                tg.HapticFeedback.impactOccurred('light');
+            } else {
+                wishlist.push(bookId);
+                tg.HapticFeedback.notificationOccurred('success');
+            }
+
+            localStorage.setItem('semena_wishlist', JSON.stringify(wishlist));
+            updateWishlistBadge();
+            applyFiltersAndRender();
+        }
+
+        function shareBook(bookId, event) {
+            if (event) event.stopPropagation();
+
+            const book = books.find(b => b.id === bookId);
+            if (!book) return;
+
+            const refCode = `ref_${userId}`;
+            const bookLink = `https://t.me/${BOT_USERNAME}?start=${refCode}`;
+
+            const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
+
+            const lines = [
+                `🌿 Семена Знаний`,
+                ``,
+                `📖 ${book.title}`,
+                `${categoryDisplay}`,
+                `💰 ${book.price} ₽`
+            ];
+
+            if (book.description && book.description.trim() !== '') {
+                lines.push(``);
+                lines.push(book.description.substring(0, 150) + (book.description.length > 150 ? '...' : ''));
+            }
+
+            lines.push(``);
+            lines.push(`🎁 Получи скидку 10% по моей ссылке:`);
+            lines.push(bookLink);
+
+            const shareText = lines.join('\n');
+
+            const encodedText = encodeURIComponent(shareText);
+            const encodedUrl = encodeURIComponent(bookLink);
+            const shareUrl = `https://t.me/share/url?url=${encodedUrl}&text=${encodedText}`;
+
+            if (tg.openTelegramLink) {
+                tg.openTelegramLink(shareUrl);
+            } else {
+                navigator.clipboard.writeText(bookLink).then(() => {
+                    tg.showAlert(`📋 Ссылка скопирована!\n\n${bookLink}\n\nОтправь её другу — он получит скидку 10% 🎁`);
+                });
+            }
+
+            tg.HapticFeedback.notificationOccurred('success');
+        }
+
+        function applyFiltersAndRender() {
+            const filtered = getFilteredBooks();
+            renderBooks(filtered);
+        }
+
+        function openBookModal(bookId) {
+            const book = books.find(b => b.id === bookId);
+            if (!book) return;
+
+            currentModalBook = book;
+            currentImageIndex = 0;
+
+            document.getElementById('modalTitle').textContent = book.title;
+            const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
+            document.getElementById('modalCategory').textContent = categoryDisplay;
+            document.getElementById('modalPrice').textContent = `${book.price} ₽`;
+
+            const descEl = document.getElementById('modalDescription');
+            descEl.textContent = (book.description && book.description.trim() !== '') ? book.description : 'Описание пока не добавлено.';
+
+            const isInCart = cart.some(c => c.id === book.id);
+            const addBtn = document.getElementById('modalAddBtn');
+            addBtn.textContent = isInCart ? '✓ В корзине' : 'Добавить в корзину';
+            addBtn.classList.toggle('in-cart', isInCart);
+
+            updateModalImages();
+
+            const modalImages = document.getElementById('modalImages');
+            modalImages.addEventListener('touchstart', handleTouchStart, { passive: true });
+            modalImages.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+            document.getElementById('modalOverlay').classList.add('active');
+            tg.HapticFeedback.impactOccurred('medium');
+        }
+
+        function updateModalImages() {
+            const slider = document.getElementById('modalImagesSlider');
+            const nav = document.getElementById('modalImageNav');
+
+            // Используем галерею фото
+            let images = currentModalBook.images || [];
+
+            // Если галерея пустая, используем обложку
+            if (images.length === 0) {
+                const cover = currentModalBook.emoji || '📚';
+                if (cover.startsWith('http')) {
+                    images = [cover];
+                } else {
+                    // Это эмодзи — показываем как текст
+                    slider.innerHTML = `<div class="modal-image-slide">${cover}</div>`;
+                    nav.style.display = 'none';
+                    return;
+                }
+            }
+
+            const imageUrls = images.filter(img => img && img.startsWith('http'));
+
+            if (imageUrls.length > 0) {
+                slider.innerHTML = imageUrls.map((url, index) =>
+                    `<div class="modal-image-slide"><img src="${url}" alt="Photo ${index + 1}" loading="lazy" onerror="this.parentElement.innerHTML='📚'"></div>`
+                ).join('');
+                slider.style.transform = `translateX(-${currentImageIndex * 100}%)`;
+
+                if (imageUrls.length > 1) {
+                    nav.innerHTML = imageUrls.map((_, i) =>
+                        `<div class="modal-image-dot ${i === currentImageIndex ? 'active' : ''}" onclick="goToImage(${i})"></div>`
+                    ).join('');
+                    nav.style.display = 'flex';
+                } else {
+                    nav.style.display = 'none';
+                }
+            } else {
+                const emoji = currentModalBook.emoji || '📚';
+                slider.innerHTML = `<div class="modal-image-slide">${emoji}</div>`;
+                nav.style.display = 'none';
+            }
+        }
+
+        function handleTouchStart(e) { touchStartX = e.changedTouches[0].screenX; }
+        function handleTouchEnd(e) { touchEndX = e.changedTouches[0].screenX; handleSwipe(); }
+        function handleSwipe() {
+            const imageUrls = currentModalBook.images.filter(img => img && img.startsWith('http'));
+            if (imageUrls.length <= 1) return;
+            const diff = touchStartX - touchEndX;
+            if (Math.abs(diff) < 50) return;
+            if (diff > 0) currentImageIndex = (currentImageIndex + 1) % imageUrls.length;
+            else currentImageIndex = (currentImageIndex - 1 + imageUrls.length) % imageUrls.length;
+            updateModalImages();
+            tg.HapticFeedback.impactOccurred('light');
+        }
+        function goToImage(index) { currentImageIndex = index; updateModalImages(); tg.HapticFeedback.impactOccurred('light'); }
+
+        function closeModal() {
+            const modalImages = document.getElementById('modalImages');
+            modalImages.removeEventListener('touchstart', handleTouchStart);
+            modalImages.removeEventListener('touchend', handleTouchEnd);
+            document.getElementById('modalOverlay').classList.remove('active');
+            currentModalBook = null;
+        }
+
+        document.getElementById('modalClose').addEventListener('click', closeModal);
+        document.getElementById('modalOverlay').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('modalOverlay')) closeModal();
+        });
+
+        document.getElementById('modalAddBtn').addEventListener('click', () => {
+            if (currentModalBook) {
+                toggleCart(currentModalBook.id);
+                const isInCart = cart.some(c => c.id === currentModalBook.id);
+                const addBtn = document.getElementById('modalAddBtn');
+                addBtn.textContent = isInCart ? '✓ В корзине' : 'Добавить в корзину';
+                addBtn.classList.toggle('in-cart', isInCart);
+                applyFiltersAndRender();
+            }
+        });
+
+        function toggleCart(bookId) {
+            const bookIndex = cart.findIndex(b => b.id === bookId);
+            if (bookIndex > -1) {
+                cart.splice(bookIndex, 1);
+                tg.HapticFeedback.impactOccurred('light');
+            } else {
+                const book = books.find(b => b.id === bookId);
+                if (book) {
+                    cart.push({...book, quantity: 1});
+                    tg.HapticFeedback.impactOccurred('medium');
+                }
+            }
+            updateUI();
+            renderCartItems();
+        }
+
+        function removeFromCart(bookId) {
+            const bookIndex = cart.findIndex(b => b.id === bookId);
+            if (bookIndex > -1) {
+                cart.splice(bookIndex, 1);
+                tg.HapticFeedback.impactOccurred('light');
+                updateUI();
+                renderCartItems();
+                applyFiltersAndRender();
+            }
+        }
+
+        function changeQuantity(bookId, delta) {
+            const book = cart.find(b => b.id === bookId);
+            if (book) {
+                book.quantity = (book.quantity || 1) + delta;
+                if (book.quantity <= 0) {
+                    removeFromCart(bookId);
+                } else {
+                    updateUI();
+                    renderCartItems();
+                    tg.HapticFeedback.impactOccurred('light');
+                }
+            }
+        }
+
+        function clearCart() {
+            if (cart.length === 0) return;
+
+            tg.showConfirm('Очистить корзину?', (confirmed) => {
+                if (confirmed) {
+                    cart = [];
+                    discount = 0;
+                    promoCode = '';
+                    document.getElementById('promoInput').value = '';
+                    document.getElementById('promoMessage').textContent = '';
+                    document.getElementById('promoDiscount').style.display = 'none';
+                    updateUI();
+                    renderCartItems();
+                    applyFiltersAndRender();
+                    tg.HapticFeedback.impactOccurred('medium');
+                }
+            });
+        }
+
+        function renderCartItems() {
+            const cartItemsEl = document.getElementById('cartItems');
+
+            if (cart.length === 0) {
+                cartItemsEl.innerHTML = '<div class="empty-state"><div class="emoji">🛒</div><div class="text">Корзина пуста</div></div>';
+                document.getElementById('cartCheckoutBtn').disabled = true;
+                return;
+            }
+
+            document.getElementById('cartCheckoutBtn').disabled = false;
+
+            cartItemsEl.innerHTML = cart.map(book => {
+                const qty = book.quantity || 1;
+                const itemTotal = book.price * qty;
+                return `
+                    <div class="cart-item">
+                        <div class="cart-item-info">
+                            <div class="cart-item-title">${book.title}</div>
+                            <div class="cart-item-price">${book.price} ₽ × ${qty} = ${itemTotal} ₽</div>
+                        </div>
+                        <div class="cart-item-controls">
+                            <button class="cart-qty-btn" onclick="changeQuantity(${book.id}, -1)">−</button>
+                            <span class="cart-qty">${qty}</span>
+                            <button class="cart-qty-btn" onclick="changeQuantity(${book.id}, 1)">+</button>
+                            <button class="cart-remove-btn" onclick="removeFromCart(${book.id})">×</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openCartModal() {
+            renderCartItems();
+            document.getElementById('cartOverlay').classList.add('active');
+            tg.HapticFeedback.impactOccurred('medium');
+        }
+
+        function closeCartModal() {
+            document.getElementById('cartOverlay').classList.remove('active');
+        }
+
+        function checkoutFromModal() {
+            closeCartModal();
+            document.getElementById('mainButton').click();
+        }
+
+        function updateUI() {
+            const summary = document.getElementById('cartSummary');
+            const countEl = document.getElementById('cartCount');
+            const totalEl = document.getElementById('cartTotal');
+            const buttonText = document.getElementById('buttonText');
+            const buttonBadge = document.getElementById('buttonBadge');
+            const mainButton = document.getElementById('mainButton');
+            const promoSection = document.getElementById('promoSection');
+            const cartBadge = document.getElementById('cartBadge');
+
+            const totalItems = cart.reduce((sum, b) => sum + (b.quantity || 1), 0);
+            const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
+            finalTotal = total - discount;
+
+            if (cart.length > 0) {
+                summary.style.display = 'flex';
+                countEl.textContent = totalItems;
+                totalEl.textContent = total.toLocaleString('ru-RU');
+
+                promoSection.style.display = 'block';
+
+                if (discount > 0) {
+                    buttonText.textContent = `Оформить · ${finalTotal.toLocaleString('ru-RU')} ₽ (-${discount} ₽)`;
+                } else {
+                    buttonText.textContent = `Оформить · ${total.toLocaleString('ru-RU')} ₽`;
+                }
+
+                buttonBadge.textContent = totalItems;
+                buttonBadge.style.display = 'inline-block';
+                mainButton.disabled = false;
+
+                cartBadge.textContent = totalItems;
+                cartBadge.style.display = 'flex';
+            } else {
+                summary.style.display = 'none';
+                promoSection.style.display = 'none';
+                buttonText.textContent = 'Корзина пуста';
+                buttonBadge.style.display = 'none';
+                mainButton.disabled = true;
+                discount = 0;
+                promoCode = '';
+                document.getElementById('promoInput').value = '';
+                document.getElementById('promoMessage').textContent = '';
+                document.getElementById('promoDiscount').style.display = 'none';
+                cartBadge.style.display = 'none';
+            }
+
+            document.getElementById('cartSubtotal').textContent = `${total.toLocaleString('ru-RU')} ₽`;
+            document.getElementById('cartFinalTotal').textContent = `${finalTotal.toLocaleString('ru-RU')} ₽`;
+
+            if (discount > 0) {
+                document.getElementById('cartDiscountRow').style.display = 'flex';
+                document.getElementById('cartDiscountValue').textContent = `-${discount.toLocaleString('ru-RU')} ₽`;
+            } else {
+                document.getElementById('cartDiscountRow').style.display = 'none';
+            }
+        }
+
+        const promoInput = document.getElementById('promoInput');
+        const promoApplyBtn = document.getElementById('promoApplyBtn');
+        const promoMessage = document.getElementById('promoMessage');
+        const promoDiscount = document.getElementById('promoDiscount');
+        const discountAmount = document.getElementById('discountAmount');
+
+        promoApplyBtn.addEventListener('click', async () => {
+            const code = promoInput.value.trim().toUpperCase();
+
+            if (!code) {
+                promoMessage.textContent = 'Введите промокод';
+                promoMessage.className = 'promo-message error';
+                return;
+            }
+
+            if (cart.length === 0) {
+                promoMessage.textContent = 'Сначала добавьте товары в корзину';
+                promoMessage.className = 'promo-message error';
+                return;
+            }
+
+            promoApplyBtn.disabled = true;
+            promoMessage.textContent = 'Проверяем...';
+            promoMessage.className = 'promo-message';
+
+            try {
+                const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
+                const response = await fetch('/api/validate-promo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code, total })
+                });
+
+                const result = await response.json();
+
+                if (result.valid) {
+                    promoCode = code;
+                    discount = result.discount;
+                    promoMessage.textContent = `✅ Промокод применён! Скидка: ${discount} ₽`;
+                    promoMessage.className = 'promo-message success';
+                    promoDiscount.style.display = 'block';
+                    discountAmount.textContent = discount;
+                    tg.HapticFeedback.notificationOccurred('success');
+                } else {
+                    promoCode = '';
+                    discount = 0;
+                    promoMessage.textContent = `❌ ${result.error}`;
+                    promoMessage.className = 'promo-message error';
+                    promoDiscount.style.display = 'none';
+                    tg.HapticFeedback.notificationOccurred('error');
+                }
+
+                updateUI();
+            } catch (error) {
+                promoMessage.textContent = '❌ Ошибка сети';
+                promoMessage.className = 'promo-message error';
+            } finally {
+                promoApplyBtn.disabled = false;
+            }
+        });
+
+        promoInput.addEventListener('input', () => {
+            promoInput.value = promoInput.value.toUpperCase();
+        });
+
+        document.getElementById('mainButton').addEventListener('click', async () => {
+            if (cart.length === 0) { tg.showAlert('Добавьте книги в корзину 🌱'); return; }
+            if (!userId) { tg.showAlert('Не удалось получить User ID'); return; }
+
+            const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
+            const payload = {
+                user_id: userId,
+                user_name: userName,
+                cart: cart.map(b => ({ id: b.id, title: b.title, price: b.price, quantity: b.quantity || 1 })),
+                promo_code: promoCode
+            };
+
+            document.getElementById('loadingOverlay').classList.add('active');
+            try {
+                const response = await fetch('/order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (result.success) {
+                    tg.HapticFeedback.notificationOccurred('success');
+
+                    if (result.payment_required && result.payment_info) {
+                        showPaymentScreen(result.order_id, result.final_total, result.payment_info);
+                    } else {
+                        let message = `✅ Заказ #${result.order_id} создан!\n\n`;
+                        if (result.discount > 0) {
+                            message += `🎟️ Скидка: ${result.discount} ₽\n`;
+                        }
+                        message += `💰 Итого: ${result.final_total} ₽`;
+                        tg.showAlert(message);
+                    }
+
+                    cart = [];
+                    discount = 0;
+                    promoCode = '';
+                    promoInput.value = '';
+                    promoMessage.textContent = '';
+                    promoDiscount.style.display = 'none';
+                    updateUI();
+                    applyFiltersAndRender();
+                    closeModal();
+                    closeCartModal();
+                } else {
+                    tg.HapticFeedback.notificationOccurred('error');
+                    tg.showAlert(`❌ Ошибка: ${result.error}`);
+                }
+            } catch (error) {
+                tg.HapticFeedback.notificationOccurred('error');
+                tg.showAlert(`❌ Ошибка сети: ${error.message}`);
+            } finally {
+                document.getElementById('loadingOverlay').classList.remove('active');
+            }
+        });
+
+        document.getElementById('cartOverlay').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('cartOverlay')) closeCartModal();
+        });
+
+        let currentPaymentOrderId = null;
+
+        function showPaymentScreen(orderId, amount, paymentInfo) {
+            currentPaymentOrderId = orderId;
+
+            document.getElementById('paymentOrderId').textContent = `#${orderId}`;
+            document.getElementById('paymentAmount').textContent = `${amount.toLocaleString('ru-RU')} ₽`;
+
+            if (paymentInfo.card) {
+                document.getElementById('paymentCardNumber').textContent = paymentInfo.card;
+                document.getElementById('paymentCard').style.display = 'block';
+            } else {
+                document.getElementById('paymentCard').style.display = 'none';
+            }
+
+            if (paymentInfo.sbp_phone) {
+                document.getElementById('paymentSBPPhone').textContent = paymentInfo.sbp_phone;
+                document.getElementById('paymentSBPBank').textContent = paymentInfo.sbp_bank || 'Любой банк';
+                document.getElementById('paymentSBP').style.display = 'block';
+            } else {
+                document.getElementById('paymentSBP').style.display = 'none';
+            }
+
+            document.getElementById('paymentRecipient').textContent = paymentInfo.recipient || 'Не указан';
+            document.getElementById('paymentInstructions').textContent = paymentInfo.instructions || '';
+
+            document.getElementById('paymentOverlay').classList.add('active');
+            tg.HapticFeedback.impactOccurred('medium');
+        }
+
+        function closePaymentModal() {
+            document.getElementById('paymentOverlay').classList.remove('active');
+            currentPaymentOrderId = null;
+        }
+
+        function copyToClipboard(elementId) {
+            const text = document.getElementById(elementId).textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                tg.HapticFeedback.notificationOccurred('success');
+                tg.showAlert('✅ Скопировано!');
+            });
+        }
+
+        function confirmPayment() {
+            if (!currentPaymentOrderId) return;
+
+            const btn = document.getElementById('paymentConfirmBtn');
+            btn.disabled = true;
+            btn.textContent = 'Отправляем...';
+
+            setTimeout(() => {
+                closePaymentModal();
+                tg.showAlert(
+                    `✅ Отлично!\n\n` +
+                    `Мы получили информацию о вашей оплате заказа #${currentPaymentOrderId}.\n\n` +
+                    `Администратор проверит поступление и подтвердит заказ в течение 5-15 минут.\n\n` +
+                    `Спасибо, что выбрали «Семена Знаний»! 🌿`
+                );
+                btn.disabled = false;
+                btn.textContent = '✅ Я оплатил';
+            }, 1000);
+        }
+
+        document.getElementById('paymentOverlay').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('paymentOverlay')) closePaymentModal();
+        });
+
+        async function init() {
+            await loadCategories();
+            await loadBooks();
+            updateUI();
+            updateWishlistBadge();
+        }
+        init();
+    </script>
+</body>
+</html>
