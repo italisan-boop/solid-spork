@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 import db
-from config import ADMIN_IDS, broadcast_pending_users, support_pending_users
+from config.settings import ADMIN_IDS, broadcast_pending_users, support_pending_users
 
 router = Router()
 
