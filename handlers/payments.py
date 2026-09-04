@@ -4,7 +4,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
 import db
-from config import ADMIN_IDS
+from db.orders import save_admin_notification_ids, clear_admin_notifications
+from config.settings import ADMIN_IDS
 from states import PaymentSettingsState
 
 router = Router()
