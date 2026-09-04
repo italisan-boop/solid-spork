@@ -6,7 +6,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 import db
-from config.settings import ADMIN_IDS, broadcast_pending_users, support_pending_users
+from config import settings
+from utils import format_local_time
 
 router = Router()
 
@@ -14,16 +15,7 @@ PAGE_SIZE = 20  # Количество заказов на странице
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
-
-
-def format_local_time(dt_str: str) -> str:
-    """Форматирование даты"""
-    try:
-        dt = datetime.fromisoformat(dt_str)
-        return dt.strftime("%d.%m.%Y %H:%M")
-    except Exception:
-        return dt_str
+    return user_id in settings.ADMIN_IDS
 
 
 async def safe_edit_text(callback: CallbackQuery, text: str, reply_markup=None, parse_mode=None):

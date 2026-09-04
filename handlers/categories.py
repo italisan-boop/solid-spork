@@ -4,14 +4,14 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
 import db
-from config import ADMIN_IDS
+from config import settings
 from states import CategoryState
 
 router = Router()
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in settings.ADMIN_IDS
 
 
 @router.callback_query(F.data == "admin_categories")
