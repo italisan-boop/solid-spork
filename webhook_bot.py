@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
-import database as db
+import db
 
 load_dotenv()
 BOT_TOKEN = os.getenv("8926399910:AAGUdNTLIM972yQF-Cxes-sTwVwByjaxScs")
