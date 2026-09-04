@@ -1,0 +1,1 @@
+Nothing should be output, because the added file is only `.gitignore` itself, without any build artifacts, dependencies, or temporary files. According to rule 6, in this case, an empty output is required.
