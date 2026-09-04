@@ -260,6 +260,9 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             data.get('category_id')
         )
 
+        # Сохраняем ID книги в состоянии для добавления внутренних изображений
+        await state.update_data(book_id=book_id)
+        
         await message.answer(
             f"✅ <b>Книга добавлена!</b>\n\n"
             f"🆔 ID: {book_id}\n"
@@ -268,10 +271,58 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             f"📂 {data['category']}\n"
             f"🎨 {data.get('emoji', '') or '📚'}\n"
             f"📝 {description[:100]}{'...' if len(description) > 100 else ''}\n\n"
-            f"🎉 Теперь она доступна в Mini App!",
+            f"🎉 Теперь она доступна в Mini App!\n\n"
+            f"📸 Хотите добавить <b>внутренние фото</b> (страницы, фрагменты)?\n"
+            f"Отправьте фото сейчас или нажмите 'Пропустить'",
             parse_mode="HTML"
         )
-        await state.clear()
+        await state.set_state(AddBookState.waiting_for_inner_images)
+        return
+    
+    if current_state == AddBookState.waiting_for_inner_images.state:
+        # Обработка фото или пропуска
+        if message.text and message.text.lower() in ['пропустить', 'skip', 'нет']:
+            await message.answer("✅ Внутренние фото не добавлены. Книга готова!")
+            await state.clear()
+            return
+        
+        if message.photo:
+            # Получаем фото наилучшего качества
+            photo = message.photo[-1]
+            file_id = photo.file_id
+            
+            # Получаем URL файла
+            file = await bot.get_file(file_id)
+            file_url = f"https://api.telegram.org/file/bot{bot.token}/{file.file_path}"
+            
+            # Получаем текущие данные
+            data = await state.get_data()
+            book_id = data.get('book_id')
+            
+            if book_id:
+                # Получаем текущие изображения
+                book = await db.get_book(book_id)
+                import json
+                current_images = json.loads(book.get('images', '[]')) if book.get('images') else []
+                
+                # Добавляем новое изображение
+                current_images.append(file_url)
+                
+                # Обновляем книгу
+                await db.update_book(book_id, images=json.dumps(current_images))
+                
+                await message.answer(
+                    f"✅ Фото добавлено!\n\n"
+                    f"Отправьте ещё фото или нажмите 'Пропустить' для завершения",
+                    parse_mode="HTML"
+                )
+                return
+        
+        await message.answer(
+            "📸 Отправьте <b>фото</b> страницы книги или нажмите 'Пропустить'\n\n"
+            "Это поможет покупателям лучше рассмотреть товар.",
+            parse_mode="HTML"
+        )
         return
 
     # === FSM: РЕДАКТИРОВАНИЕ КНИГ ===
