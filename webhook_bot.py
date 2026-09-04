@@ -10,9 +10,12 @@ from dotenv import load_dotenv
 import db
 
 load_dotenv()
-BOT_TOKEN = os.getenv("8926399910:AAGUdNTLIM972yQF-Cxes-sTwVwByjaxScs")
-WEBAPP_URL = os.getenv("https://platinum-winter-gem.ngrok-free.dev ")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://example.com")
 WEBHOOK_URL = f"{WEBAPP_URL}/webhook"  # URL для webhook
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN не найден в переменных окружения!")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
