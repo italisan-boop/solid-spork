@@ -29,11 +29,15 @@ async def start_broadcast(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_menu")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
-        f"📢 <b>Рассылка сообщений пользователям</b>\n\n"
-        f"Всего пользователей: {user_count}\n\n"
-        "Отправьте текст сообщения для рассылки:\n"
-        "Вы можете использовать HTML-разметку.",
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=(
+            f"📢 <b>Рассылка сообщений пользователям</b>\n\n"
+            f"Всего пользователей: {user_count}\n\n"
+            "Отправьте текст сообщения для рассылки:\n"
+            "Вы можете использовать HTML-разметку."
+        ),
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -79,9 +83,13 @@ async def edit_broadcast_message(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_menu")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
-        "📢 <b>Рассылка сообщений пользователям</b>\n\n"
-        "Отправьте новый текст сообщения:",
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=(
+            "📢 <b>Рассылка сообщений пользователям</b>\n\n"
+            "Отправьте новый текст сообщения:"
+        ),
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -95,7 +103,11 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
     text = data.get('message_text')
     
     if not text:
-        await callback.message.edit_message_text("❌ Ошибка: текст сообщения не найден.")
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text="❌ Ошибка: текст сообщения не найден."
+        )
         await state.clear()
         return
     
@@ -103,7 +115,11 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
     users = await get_all_users()
     
     if not users:
-        await callback.message.edit_message_text("❌ Нет пользователей для рассылки.")
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text="❌ Нет пользователей для рассылки."
+        )
         await state.clear()
         return
     
@@ -112,10 +128,14 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
     fail_count = 0
     
     # Обновляем сообщение о начале рассылки
-    await callback.message.edit_message_text(
-        f"📢 <b>Запуск рассылки...</b>\n\n"
-        f"Всего получателей: {user_count}\n"
-        f"Отправлено: 0/{user_count}",
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=(
+            f"📢 <b>Запуск рассылки...</b>\n\n"
+            f"Всего получателей: {user_count}\n"
+            f"Отправлено: 0/{user_count}"
+        ),
         parse_mode="HTML"
     )
     
@@ -183,8 +203,10 @@ async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
-        "❌ <b>Рассылка отменена</b>",
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text="❌ <b>Рассылка отменена</b>",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
