@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 
 import db
 from config import settings
-from handlers import user, admin_orders, catalog, categories, payments
+from handlers import user, admin_orders, catalog, categories, payments, admin_books, admin_broadcast
 from utils import setup_logger
 
 # Настраиваем логгер
@@ -37,6 +37,8 @@ dp.callback_query.middleware(CallbackLoggerMiddleware())
 # ВАЖНО: payments должен быть ПЕРВЫМ, чтобы его callback-хендлеры срабатывали раньше
 dp.include_router(payments.router)
 dp.include_router(admin_orders.router)
+dp.include_router(admin_books.router)
+dp.include_router(admin_broadcast.router)
 dp.include_router(catalog.router)
 dp.include_router(categories.router)
 dp.include_router(user.router)  # user.router должен быть ПОСЛЕДНИМ, т.к. он перехватывает всё
