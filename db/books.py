@@ -1,15 +1,21 @@
 """Модуль для работы с книгами (каталог)"""
 import aiosqlite
+import json
 from db import DB_NAME
 
 
-async def add_book(title: str, price: int, category: str, emoji: str = "",
-                   description: str = "", images: str = "[]", category_id: int = None) -> int:
+async def add_book(title: str, price: int, category_id: int, 
+                   author: str = "", description: str = "", 
+                   cover_photo: str = None, page_photos: list = None) -> int:
     """Добавить новую книгу в каталог"""
+    # Преобразуем список фото страниц в JSON
+    images_json = json.dumps(page_photos) if page_photos else "[]"
+    
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute(
-            "INSERT INTO books (title, price, category, emoji, description, images, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (title, price, category, emoji, description, images, category_id)
+            """INSERT INTO books (title, price, category_id, author, description, cover_photo, images) 
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (title, price, category_id, author, description, cover_photo, images_json)
         )
         await db.commit()
         return cursor.lastrowid
