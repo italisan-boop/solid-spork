@@ -49,7 +49,7 @@ async def cmd_admin(message: Message):
     builder.button(text="✅ Подтверждённые", callback_data="admin_orders_confirmed")
     builder.button(text="📊 Статистика", callback_data="admin_stats")
     builder.button(text="📢 Рассылка", callback_data="admin_broadcast")
-    builder.button(text="📚 Управление каталогом", callback_data="admin_catalog")
+    builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
     builder.button(text="📂 Управление категориями", callback_data="admin_categories")
     builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
     builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
@@ -74,7 +74,7 @@ async def admin_menu(callback: CallbackQuery):
     builder.button(text="✅ Подтверждённые", callback_data="admin_orders_confirmed")
     builder.button(text="📊 Статистика", callback_data="admin_stats")
     builder.button(text="📢 Рассылка", callback_data="admin_broadcast")
-    builder.button(text="📚 Управление каталогом", callback_data="admin_catalog")
+    builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
     builder.button(text="📂 Управление категориями", callback_data="admin_categories")
     builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
     builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
@@ -699,8 +699,6 @@ async def admin_stats(callback: CallbackQuery):
 
 
 
-@router.callback_query(F.data == "admin_broadcast")
-async def admin_broadcast(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
