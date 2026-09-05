@@ -61,6 +61,11 @@ from db.orders import (
     get_all_unique_users
 )
 
+from db.users import (
+    get_all_users,
+    get_user
+)
+
 from db.books import (
     add_book,
     get_all_books,
@@ -150,6 +155,14 @@ async def init_db():
         if 'category_id' not in existing_columns:
             await db.execute("ALTER TABLE books ADD COLUMN category_id INTEGER")
             print("✅ Добавлена колонка 'category_id'")
+
+        if 'author' not in existing_columns:
+            await db.execute("ALTER TABLE books ADD COLUMN author TEXT DEFAULT ''")
+            print("✅ Добавлена колонка 'author'")
+
+        if 'cover_photo' not in existing_columns:
+            await db.execute("ALTER TABLE books ADD COLUMN cover_photo TEXT")
+            print("✅ Добавлена колонка 'cover_photo'")
 
         # Инициализация категорий
         await init_categories()
