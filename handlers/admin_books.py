@@ -33,9 +33,13 @@ async def start_add_book(callback: CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     
-    await callback.message.edit_message_text(
-        "📚 <b>Добавление новой книги</b>\n\n"
-        "Введите название книги:",
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=(
+            "📚 <b>Добавление новой книги</b>\n\n"
+            "Введите название книги:"
+        ),
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -70,9 +74,13 @@ async def back_to_title(callback: CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     
-    await callback.message.edit_message_text(
-        "📚 <b>Добавление новой книги</b>\n\n"
-        "Введите название книги:",
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=(
+            "📚 <b>Добавление новой книги</b>\n\n"
+            "Введите название книги:"
+        ),
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -111,7 +119,10 @@ async def back_to_author(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         f"📚 <b>{title}</b>\n\n"
         "✍️ Введите автора книги:",
         reply_markup=builder.as_markup(),
@@ -153,7 +164,10 @@ async def back_to_description(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         f"📚 <b>{title}</b>\n"
         f"✍️ Автор: {author}\n\n"
         "📝 Введите описание книги:",
@@ -206,7 +220,10 @@ async def back_to_price(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         f"📚 <b>{title}</b>\n"
         f"✍️ Автор: {author}\n"
         f"📝 {description[:100]}...\n\n"
@@ -227,7 +244,10 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         "📸 <b>Отправьте фото обложки книги</b>\n\n"
         "Это главное изображение, которое будет видно в каталоге.",
         reply_markup=builder.as_markup(),
@@ -248,7 +268,10 @@ async def back_to_category(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(2)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         "📂 Выберите категорию для книги:",
         reply_markup=builder.as_markup()
     )
@@ -286,7 +309,10 @@ async def back_to_cover(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         "📸 <b>Отправьте фото обложки книги</b>\n\n"
         "Это главное изображение, которое будет видно в каталоге.",
         reply_markup=builder.as_markup(),
@@ -303,7 +329,10 @@ async def start_add_pages(callback: CallbackQuery, state: FSMContext):
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         "📸 <b>Добавление фото страниц</b>\n\n"
         "Отправляйте фото страниц по одному.\n"
         "Когда закончите, нажмите 'Готово'.",
@@ -347,7 +376,10 @@ async def add_more_pages(callback: CallbackQuery, state: FSMContext):
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         "📸 <b>Отправьте следующее фото страницы</b>\n\n"
         "Когда закончите, нажмите 'Готово'.",
         reply_markup=builder.as_markup(),
@@ -402,7 +434,10 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML"
         )
     else:
-        await callback.message.edit_message_text(
+        await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
             text,
             reply_markup=builder.as_markup(),
             parse_mode="HTML"
@@ -428,7 +463,10 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
             page_photos=data.get('page_photos', [])
         )
         
-        await callback.message.edit_message_text(
+        await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
             f"✅ <b>Книга успешно добавлена!</b>\n\n"
             f"ID: {book_id}\n"
             f"Название: {data['title']}",
@@ -438,7 +476,10 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Книга '{data['title']}' добавлена админом {callback.from_user.id}")
     except Exception as e:
         logger.error(f"Ошибка при добавлении книги: {e}")
-        await callback.message.edit_message_text(
+        await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
             f"❌ <b>Ошибка при добавлении книги</b>\n\n"
             f"{str(e)}",
             parse_mode="HTML"
@@ -457,7 +498,10 @@ async def cancel_add_book(callback: CallbackQuery, state: FSMContext):
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         "❌ <b>Добавление книги отменено</b>",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
@@ -484,7 +528,10 @@ async def books_menu(callback: CallbackQuery):
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     builder.adjust(1)
     
-    await callback.message.edit_message_text(
+    await callback.bot.edit_message_text(
+        chat_id=callback.from_user.id,
+        message_id=callback.message.message_id,
+        text=
         text,
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
