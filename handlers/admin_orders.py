@@ -13,6 +13,9 @@ router = Router()
 
 PAGE_SIZE = 20  # Количество заказов на странице
 
+# Множество пользователей, ожидающих сообщение для рассылки
+broadcast_pending_users = set()
+
 
 def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
