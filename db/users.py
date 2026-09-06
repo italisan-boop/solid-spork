@@ -22,3 +22,14 @@ async def get_user(user_id: int) -> dict:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+async def add_user(user_id: int, user_name: str) -> bool:
+    """Добавить пользователя в базу данных"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO users (user_id, user_name) VALUES (?, ?)",
+            (user_id, user_name)
+        )
+        await db.commit()
+        return True
