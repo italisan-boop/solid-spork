@@ -80,6 +80,15 @@ from db.books import (
 async def init_db():
     """Создание таблиц и миграция схемы"""
     async with aiosqlite.connect(DB_NAME) as db:
+        # Таблица пользователей
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Таблица заказов
         await db.execute("""
             CREATE TABLE IF NOT EXISTS orders (
