@@ -469,10 +469,7 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
             page_photos=data.get('page_photos', [])
         )
         
-        await callback.bot.edit_message_text(
-        chat_id=callback.from_user.id,
-        message_id=callback.message.message_id,
-        text=
+        await callback.message.answer(
             f"✅ <b>Книга успешно добавлена!</b>\n\n"
             f"ID: {book_id}\n"
             f"Название: {data['title']}",
@@ -482,10 +479,7 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Книга '{data['title']}' добавлена админом {callback.from_user.id}")
     except Exception as e:
         logger.error(f"Ошибка при добавлении книги: {e}")
-        await callback.bot.edit_message_text(
-        chat_id=callback.from_user.id,
-        message_id=callback.message.message_id,
-        text=
+        await callback.message.answer(
             f"❌ <b>Ошибка при добавлении книги</b>\n\n"
             f"{str(e)}",
             parse_mode="HTML"
