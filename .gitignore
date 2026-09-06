@@ -1,13 +1,4 @@
 ```
-# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-
-# Database
-semena_znaniy.db
-
-# Logs
-*.log
 ```
