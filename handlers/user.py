@@ -23,6 +23,9 @@ def is_admin(user_id: int) -> bool:
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_with_ref(message: Message, state: FSMContext):
     """Обработка /start с реферальным кодом"""
+    # Сохраняем пользователя в БД
+    await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
+    
     ref_code = message.text.split()[1] if len(message.text.split()) > 1 else ""
     referrer_id = await db.parse_referral_code(ref_code)
 
@@ -53,6 +56,8 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """Обычный старт без параметров"""
+    # Сохраняем пользователя в БД
+    await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
     await _send_start_menu(message)
 
 
