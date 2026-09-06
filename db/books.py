@@ -3,6 +3,8 @@ import aiosqlite
 import json
 from db import DB_NAME
 
+PAGE_SIZE = 20  # Количество книг на странице
+
 
 async def add_book(title: str, price: int, category_id: int, 
                    author: str = "", description: str = "", 
