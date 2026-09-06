@@ -13,11 +13,21 @@ async def add_book(title: str, price: int, category_id: int,
     # Преобразуем список фото страниц в JSON
     images_json = json.dumps(page_photos) if page_photos else "[]"
     
+    # Получаем название категории по ID
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT name FROM categories WHERE id = ?",
+            (category_id,)
+        )
+        row = await cursor.fetchone()
+        category_name = row['name'] if row else "Неизвестно"
+    
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute(
-            """INSERT INTO books (title, price, category_id, author, description, cover_photo, images) 
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (title, price, category_id, author, description, cover_photo, images_json)
+            """INSERT INTO books (title, price, category, category_id, author, description, cover_photo, images) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (title, price, category_name, category_id, author, description, cover_photo, images_json)
         )
         await db.commit()
         return cursor.lastrowid
