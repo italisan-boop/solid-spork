@@ -127,7 +127,13 @@ async def init_db():
                 title TEXT NOT NULL,
                 price INTEGER NOT NULL,
                 category TEXT NOT NULL,
+                category_id INTEGER DEFAULT 0,
+                author TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                cover_photo TEXT DEFAULT '',
+                images TEXT DEFAULT '[]',
                 emoji TEXT DEFAULT '',
+                sort_order INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1
             )
         """)
