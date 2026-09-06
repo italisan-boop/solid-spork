@@ -63,7 +63,8 @@ from db.orders import (
 
 from db.users import (
     get_all_users,
-    get_user
+    get_user,
+    add_user
 )
 
 from db.books import (
