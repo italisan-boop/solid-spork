@@ -426,26 +426,30 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
     
-    # Если есть фото обложки, отправляем с ним
-    if cover_photo_id:
-        await callback.message.delete()
-        await message.answer_photo(
-            photo=FSInputFile(cover_photo_id) if cover_photo_id.startswith('/') else cover_photo_id,
-            caption=text,
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
-    else:
-        await callback.bot.edit_message_text(
-        chat_id=callback.from_user.id,
-        message_id=callback.message.message_id,
-        text=
-            text,
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
-    
-    await state.set_state(BookAddState.confirming)
+    try:
+        # Если есть фото обложки, отправляем с ним
+        if cover_photo_id:
+            await callback.message.delete()
+            await callback.message.answer_photo(
+                photo=cover_photo_id,
+                caption=text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
+        else:
+            await callback.bot.edit_message_text(
+                chat_id=callback.from_user.id,
+                message_id=callback.message.message_id,
+                text=text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
+        
+        await state.set_state(BookAddState.confirming)
+    except Exception as e:
+        logger.error(f"Ошибка при отображении подтверждения: {e}")
+        await callback.message.answer("❌ Произошла ошибка. Попробуйте еще раз.")
+        await state.clear()
 
 
 @router.callback_query(F.data == "admin_book_confirm_add")
