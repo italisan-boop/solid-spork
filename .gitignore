@@ -13,22 +13,22 @@ env/
 .env.local
 .env.*
 
-# Logs and temp files
+# Logs
 *.log
-*.tmp
 
-# Editors
+# Editor
 .vscode/
 .idea/
 *.swp
 *.swo
+*.tmp
 
 # Coverage
 .coverage
 coverage/
 htmlcov/
 
-# Build artifacts
+# Distribution / packaging
 dist/
 build/
 *.egg-info/
