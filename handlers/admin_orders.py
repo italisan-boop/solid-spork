@@ -696,38 +696,5 @@ async def admin_stats(callback: CallbackQuery):
 
 
 # ============================================
-# РАССЫЛКА
+# КОНЕЦ ФАЙЛА
 # ============================================
-
-
-
-
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет прав", show_alert=True)
-        return
-
-    broadcast_pending_users.add(callback.from_user.id)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Отмена", callback_data="cancel_broadcast")
-    builder.adjust(1)
-
-    await callback.message.answer(
-        "📢 <b>Рассылка</b>\n\n"
-        "Напишите сообщение, которое будет отправлено всем пользователям:\n\n"
-        "Или нажмите кнопку ниже для отмены",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "cancel_broadcast")
-async def cancel_broadcast(callback: CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет прав", show_alert=True)
-        return
-
-    broadcast_pending_users.discard(callback.from_user.id)
-    await callback.message.answer("✅ Рассылка отменена.")
-    await callback.answer()
