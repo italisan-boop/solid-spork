@@ -8,11 +8,24 @@ from config.settings import settings
 from db.books import add_book, get_all_books, update_book, delete_book, get_book, get_books_count, get_all_books_paginated
 from db.categories import get_all_categories
 from utils import parseBookImages
+import re
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 PAGE_SIZE = 20  # Количество книг на странице
+
+
+def is_url(text: str) -> bool:
+    """Проверяет, является ли строка URL"""
+    url_pattern = re.compile(
+        r'^https?://'  # http:// или https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # домен
+        r'localhost|'  # localhost
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # или IP
+        r'(?::\d+)?'  # опциональный порт
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    return text is not None and url_pattern.match(text) is not None
 
 
 class BookAddState(StatesGroup):
@@ -282,9 +295,11 @@ async def back_to_category(callback: CallbackQuery, state: FSMContext):
 
 @router.message(BookAddState.waiting_for_cover_photo, F.photo)
 async def process_cover_photo(message: Message, state: FSMContext):
-    """Обработка фото обложки"""
+    """Обработка фото обложки (вложение)"""
     photo = message.photo[-1]
-    await state.update_data(cover_photo_id=photo.file_id, step=6)
+    # Получаем URL файла для сохранения в БД
+    file_url = f"https://api.telegram.org/file/bot{settings.bot_token}/{photo.file_unique_id}"
+    await state.update_data(cover_photo=file_url, cover_photo_id=photo.file_id, step=6)
     
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
@@ -301,6 +316,34 @@ async def process_cover_photo(message: Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(BookAddState.waiting_for_page_photos)
+
+
+@router.message(BookAddState.waiting_for_cover_photo)
+async def process_cover_photo_url(message: Message, state: FSMContext):
+    """Обработка URL обложки"""
+    text = message.text.strip() if message.text else ""
+    if is_url(text):
+        await state.update_data(cover_photo=text, step=6)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
+        builder.button(text="⏭️ Пропустить", callback_data="admin_book_skip_pages")
+        builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
+        builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
+        builder.adjust(2)
+        
+        await message.answer(
+            "📸 <b>URL обложки принят!</b>\n\n"
+            "Хотите добавить фото страниц книги?\n"
+            "Это поможет покупателям лучше рассмотреть товар.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        await state.set_state(BookAddState.waiting_for_page_photos)
+    else:
+        await message.answer(
+            "❌ Это не похоже на valid URL. Пожалуйста, отправьте фото или введите корректный URL:"
+        )
 
 
 @router.callback_query(F.data == "admin_book_back_cover")
@@ -345,12 +388,14 @@ async def start_add_pages(callback: CallbackQuery, state: FSMContext):
 
 @router.message(BookAddState.waiting_for_page_photos, F.photo)
 async def process_page_photo(message: Message, state: FSMContext):
-    """Обработка фото страницы"""
+    """Обработка фото страницы (вложение)"""
     data = await state.get_data()
     page_photos = data.get('page_photos', [])
     
     photo = message.photo[-1]
-    page_photos.append(photo.file_id)
+    # Получаем URL файла для сохранения в БД
+    file_url = f"https://api.telegram.org/file/bot{settings.bot_token}/{photo.file_unique_id}"
+    page_photos.append(file_url)
     await state.update_data(page_photos=page_photos)
     
     count = len(page_photos)
@@ -368,6 +413,37 @@ async def process_page_photo(message: Message, state: FSMContext):
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
+
+
+@router.message(BookAddState.waiting_for_page_photos)
+async def process_page_photo_url(message: Message, state: FSMContext):
+    """Обработка URL фото страницы"""
+    text = message.text.strip() if message.text else ""
+    if is_url(text):
+        data = await state.get_data()
+        page_photos = data.get('page_photos', [])
+        page_photos.append(text)
+        await state.update_data(page_photos=page_photos)
+        
+        count = len(page_photos)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Готово", callback_data="admin_book_pages_done")
+        builder.button(text="➕ Еще фото", callback_data="admin_book_add_more_pages")
+        builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
+        builder.adjust(2)
+        
+        await message.answer(
+            f"✅ <b>URL фото #{count} добавлен!</b>\n\n"
+            f"Всего фото страниц: {count}\n\n"
+            "Добавить еще или завершить?",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            "❌ Это не похоже на valid URL. Пожалуйста, отправьте фото или введите корректный URL:"
+        )
 
 
 @router.callback_query(F.data == "admin_book_add_more_pages")
@@ -465,7 +541,7 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
             description=data['description'],
             price=data['price'],
             category_id=data['category_id'],
-            cover_photo=data.get('cover_photo_id'),
+            cover_photo=data.get('cover_photo'),  # URL
             page_photos=data.get('page_photos', [])
         )
         
