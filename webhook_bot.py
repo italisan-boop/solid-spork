@@ -23,6 +23,14 @@ dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
+    # Сохраняем пользователя в БД
+    async with aiosqlite.connect(DB_NAME) as database:
+        await database.execute(
+            "INSERT OR IGNORE INTO users (user_id, user_name) VALUES (?, ?)",
+            (message.from_user.id, message.from_user.username or message.from_user.first_name)
+        )
+        await database.commit()
+    
     builder = InlineKeyboardBuilder()
     builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=WEBAPP_URL))
     builder.adjust(1)
