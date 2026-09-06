@@ -469,19 +469,29 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
             page_photos=data.get('page_photos', [])
         )
         
+        # Отправляем сообщение об успехе с кнопкой возврата в админ-панель
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 В админ-панель", callback_data="admin_menu")
+        
         await callback.message.answer(
             f"✅ <b>Книга успешно добавлена!</b>\n\n"
             f"ID: {book_id}\n"
             f"Название: {data['title']}",
+            reply_markup=builder.as_markup(),
             parse_mode="HTML"
         )
         
         logger.info(f"Книга '{data['title']}' добавлена админом {callback.from_user.id}")
     except Exception as e:
         logger.error(f"Ошибка при добавлении книги: {e}")
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 В админ-панель", callback_data="admin_menu")
+        
         await callback.message.answer(
             f"❌ <b>Ошибка при добавлении книги</b>\n\n"
             f"{str(e)}",
+            reply_markup=builder.as_markup(),
             parse_mode="HTML"
         )
     
