@@ -297,9 +297,10 @@ async def back_to_category(callback: CallbackQuery, state: FSMContext):
 async def process_cover_photo(message: Message, state: FSMContext):
     """Обработка фото обложки (вложение)"""
     photo = message.photo[-1]
-    # Получаем URL файла для сохранения в БД
+    # Сохраняем file_id для отправки в Mini App и URL для хранения в БД
+    file_id = photo.file_id
     file_url = f"https://api.telegram.org/file/bot{settings.bot_token}/{photo.file_unique_id}"
-    await state.update_data(cover_photo=file_url, cover_photo_id=photo.file_id, step=6)
+    await state.update_data(cover_photo=file_url, cover_photo_id=file_id, step=6)
     
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
@@ -393,7 +394,7 @@ async def process_page_photo(message: Message, state: FSMContext):
     page_photos = data.get('page_photos', [])
     
     photo = message.photo[-1]
-    # Получаем URL файла для сохранения в БД
+    # Сохраняем URL для БД и file_id для отправки
     file_url = f"https://api.telegram.org/file/bot{settings.bot_token}/{photo.file_unique_id}"
     page_photos.append(file_url)
     await state.update_data(page_photos=page_photos)
@@ -491,7 +492,7 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
         f"📝 Описание: {description[:200]}{'...' if len(description) > 200 else ''}\n"
         f"💰 Цена: {price} ₽\n"
         f"📁 Категория: {category_name}\n"
-        f"📸 Фото обложки: ✅\n"
+        f"📸 Фото обложки: {'✅' if cover_photo_id else '❌'}\n"
         f"📄 Фото страниц: {len(page_photos)} шт.\n\n"
         "Все верно?"
     )
@@ -541,7 +542,7 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
             description=data['description'],
             price=data['price'],
             category_id=data['category_id'],
-            cover_photo=data.get('cover_photo'),  # URL
+            cover_photo=data.get('cover_photo'),  # URL или None
             page_photos=data.get('page_photos', [])
         )
         
