@@ -5,12 +5,14 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import logging
 from config.settings import settings
-from db.books import add_book, get_all_books, update_book, delete_book, get_book
+from db.books import add_book, get_all_books, update_book, delete_book, get_book, get_books_count, get_all_books_paginated
 from db.categories import get_all_categories
 from utils import parseBookImages
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+PAGE_SIZE = 20  # Количество книг на странице
 
 
 class BookAddState(StatesGroup):
@@ -509,30 +511,380 @@ async def cancel_add_book(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "admin_books_menu")
-async def books_menu(callback: CallbackQuery):
-    """Меню управления книгами"""
-    books = await get_all_books()
+async def books_menu(callback: CallbackQuery, state: FSMContext):
+    """Меню управления книгами с пагинацией"""
+    await state.clear()
     
-    text = "📚 <b>Управление книгами</b>\n\n"
+    # Получаем общее количество книг
+    total_books = await get_books_count()
+    total_pages = (total_books + PAGE_SIZE - 1) // PAGE_SIZE if total_books > 0 else 1
+    
+    # Сохраняем текущую страницу в состоянии
+    await state.update_data(current_page=0, total_pages=total_pages)
+    
+    await show_books_list(callback, 0)
+
+
+async def show_books_list(callback: CallbackQuery, page: int):
+    """Отображение списка книг с пагинацией"""
+    offset = page * PAGE_SIZE
+    books = await get_all_books_paginated(limit=PAGE_SIZE, offset=offset)
+    total_books = await get_books_count()
+    total_pages = (total_books + PAGE_SIZE - 1) // PAGE_SIZE if total_books > 0 else 1
+    
+    text = f"📚 <b>Управление книгами</b>\n\n"
+    text += f"Страница {page + 1} из {total_pages}\n"
+    text += f"Всего книг: {total_books}\n\n"
+    
     if books:
-        text += f"Всего книг: {len(books)}\n\n"
-        for book in books[:5]:  # Показываем первые 5
-            text += f"📖 {book['title']} - {book['price']} ₽\n"
-        if len(books) > 5:
-            text += f"... и еще {len(books) - 5} книг\n"
+        for book in books:
+            emoji = book.get('category_emoji') or '📖'
+            text += f"{emoji} <b>{book['title']}</b> - {book['price']} ₽\n"
     else:
         text += "Пока нет добавленных книг."
     
     builder = InlineKeyboardBuilder()
+    
+    if books:
+        # Кнопки для каждой книги на странице
+        for book in books:
+            builder.button(text=f"📝 {book['title']}", callback_data=f"admin_book_edit_{book['id']}")
+        
+        # Навигация
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(("⬅️ Назад", f"admin_books_page_{page - 1}"))
+        if page < total_pages - 1:
+            nav_buttons.append(("➡️ Вперед", f"admin_books_page_{page + 1}"))
+        
+        for btn_text, btn_data in nav_buttons:
+            builder.button(text=btn_text, callback_data=btn_data)
+    
     builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     builder.adjust(1)
     
-    await callback.bot.edit_message_text(
-        chat_id=callback.from_user.id,
-        message_id=callback.message.message_id,
-        text=
-        text,
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+
+
+@router.callback_query(F.data.startswith("admin_books_page_"))
+async def books_page_navigation(callback: CallbackQuery, state: FSMContext):
+    """Навигация по страницам списка книг"""
+    page = int(callback.data.split("_")[-1])
+    await show_books_list(callback, page)
+
+
+@router.callback_query(F.data.startswith("admin_book_edit_"))
+async def edit_book_menu(callback: CallbackQuery):
+    """Меню редактирования конкретной книги"""
+    book_id = int(callback.data.split("_")[-1])
+    book = await get_book(book_id)
+    
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+    
+    text = (
+        f"📚 <b>Редактирование книги</b>\n\n"
+        f"ID: {book['id']}\n"
+        f"📖 Название: {book['title']}\n"
+        f"✍️ Автор: {book.get('author', 'Не указан')}\n"
+        f"💰 Цена: {book['price']} ₽\n"
+        f"📝 Описание: {book.get('description', 'Нет описания')[:100]}{'...' if len(book.get('description', '')) > 100 else ''}\n\n"
+        "Выберите действие:"
     )
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Изменить данные", callback_data=f"admin_book_change_{book_id}")
+    builder.button(text="🗑️ Удалить книгу", callback_data=f"admin_book_delete_{book_id}")
+    builder.button(text="🔙 Назад к списку", callback_data="admin_books_menu")
+    builder.adjust(1)
+    
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+
+
+@router.callback_query(F.data.startswith("admin_book_change_"))
+async def start_change_book(callback: CallbackQuery, state: FSMContext):
+    """Начало изменения книги"""
+    book_id = int(callback.data.split("_")[-1])
+    book = await get_book(book_id)
+    
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+    
+    await state.update_data(edit_book_id=book_id)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Изменить название", callback_data=f"admin_book_edit_title_{book_id}")
+    builder.button(text="✏️ Изменить автора", callback_data=f"admin_book_edit_author_{book_id}")
+    builder.button(text="✏️ Изменить описание", callback_data=f"admin_book_edit_desc_{book_id}")
+    builder.button(text="✏️ Изменить цену", callback_data=f"admin_book_edit_price_{book_id}")
+    builder.button(text="🔙 Назад к списку", callback_data="admin_books_menu")
+    builder.adjust(1)
+    
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=f"📚 <b>Изменение книги: {book['title']}</b>\n\nВыберите поле для редактирования:",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+
+
+class BookEditState(StatesGroup):
+    waiting_for_new_title = State()
+    waiting_for_new_author = State()
+    waiting_for_new_description = State()
+    waiting_for_new_price = State()
+
+
+@router.callback_query(F.data.startswith("admin_book_edit_title_"))
+async def edit_book_title(callback: CallbackQuery, state: FSMContext):
+    """Изменение названия книги"""
+    book_id = int(callback.data.split("_")[-1])
+    await state.update_data(edit_book_id=book_id)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data=f"admin_book_edit_{book_id}")
+    
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text="✏️ Введите новое название книги:",
+            reply_markup=builder.as_markup()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+    
+    await state.set_state(BookEditState.waiting_for_new_title)
+
+
+@router.message(BookEditState.waiting_for_new_title)
+async def process_new_title(message: Message, state: FSMContext):
+    """Обработка нового названия"""
+    if message.text and message.text.strip():
+        data = await state.get_data()
+        book_id = data.get('edit_book_id')
+        
+        await update_book(book_id, title=message.text.strip())
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+        
+        await message.answer(
+            f"✅ Название книги изменено на: {message.text.strip()}",
+            reply_markup=builder.as_markup()
+        )
+        await state.clear()
+    else:
+        await message.answer("❌ Название не может быть пустым. Попробуйте еще раз:")
+
+
+@router.callback_query(F.data.startswith("admin_book_edit_author_"))
+async def edit_book_author(callback: CallbackQuery, state: FSMContext):
+    """Изменение автора книги"""
+    book_id = int(callback.data.split("_")[-1])
+    await state.update_data(edit_book_id=book_id)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data=f"admin_book_edit_{book_id}")
+    
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text="✏️ Введите нового автора:",
+            reply_markup=builder.as_markup()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+    
+    await state.set_state(BookEditState.waiting_for_new_author)
+
+
+@router.message(BookEditState.waiting_for_new_author)
+async def process_new_author(message: Message, state: FSMContext):
+    """Обработка нового автора"""
+    if message.text and message.text.strip():
+        data = await state.get_data()
+        book_id = data.get('edit_book_id')
+        
+        await update_book(book_id, author=message.text.strip())
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+        
+        await message.answer(
+            f"✅ Автор изменен на: {message.text.strip()}",
+            reply_markup=builder.as_markup()
+        )
+        await state.clear()
+    else:
+        await message.answer("❌ Автор не может быть пустым. Попробуйте еще раз:")
+
+
+@router.callback_query(F.data.startswith("admin_book_edit_desc_"))
+async def edit_book_description(callback: CallbackQuery, state: FSMContext):
+    """Изменение описания книги"""
+    book_id = int(callback.data.split("_")[-1])
+    await state.update_data(edit_book_id=book_id)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data=f"admin_book_edit_{book_id}")
+    
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text="📝 Введите новое описание книги:",
+            reply_markup=builder.as_markup()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+    
+    await state.set_state(BookEditState.waiting_for_new_description)
+
+
+@router.message(BookEditState.waiting_for_new_description)
+async def process_new_description(message: Message, state: FSMContext):
+    """Обработка нового описания"""
+    if message.text and message.text.strip():
+        data = await state.get_data()
+        book_id = data.get('edit_book_id')
+        
+        await update_book(book_id, description=message.text.strip())
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+        
+        await message.answer(
+            "✅ Описание книги изменено",
+            reply_markup=builder.as_markup()
+        )
+        await state.clear()
+    else:
+        await message.answer("❌ Описание не может быть пустым. Попробуйте еще раз:")
+
+
+@router.callback_query(F.data.startswith("admin_book_edit_price_"))
+async def edit_book_price(callback: CallbackQuery, state: FSMContext):
+    """Изменение цены книги"""
+    book_id = int(callback.data.split("_")[-1])
+    await state.update_data(edit_book_id=book_id)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data=f"admin_book_edit_{book_id}")
+    
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text="💰 Введите новую цену (в рублях):",
+            reply_markup=builder.as_markup()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+    
+    await state.set_state(BookEditState.waiting_for_new_price)
+
+
+@router.message(BookEditState.waiting_for_new_price)
+async def process_new_price(message: Message, state: FSMContext):
+    """Обработка новой цены"""
+    try:
+        price = int(message.text.strip())
+        if price <= 0:
+            raise ValueError
+        
+        data = await state.get_data()
+        book_id = data.get('edit_book_id')
+        
+        await update_book(book_id, price=price)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+        
+        await message.answer(
+            f"✅ Цена изменена на: {price} ₽",
+            reply_markup=builder.as_markup()
+        )
+        await state.clear()
+    except (ValueError, TypeError):
+        await message.answer("❌ Введите корректную цену (положительное число):")
+
+
+@router.callback_query(F.data.startswith("admin_book_delete_"))
+async def confirm_delete_book(callback: CallbackQuery):
+    """Подтверждение удаления книги"""
+    book_id = int(callback.data.split("_")[-1])
+    book = await get_book(book_id)
+    
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑️ Да, удалить", callback_data=f"admin_book_delete_confirm_{book_id}")
+    builder.button(text="❌ Нет, отмена", callback_data=f"admin_book_edit_{book_id}")
+    builder.adjust(1)
+    
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=(
+                f"⚠️ <b>Удаление книги</b>\n\n"
+                f"Вы уверены, что хотите удалить книгу:\n"
+                f"📖 {book['title']}\n\n"
+                f"Это действие нельзя отменить!"
+            ),
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+
+
+@router.callback_query(F.data.startswith("admin_book_delete_confirm_"))
+async def delete_book_confirm(callback: CallbackQuery):
+    """Подтвержденное удаление книги"""
+    book_id = int(callback.data.split("_")[-1])
+    
+    try:
+        await delete_book(book_id)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 Назад к списку книг", callback_data="admin_books_menu")
+        
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=f"✅ Книга успешно удалена",
+            reply_markup=builder.as_markup()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при удалении книги: {e}")
+        await callback.answer("❌ Ошибка при удалении", show_alert=True)
