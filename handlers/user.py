@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 
 import db
 from config import settings
-from states import AddBookState, EditBookState as BookEditState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
+from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
 from utils import format_local_time, parseBookImages
 
 router = Router()
@@ -188,10 +188,10 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
 
     # 🔧 ВАЖНО: пропускаем сообщения, если пользователь в состоянии редактирования книги
     edit_states = [
-        BookEditState.waiting_for_new_title.state,
-        BookEditState.waiting_for_new_author.state,
-        BookEditState.waiting_for_new_description.state,
-        BookEditState.waiting_for_new_price.state,
+        EditBookState.waiting_for_new_title.state,
+        EditBookState.waiting_for_new_author.state,
+        EditBookState.waiting_for_new_description.state,
+        EditBookState.waiting_for_new_price.state,
     ]
 
     if current_state in edit_states:
