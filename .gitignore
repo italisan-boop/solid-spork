@@ -893,3 +893,8 @@ upm.log
 *.compute
 *.raytrace
 *.asmdef......
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+.beads/proxieddb/
