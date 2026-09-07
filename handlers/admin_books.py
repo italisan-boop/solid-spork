@@ -2,13 +2,12 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.fsm.state import State, StatesGroup
 import logging
 from config.settings import settings
 from db.books import add_book, get_all_books, update_book, delete_book, get_book, get_books_count, get_all_books_paginated
 from db.categories import get_all_categories
 from utils import parseBookImages
-from states import EditBookState as BookEditState, AddBookState as BookAddState
+from states import EditBookState, AddBookState as BookAddState
 import re
 
 logger = logging.getLogger(__name__)
@@ -27,17 +26,6 @@ def is_url(text: str) -> bool:
         r'(?::\d+)?'  # опциональный порт
         r'(?:/?|[/?]\S+)$', re.IGNORECASE)
     return text is not None and url_pattern.match(text) is not None
-
-
-class BookAddState(StatesGroup):
-    waiting_for_title = State()
-    waiting_for_author = State()
-    waiting_for_description = State()
-    waiting_for_price = State()
-    waiting_for_category = State()
-    waiting_for_cover_photo = State()
-    waiting_for_page_photos = State()
-    confirming = State()
 
 
 @router.callback_query(F.data == "admin_add_book")
@@ -769,10 +757,10 @@ async def edit_book_title(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Ошибка при редактировании сообщения: {e}")
         await callback.message.answer("✏️ Введите новое название книги:", reply_markup=builder.as_markup())
     
-    await state.set_state(BookEditState.waiting_for_new_title)
+    await state.set_state(EditBookState.waiting_for_new_title)
 
 
-@router.message(BookEditState.waiting_for_new_title)
+@router.message(EditBookState.waiting_for_new_title)
 async def process_new_title(message: Message, state: FSMContext):
     """Обработка нового названия"""
     if message.text and message.text.strip():
@@ -813,10 +801,10 @@ async def edit_book_author(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Ошибка при редактировании сообщения: {e}")
         await callback.message.answer("✏️ Введите нового автора:", reply_markup=builder.as_markup())
     
-    await state.set_state(BookEditState.waiting_for_new_author)
+    await state.set_state(EditBookState.waiting_for_new_author)
 
 
-@router.message(BookEditState.waiting_for_new_author)
+@router.message(EditBookState.waiting_for_new_author)
 async def process_new_author(message: Message, state: FSMContext):
     """Обработка нового автора"""
     if message.text and message.text.strip():
@@ -857,10 +845,10 @@ async def edit_book_description(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Ошибка при редактировании сообщения: {e}")
         await callback.message.answer("📝 Введите новое описание книги:", reply_markup=builder.as_markup())
     
-    await state.set_state(BookEditState.waiting_for_new_description)
+    await state.set_state(EditBookState.waiting_for_new_description)
 
 
-@router.message(BookEditState.waiting_for_new_description)
+@router.message(EditBookState.waiting_for_new_description)
 async def process_new_description(message: Message, state: FSMContext):
     """Обработка нового описания"""
     if message.text and message.text.strip():
@@ -901,10 +889,10 @@ async def edit_book_price(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Ошибка при редактировании сообщения: {e}")
         await callback.message.answer("💰 Введите новую цену (в рублях):", reply_markup=builder.as_markup())
     
-    await state.set_state(BookEditState.waiting_for_new_price)
+    await state.set_state(EditBookState.waiting_for_new_price)
 
 
-@router.message(BookEditState.waiting_for_new_price)
+@router.message(EditBookState.waiting_for_new_price)
 async def process_new_price(message: Message, state: FSMContext):
     """Обработка новой цены"""
     try:
