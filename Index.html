@@ -846,9 +846,11 @@
         }
 
         function selectCategory(cat) {
+            if (activeCategory === cat) return; // Защита от повторного нажатия на ту же категорию
             activeCategory = cat;
             renderCategories();
             applyFiltersAndRender();
+            tg.HapticFeedback.impactOccurred('light');
         }
 
         const searchInput = document.getElementById('searchInput');
@@ -899,6 +901,7 @@
             }
 
             applyFiltersAndRender();
+            tg.HapticFeedback.impactOccurred('light');
         }
 
         function updateWishlistBadge() {
@@ -1014,7 +1017,10 @@
             if (event) event.stopPropagation();
 
             const book = books.find(b => b.id === bookId);
-            if (!book) return;
+            if (!book) {
+                tg.showAlert('❌ Книга не найдена');
+                return;
+            }
 
             const refCode = `ref_${userId}`;
             const bookLink = `https://t.me/${BOT_USERNAME}?start=${refCode}`;
@@ -1062,7 +1068,10 @@
 
         function openBookModal(bookId) {
             const book = books.find(b => b.id === bookId);
-            if (!book) return;
+            if (!book) {
+                tg.showAlert('❌ Книга не найдена');
+                return;
+            }
 
             currentModalBook = book;
             currentImageIndex = 0;
@@ -1083,6 +1092,9 @@
             updateModalImages();
 
             const modalImages = document.getElementById('modalImages');
+            // Удаляем старые слушатели перед добавлением новых (защита от дублирования)
+            modalImages.removeEventListener('touchstart', handleTouchStart);
+            modalImages.removeEventListener('touchend', handleTouchEnd);
             modalImages.addEventListener('touchstart', handleTouchStart, { passive: true });
             modalImages.addEventListener('touchend', handleTouchEnd, { passive: true });
 
@@ -1136,7 +1148,8 @@
         function handleTouchStart(e) { touchStartX = e.changedTouches[0].screenX; }
         function handleTouchEnd(e) { touchEndX = e.changedTouches[0].screenX; handleSwipe(); }
         function handleSwipe() {
-            const imageUrls = currentModalBook.images.filter(img => img && img.startsWith('http'));
+            if (!currentModalBook) return;
+            const imageUrls = (currentModalBook.images || []).filter(img => img && img.startsWith('http'));
             if (imageUrls.length <= 1) return;
             const diff = touchStartX - touchEndX;
             if (Math.abs(diff) < 50) return;
@@ -1145,7 +1158,14 @@
             updateModalImages();
             tg.HapticFeedback.impactOccurred('light');
         }
-        function goToImage(index) { currentImageIndex = index; updateModalImages(); tg.HapticFeedback.impactOccurred('light'); }
+        function goToImage(index) {
+            if (!currentModalBook) return;
+            const imageUrls = (currentModalBook.images || []).filter(img => img && img.startsWith('http'));
+            if (index < 0 || index >= imageUrls.length) return;
+            currentImageIndex = index;
+            updateModalImages();
+            tg.HapticFeedback.impactOccurred('light');
+        }
 
         function closeModal() {
             const modalImages = document.getElementById('modalImages');
@@ -1181,6 +1201,9 @@
                 if (book) {
                     cart.push({...book, quantity: 1});
                     tg.HapticFeedback.impactOccurred('medium');
+                } else {
+                    console.warn('Книга не найдена:', bookId);
+                    return;
                 }
             }
             updateUI();
@@ -1195,20 +1218,24 @@
                 updateUI();
                 renderCartItems();
                 applyFiltersAndRender();
+            } else {
+                console.warn('Книга не найдена в корзине:', bookId);
             }
         }
 
         function changeQuantity(bookId, delta) {
             const book = cart.find(b => b.id === bookId);
-            if (book) {
-                book.quantity = (book.quantity || 1) + delta;
-                if (book.quantity <= 0) {
-                    removeFromCart(bookId);
-                } else {
-                    updateUI();
-                    renderCartItems();
-                    tg.HapticFeedback.impactOccurred('light');
-                }
+            if (!book) {
+                console.warn('Книга не найдена в корзине:', bookId);
+                return;
+            }
+            book.quantity = (book.quantity || 1) + delta;
+            if (book.quantity <= 0) {
+                removeFromCart(bookId);
+            } else {
+                updateUI();
+                renderCartItems();
+                tg.HapticFeedback.impactOccurred('light');
             }
         }
 
@@ -1228,7 +1255,7 @@
                     applyFiltersAndRender();
                     tg.HapticFeedback.impactOccurred('medium');
                 }
-            });
+            }, 'cancel'); // Второй аргумент для кнопки отмены
         }
 
         function renderCartItems() {
@@ -1273,6 +1300,10 @@
         }
 
         function checkoutFromModal() {
+            if (cart.length === 0) {
+                tg.showAlert('Корзина пуста 🌱');
+                return;
+            }
             closeCartModal();
             document.getElementById('mainButton').click();
         }
@@ -1496,10 +1527,14 @@
         }
 
         function copyToClipboard(elementId) {
-            const text = document.getElementById(elementId).textContent;
+            const text = document.getElementById(elementId)?.textContent;
+            if (!text) return;
             navigator.clipboard.writeText(text).then(() => {
                 tg.HapticFeedback.notificationOccurred('success');
                 tg.showAlert('✅ Скопировано!');
+            }).catch((err) => {
+                console.error('Ошибка копирования:', err);
+                tg.showAlert('❌ Не удалось скопировать');
             });
         }
 
@@ -1507,6 +1542,8 @@
             if (!currentPaymentOrderId) return;
 
             const btn = document.getElementById('paymentConfirmBtn');
+            if (btn.disabled) return; // Защита от повторного нажатия
+            
             btn.disabled = true;
             btn.textContent = 'Отправляем...';
 
