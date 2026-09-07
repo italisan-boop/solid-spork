@@ -846,7 +846,7 @@ async def get_book(book_id: int) -> dict:
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            """SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images, b.category_id,
+            """SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images, b.category_id, b.sort_order,
                       c.emoji as category_emoji
                FROM books b
                LEFT JOIN categories c ON b.category_id = c.id
