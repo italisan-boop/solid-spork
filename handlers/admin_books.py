@@ -1,4 +1,4 @@
-from aiogram import Router, F
+from aiogram import Bot, Router, F
 from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -22,15 +22,22 @@ def is_admin(user_id: int) -> bool:
 
 
 def is_url(text: str) -> bool:
-    """Проверяет, является ли строка URL"""
-    url_pattern = re.compile(
-        r'^https?://'  # http:// или https://
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # домен
-        r'localhost|'  # localhost
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # или IP
-        r'(?::\d+)?'  # опциональный порт
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-    return text is not None and url_pattern.match(text) is not None
+    """Проверяет, является ли строка URL.
+    Достаточно наличия схемы http(s):// и непустого хоста — расширения
+    TLD растут быстрее, чем старые регексы успевают покрывать, поэтому
+    строгая валидация TLD только мешает."""
+    if not text:
+        return False
+    text = text.strip()
+    return re.match(r'^https?://[^\s]+$', text, re.IGNORECASE) is not None
+
+
+async def get_telegram_file_url(bot: Bot, file_id: str) -> str:
+    """Строит публичный URL файла на api.telegram.org по его file_id.
+    file_unique_id — это стабильный идентификатор, его НЕЛЬЗЯ подставлять
+    в путь; нужен реальный file_path, который возвращает get_file()."""
+    file = await bot.get_file(file_id)
+    return f"https://api.telegram.org/file/bot{bot.token}/{file.file_path}"
 
 
 @router.callback_query(F.data == "admin_add_book")
@@ -257,8 +264,9 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
         text=
-        "📸 <b>Отправьте фото обложки книги</b>\n\n"
-        "Это главное изображение, которое будет видно в каталоге.",
+        "📸 <b>Отправьте обложку книги</b>\n\n"
+        "Можно прикрепить фото Telegram-сообщением или прислать ссылку "
+        "(http://… или https://…). Это главное изображение в каталоге.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -288,12 +296,22 @@ async def back_to_category(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookAddState.waiting_for_cover_photo, F.photo)
-async def process_cover_photo(message: Message, state: FSMContext):
-    """Обработка фото обложки (вложение)"""
+async def process_cover_photo(message: Message, state: FSMContext, bot: Bot):
+    """Обработка фото обложки (вложение Telegram)"""
     photo = message.photo[-1]
     # Сохраняем file_id для отправки в Mini App и URL для хранения в БД
     file_id = photo.file_id
-    file_url = f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{photo.file_unique_id}"
+    try:
+        file_url = await get_telegram_file_url(bot, file_id)
+    except Exception as e:
+        logger.error(f"Не удалось получить file_path для обложки: {e}")
+        # Без URL обложка всё равно будет работать в боте (через file_id),
+        # но в Mini App может не отображаться. Сообщаем админу.
+        await message.answer(
+            "⚠️ Не удалось получить ссылку на фото. Попробуйте отправить "
+            "обложку ещё раз или пришлите URL изображения."
+        )
+        return
     await state.update_data(cover_photo=file_url, cover_photo_id=file_id, step=6)
     
     builder = InlineKeyboardBuilder()
@@ -353,8 +371,9 @@ async def back_to_cover(callback: CallbackQuery, state: FSMContext):
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
         text=
-        "📸 <b>Отправьте фото обложки книги</b>\n\n"
-        "Это главное изображение, которое будет видно в каталоге.",
+        "📸 <b>Отправьте обложку книги</b>\n\n"
+        "Можно прикрепить фото Telegram-сообщением или прислать ссылку "
+        "(http://… или https://…). Это главное изображение в каталоге.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -382,14 +401,20 @@ async def start_add_pages(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookAddState.waiting_for_page_photos, F.photo)
-async def process_page_photo(message: Message, state: FSMContext):
-    """Обработка фото страницы (вложение)"""
+async def process_page_photo(message: Message, state: FSMContext, bot: Bot):
+    """Обработка фото страницы (вложение Telegram)"""
     data = await state.get_data()
     page_photos = data.get('page_photos', [])
-    
+
     photo = message.photo[-1]
-    # Сохраняем URL для БД и file_id для отправки
-    file_url = f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{photo.file_unique_id}"
+    try:
+        file_url = await get_telegram_file_url(bot, photo.file_id)
+    except Exception as e:
+        logger.error(f"Не удалось получить file_path для фото страницы: {e}")
+        await message.answer(
+            "⚠️ Не удалось сохранить фото страницы. Попробуйте ещё раз или пришлите URL."
+        )
+        return
     page_photos.append(file_url)
     await state.update_data(page_photos=page_photos)
     
@@ -469,16 +494,18 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
     
     # Формируем итоговое сообщение
     cover_photo_id = data.get('cover_photo_id')
+    cover_photo_url = data.get('cover_photo')
+    has_cover = bool(cover_photo_id or cover_photo_url)
     title = data.get('title')
     author = data.get('author')
     description = data.get('description')
     price = data.get('price')
     category_id = data.get('category_id')
-    
+
     # Получаем название категории
     categories = await get_all_categories()
     category_name = next((cat['name'] for cat in categories if cat['id'] == category_id), "Неизвестно")
-    
+
     text = (
         f"📚 <b>Подтверждение добавления книги</b>\n\n"
         f"📖 Название: {title}\n"
@@ -486,23 +513,26 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
         f"📝 Описание: {description[:200]}{'...' if len(description) > 200 else ''}\n"
         f"💰 Цена: {price} ₽\n"
         f"📁 Категория: {category_name}\n"
-        f"📸 Фото обложки: {'✅' if cover_photo_id else '❌'}\n"
+        f"📸 Фото обложки: {'✅' if has_cover else '❌'}\n"
         f"📄 Фото страниц: {len(page_photos)} шт.\n\n"
         "Все верно?"
     )
-    
+
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
     builder.button(text="✏️ Изменить", callback_data="admin_book_back_title")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
-    
+
     try:
-        # Если есть фото обложки, отправляем с ним
-        if cover_photo_id:
+        # Показываем обложку независимо от того, как её прислали:
+        # Telegram file_id (attachment) — бот пересылает по file_id.
+        # Внешний URL — Telegram сам подгружает картинку и шлёт превью.
+        cover_to_show = cover_photo_id or cover_photo_url
+        if cover_to_show:
             await callback.message.delete()
             await callback.message.answer_photo(
-                photo=cover_photo_id,
+                photo=cover_to_show,
                 caption=text,
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
@@ -515,7 +545,7 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
             )
-        
+
         await state.set_state(BookAddState.confirming)
     except Exception as e:
         logger.error(f"Ошибка при отображении подтверждения: {e}")
