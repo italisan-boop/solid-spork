@@ -24,10 +24,14 @@ async def add_book(title: str, price: int, category_id: int,
         category_name = row['name'] if row else "Неизвестно"
     
     async with aiosqlite.connect(DB_NAME) as db:
+        # Зеркалим cover_photo в поле emoji — фронтенд Mini App и
+        # catalog.py читают именно emoji. Без этого каталог рисует 📚
+        # вместо присланной обложки.
+        emoji_value = cover_photo or ''
         cursor = await db.execute(
-            """INSERT INTO books (title, price, category, category_id, author, description, cover_photo, images) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (title, price, category_name, category_id, author, description, cover_photo, images_json)
+            """INSERT INTO books (title, price, category, category_id, author, description, cover_photo, images, emoji)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (title, price, category_name, category_id, author, description, cover_photo, images_json, emoji_value)
         )
         await db.commit()
         return cursor.lastrowid
