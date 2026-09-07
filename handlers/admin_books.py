@@ -670,8 +670,11 @@ async def books_page_navigation(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("admin_book_edit_"))
-async def edit_book_menu(callback: CallbackQuery):
+async def edit_book_menu(callback: CallbackQuery, state: FSMContext):
     """Меню редактирования конкретной книги"""
+    # Очищаем состояние перед показом меню
+    await state.clear()
+    
     book_id = int(callback.data.split("_")[-1])
     book = await get_book(book_id)
     
@@ -705,6 +708,8 @@ async def edit_book_menu(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
+        # Если не удалось отредактировать, отправляем новое сообщение
+        await callback.message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("admin_book_change_"))
@@ -737,6 +742,11 @@ async def start_change_book(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
+        await callback.message.answer(
+            f"📚 <b>Изменение книги: {book['title']}</b>\n\nВыберите поле для редактирования:",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
 
 
 @router.callback_query(F.data.startswith("admin_book_edit_title_"))
@@ -757,6 +767,7 @@ async def edit_book_title(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
+        await callback.message.answer("✏️ Введите новое название книги:", reply_markup=builder.as_markup())
     
     await state.set_state(BookEditState.waiting_for_new_title)
 
@@ -800,6 +811,7 @@ async def edit_book_author(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
+        await callback.message.answer("✏️ Введите нового автора:", reply_markup=builder.as_markup())
     
     await state.set_state(BookEditState.waiting_for_new_author)
 
@@ -843,6 +855,7 @@ async def edit_book_description(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
+        await callback.message.answer("📝 Введите новое описание книги:", reply_markup=builder.as_markup())
     
     await state.set_state(BookEditState.waiting_for_new_description)
 
@@ -886,6 +899,7 @@ async def edit_book_price(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
+        await callback.message.answer("💰 Введите новую цену (в рублях):", reply_markup=builder.as_markup())
     
     await state.set_state(BookEditState.waiting_for_new_price)
 
@@ -916,8 +930,11 @@ async def process_new_price(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("admin_book_delete_"))
-async def confirm_delete_book(callback: CallbackQuery):
+async def confirm_delete_book(callback: CallbackQuery, state: FSMContext):
     """Подтверждение удаления книги"""
+    # Очищаем состояние перед подтверждением
+    await state.clear()
+    
     book_id = int(callback.data.split("_")[-1])
     book = await get_book(book_id)
     
@@ -945,11 +962,23 @@ async def confirm_delete_book(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
+        # Если не удалось отредактировать, отправляем новое сообщение
+        await callback.message.answer(
+            f"⚠️ <b>Удаление книги</b>\n\n"
+            f"Вы уверены, что хотите удалить книгу:\n"
+            f"📖 {book['title']}\n\n"
+            f"Это действие нельзя отменить!",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
 
 
 @router.callback_query(F.data.startswith("admin_book_delete_confirm_"))
-async def delete_book_confirm(callback: CallbackQuery):
+async def delete_book_confirm(callback: CallbackQuery, state: FSMContext):
     """Подтвержденное удаление книги"""
+    # Очищаем состояние перед удалением
+    await state.clear()
+    
     book_id = int(callback.data.split("_")[-1])
     
     try:
