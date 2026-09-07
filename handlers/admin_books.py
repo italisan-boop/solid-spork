@@ -662,9 +662,10 @@ async def books_page_navigation(callback: CallbackQuery, state: FSMContext):
     await show_books_list(callback, page)
 
 
-@router.callback_query(F.data.startswith("admin_book_edit_"))
+@router.callback_query(F.data.regexp(r"^admin_book_edit_\d+$"))
 async def edit_book_menu(callback: CallbackQuery, state: FSMContext):
-    """Меню редактирования конкретной книги"""
+    """Меню редактирования конкретной книги.
+    Узкий regex, чтобы не перехватывать admin_book_edit_title_/author_/desc_/price_{id}."""
     # Очищаем состояние перед показом меню
     await state.clear()
     
@@ -922,9 +923,10 @@ async def process_new_price(message: Message, state: FSMContext):
         await message.answer("❌ Введите корректную цену (положительное число):")
 
 
-@router.callback_query(F.data.startswith("admin_book_delete_"))
+@router.callback_query(F.data.regexp(r"^admin_book_delete_\d+$"))
 async def confirm_delete_book(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение удаления книги"""
+    """Подтверждение удаления книги.
+    Узкий regex, чтобы не перехватывать admin_book_delete_confirm_{id}."""
     # Очищаем состояние перед подтверждением
     await state.clear()
     
