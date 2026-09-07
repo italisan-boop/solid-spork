@@ -934,7 +934,7 @@ async def handle_photo(message: Message, state: FSMContext):
 
         photo = message.photo[-1]
         file = await message.bot.get_file(photo.file_id)
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+        file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file.file_path}"
 
         book = await db.get_book(book_id)
         current_images = parseBookImages(book.get('images') or '[]')
