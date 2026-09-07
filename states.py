@@ -3,11 +3,13 @@ from aiogram.fsm.state import State, StatesGroup
 
 class AddBookState(StatesGroup):
     waiting_for_title = State()
+    waiting_for_author = State()
+    waiting_for_description = State()
     waiting_for_price = State()
     waiting_for_category = State()
-    waiting_for_emoji = State()
-    waiting_for_description = State()
-    waiting_for_inner_images = State()
+    waiting_for_cover_photo = State()
+    waiting_for_page_photos = State()
+    confirming = State()
 
 
 class EditBookState(StatesGroup):
