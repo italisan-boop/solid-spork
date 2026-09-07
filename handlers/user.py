@@ -114,8 +114,12 @@ async def about_callback(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "support")
-async def support_callback(callback: CallbackQuery):
+async def support_callback(callback: CallbackQuery, state: FSMContext):
     """Обработка кнопки поддержки"""
+    # Сбрасываем любое накопившееся FSM-состояние, чтобы следующее текстовое
+    # сообщение гарантированно ушло в поддержку, а не было проглочено
+    # обработчиком какого-нибудь waiting_for_* из админки.
+    await state.clear()
     settings.support_pending_users.add(callback.from_user.id)
     await callback.message.answer(
         "🆘 <b>Служба поддержки</b>\n\n"
@@ -172,6 +176,25 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
     """Единый обработчик всех текстовых сообщений с проверкой FSM"""
     user_id = message.from_user.id
     current_state = await state.get_state()
+
+    # === ПОДДЕРЖКА (проверяем ПЕРВОЙ, чтобы любое FSM-состояние не
+    # перехватило сообщение раньше, чем мы перешлём его админу) ===
+    if user_id in settings.support_pending_users:
+        settings.support_pending_users.discard(user_id)
+        for admin_id in settings.ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"🆘 <b>Вопрос от пользователя</b>\n\n"
+                    f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
+                    f"💬 Текст: {message.text}\n\n"
+                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                print(f"Не удалось отправить админу {admin_id}: {e}")
+        await message.answer("✅ Ваш вопрос отправлен администратору!\nМы ответим в ближайшее время. 🌱")
+        return
 
     # 🔧 ВАЖНО: пропускаем сообщения, если пользователь в состоянии настройки оплаты
     payment_states = [
@@ -891,23 +914,8 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         )
         return
 
-    # === ПОДДЕРЖКА ===
-    if user_id in settings.support_pending_users:
-        settings.support_pending_users.discard(user_id)
-        for admin_id in settings.ADMIN_IDS:
-            try:
-                await bot.send_message(
-                    admin_id,
-                    f"🆘 <b>Вопрос от пользователя</b>\n\n"
-                    f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
-                    f"💬 Текст: {message.text}\n\n"
-                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                print(f"Не удалось отправить админу {admin_id}: {e}")
-        await message.answer("✅ Ваш вопрос отправлен администратору!\nМы ответим в ближайшее время. 🌱")
-        return
+    # Поддержка обрабатывается в начале функции, чтобы ни одно FSM-состояние
+    # не перехватывало сообщение раньше.
 
 
 @router.message(F.photo)
