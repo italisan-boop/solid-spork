@@ -23,6 +23,8 @@ class EditBookState(StatesGroup):
     waiting_for_new_author = State()
     waiting_for_new_price = State()
     waiting_for_new_description = State()
+    waiting_for_new_cover = State()    # обложка (фото или URL) из admin_books
+    waiting_for_new_page = State()     # фото страницы (фото или URL) из admin_books
 
 
 class CategoryState(StatesGroup):
