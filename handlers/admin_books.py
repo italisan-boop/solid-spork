@@ -16,6 +16,11 @@ router = Router()
 PAGE_SIZE = 20  # Количество книг на странице
 
 
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь администратором"""
+    return user_id in settings.ADMIN_IDS
+
+
 def is_url(text: str) -> bool:
     """Проверяет, является ли строка URL"""
     url_pattern = re.compile(
