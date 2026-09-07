@@ -264,8 +264,9 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
         text=
-        "📸 <b>Отправьте фото обложки книги</b>\n\n"
-        "Это главное изображение, которое будет видно в каталоге.",
+        "📸 <b>Отправьте обложку книги</b>\n\n"
+        "Можно прикрепить фото Telegram-сообщением или прислать ссылку "
+        "(http://… или https://…). Это главное изображение в каталоге.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -370,8 +371,9 @@ async def back_to_cover(callback: CallbackQuery, state: FSMContext):
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
         text=
-        "📸 <b>Отправьте фото обложки книги</b>\n\n"
-        "Это главное изображение, которое будет видно в каталоге.",
+        "📸 <b>Отправьте обложку книги</b>\n\n"
+        "Можно прикрепить фото Telegram-сообщением или прислать ссылку "
+        "(http://… или https://…). Это главное изображение в каталоге.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -492,16 +494,18 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
     
     # Формируем итоговое сообщение
     cover_photo_id = data.get('cover_photo_id')
+    cover_photo_url = data.get('cover_photo')
+    has_cover = bool(cover_photo_id or cover_photo_url)
     title = data.get('title')
     author = data.get('author')
     description = data.get('description')
     price = data.get('price')
     category_id = data.get('category_id')
-    
+
     # Получаем название категории
     categories = await get_all_categories()
     category_name = next((cat['name'] for cat in categories if cat['id'] == category_id), "Неизвестно")
-    
+
     text = (
         f"📚 <b>Подтверждение добавления книги</b>\n\n"
         f"📖 Название: {title}\n"
@@ -509,23 +513,26 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
         f"📝 Описание: {description[:200]}{'...' if len(description) > 200 else ''}\n"
         f"💰 Цена: {price} ₽\n"
         f"📁 Категория: {category_name}\n"
-        f"📸 Фото обложки: {'✅' if cover_photo_id else '❌'}\n"
+        f"📸 Фото обложки: {'✅' if has_cover else '❌'}\n"
         f"📄 Фото страниц: {len(page_photos)} шт.\n\n"
         "Все верно?"
     )
-    
+
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
     builder.button(text="✏️ Изменить", callback_data="admin_book_back_title")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
-    
+
     try:
-        # Если есть фото обложки, отправляем с ним
-        if cover_photo_id:
+        # Показываем обложку независимо от того, как её прислали:
+        # Telegram file_id (attachment) — бот пересылает по file_id.
+        # Внешний URL — Telegram сам подгружает картинку и шлёт превью.
+        cover_to_show = cover_photo_id or cover_photo_url
+        if cover_to_show:
             await callback.message.delete()
             await callback.message.answer_photo(
-                photo=cover_photo_id,
+                photo=cover_to_show,
                 caption=text,
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
@@ -538,7 +545,7 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
             )
-        
+
         await state.set_state(BookAddState.confirming)
     except Exception as e:
         logger.error(f"Ошибка при отображении подтверждения: {e}")
