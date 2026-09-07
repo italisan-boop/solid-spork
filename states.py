@@ -17,6 +17,10 @@ class EditBookState(StatesGroup):
     waiting_for_image_url = State()
     waiting_for_image_photo = State()
     waiting_for_new_category = State()
+    waiting_for_new_title = State()
+    waiting_for_new_author = State()
+    waiting_for_new_price = State()
+    waiting_for_new_description = State()
 
 
 class CategoryState(StatesGroup):
