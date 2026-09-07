@@ -299,7 +299,7 @@ async def process_cover_photo(message: Message, state: FSMContext):
     photo = message.photo[-1]
     # Сохраняем file_id для отправки в Mini App и URL для хранения в БД
     file_id = photo.file_id
-    file_url = f"https://api.telegram.org/file/bot{settings.bot_token}/{photo.file_unique_id}"
+    file_url = f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{photo.file_unique_id}"
     await state.update_data(cover_photo=file_url, cover_photo_id=file_id, step=6)
     
     builder = InlineKeyboardBuilder()
@@ -395,7 +395,7 @@ async def process_page_photo(message: Message, state: FSMContext):
     
     photo = message.photo[-1]
     # Сохраняем URL для БД и file_id для отправки
-    file_url = f"https://api.telegram.org/file/bot{settings.bot_token}/{photo.file_unique_id}"
+    file_url = f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{photo.file_unique_id}"
     page_photos.append(file_url)
     await state.update_data(page_photos=page_photos)
     
