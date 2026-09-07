@@ -1,13 +1,14 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.state import State, StatesGroup
 import logging
 from config.settings import settings
 from db.books import add_book, get_all_books, update_book, delete_book, get_book, get_books_count, get_all_books_paginated
 from db.categories import get_all_categories
 from utils import parseBookImages
+from states import EditBookState as BookEditState, AddBookState as BookAddState
 import re
 
 logger = logging.getLogger(__name__)
@@ -736,13 +737,6 @@ async def start_change_book(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
-
-
-class BookEditState(StatesGroup):
-    waiting_for_new_title = State()
-    waiting_for_new_author = State()
-    waiting_for_new_description = State()
-    waiting_for_new_price = State()
 
 
 @router.callback_query(F.data.startswith("admin_book_edit_title_"))
