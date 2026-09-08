@@ -68,3 +68,5 @@
 sync.remote: "git+https://github.com/italisan-boop/solid-spork.git"
 dolt:
     shared-server: true
+export:
+    auto: true
