@@ -8,6 +8,7 @@ class AddBookState(StatesGroup):
     waiting_for_price = State()
     waiting_for_category = State()
     waiting_for_emoji = State()
+    waiting_for_inner_images = State()
     waiting_for_cover_photo = State()
     waiting_for_page_photos = State()
     confirming = State()
