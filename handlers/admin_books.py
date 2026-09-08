@@ -762,7 +762,7 @@ async def admin_book_change_category(callback: CallbackQuery, state: FSMContext)
 
     await state.update_data(edit_book_id=book_id)
 
-    categories = await db.get_all_categories()
+    categories = await get_all_categories()
 
     builder = InlineKeyboardBuilder()
     if categories:
@@ -857,7 +857,7 @@ async def admin_book_set_category(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Ошибка", show_alert=True)
         return
 
-    categories = await db.get_all_categories()
+    categories = await get_all_categories()
     cat = next((c for c in categories if c['id'] == cat_id), None)
     if not cat:
         await callback.answer("❌ Категория не найдена", show_alert=True)
@@ -905,7 +905,7 @@ async def process_new_category_admin(message: Message, state: FSMContext):
         await message.answer("❌ Название не может быть пустым. Попробуйте ещё раз:")
         return
 
-    categories = await db.get_all_categories()
+    categories = await get_all_categories()
     existing_cat = next(
         (c for c in categories if c['name'].lower() == new_category_name.lower()),
         None,
