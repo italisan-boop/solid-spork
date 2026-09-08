@@ -56,6 +56,7 @@ async def cmd_admin(message: Message):
     builder.button(text="📂 Управление категориями", callback_data="admin_categories")
     builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
     builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
+    builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
     builder.adjust(2)
 
     await message.answer(
@@ -81,6 +82,7 @@ async def admin_menu(callback: CallbackQuery):
     builder.button(text="📂 Управление категориями", callback_data="admin_categories")
     builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
     builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
+    builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
     builder.adjust(2)
 
     await safe_edit_text(

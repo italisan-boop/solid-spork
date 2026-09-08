@@ -3,8 +3,9 @@ from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import logging
+import json
 from config.settings import settings
-from db.books import add_book, get_all_books, update_book, delete_book, get_book, get_books_count, get_all_books_paginated
+from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated
 from db.categories import get_all_categories
 from utils import parseBookImages
 from states import EditBookState, AddBookState as BookAddState
@@ -736,6 +737,217 @@ async def edit_book_menu(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
+# ============================================
+# ИЗМЕНЕНИЕ КАТЕГОРИИ КНИГИ
+#
+# ВАЖНО: эти хендлеры должны быть зарегистрированы ДО start_change_book
+# ниже, потому что admin_book_change_<id> начинается с admin_book_change_,
+# и startswith-prefix-matching в aiogram матчит более ранний обработчик
+# первым — иначе клик по 'Изменить категорию' будет уводить обратно в
+# меню изменения книги.
+# ============================================
+
+@router.callback_query(F.data.startswith("admin_book_change_category_"))
+async def admin_book_change_category(callback: CallbackQuery, state: FSMContext):
+    """Меню выбора категории: существующие + 'ввести новую' + 'назад'."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    book_id = int(callback.data.rsplit("_", 1)[-1])
+    book = await get_book(book_id)
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+
+    await state.update_data(edit_book_id=book_id)
+
+    categories = await db.get_all_categories()
+
+    builder = InlineKeyboardBuilder()
+    if categories:
+        for cat in categories:
+            builder.button(
+                text=f"{cat['emoji'] or ''} {cat['name']}".strip(),
+                callback_data=f"admin_book_set_category_{cat['id']}",
+            )
+    builder.button(
+        text="✏️ Ввести новую",
+        callback_data="admin_book_set_category_custom",
+    )
+    builder.button(
+        text="◀️ Назад",
+        callback_data=f"admin_book_change_{book_id}",
+    )
+    builder.adjust(2)
+
+    text = (
+        f"📂 <b>Изменение категории</b>\n\n"
+        f"📖 Текущая категория: <b>{book.get('category') or '—'}</b>\n\n"
+        f"Выберите новую категорию из списка или введите свою:"
+    )
+
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error("Ошибка при показе меню категорий: %s", e)
+        await callback.message.answer(
+            text, reply_markup=builder.as_markup(), parse_mode="HTML"
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_book_set_category_"))
+async def admin_book_set_category(callback: CallbackQuery, state: FSMContext):
+    """Применяет выбранную существующую категорию ИЛИ просит ввести новую.
+
+    `_custom` ветка переходит в FSM; остальные — это `admin_book_set_category_<id>`.
+    """
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    data = await state.get_data()
+    book_id = data.get('edit_book_id')
+    if not book_id:
+        await callback.answer("❌ Ошибка: книга не выбрана", show_alert=True)
+        return
+
+    # Ветка «ввести новую» — запрашиваем имя в FSM.
+    if callback.data == "admin_book_set_category_custom":
+        await state.set_state(EditBookState.waiting_for_new_category_admin)
+
+        builder = InlineKeyboardBuilder()
+        builder.button(
+            text="◀️ Назад",
+            callback_data=f"admin_book_change_category_{book_id}",
+        )
+
+        try:
+            await callback.bot.edit_message_text(
+                chat_id=callback.from_user.id,
+                message_id=callback.message.message_id,
+                text=(
+                    "📂 Введите <b>название новой категории</b>:\n\n"
+                    "Если категория с таким именем уже существует — будет использована она."
+                ),
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error("Ошибка при запросе новой категории: %s", e)
+            await callback.message.answer(
+                "📂 Введите название новой категории:",
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+        await callback.answer()
+        return
+
+    # Ветка «существующая категория».
+    try:
+        cat_id = int(callback.data.rsplit("_", 1)[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка", show_alert=True)
+        return
+
+    categories = await db.get_all_categories()
+    cat = next((c for c in categories if c['id'] == cat_id), None)
+    if not cat:
+        await callback.answer("❌ Категория не найдена", show_alert=True)
+        return
+
+    await update_book_full(book_id, category=cat['name'], category_id=cat_id)
+    await state.clear()
+
+    book = await get_book(book_id)
+    title = book['title'] if book else "Книга"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}"
+    )
+
+    await callback.message.answer(
+        f"✅ <b>Категория обновлена!</b>\n\n"
+        f"📖 {title}\n"
+        f"📂 Новая категория: <b>{cat['emoji'] or ''} {cat['name']}</b>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(EditBookState.waiting_for_new_category_admin)
+async def process_new_category_admin(message: Message, state: FSMContext):
+    """Применяет введённую категорию: переиспользует существующую или создаёт новую."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав")
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    book_id = data.get('edit_book_id')
+    new_category_name = message.text.strip()
+
+    if not book_id:
+        await message.answer("❌ Ошибка: книга не выбрана")
+        await state.clear()
+        return
+
+    if not new_category_name:
+        await message.answer("❌ Название не может быть пустым. Попробуйте ещё раз:")
+        return
+
+    categories = await db.get_all_categories()
+    existing_cat = next(
+        (c for c in categories if c['name'].lower() == new_category_name.lower()),
+        None,
+    )
+
+    if existing_cat:
+        await update_book_full(
+            book_id,
+            category=existing_cat['name'],
+            category_id=existing_cat['id'],
+        )
+        cat_label = f"{existing_cat['emoji'] or ''} {existing_cat['name']}".strip()
+        response_text = (
+            f"✅ <b>Категория найдена и применена!</b>\n\n"
+            f"📂 {cat_label}"
+        )
+    else:
+        new_cat_id = await db.add_category(new_category_name, "")
+        await update_book_full(
+            book_id,
+            category=new_category_name,
+            category_id=new_cat_id,
+        )
+        response_text = (
+            f"✅ <b>Новая категория создана и применена!</b>\n\n"
+            f"📂 {new_category_name}\n\n"
+            f"💡 Вы можете добавить эмодзи для неё через '📂 Управление категориями'"
+        )
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}"
+    )
+
+    await message.answer(
+        response_text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await state.clear()
+
+
 @router.callback_query(F.data.startswith("admin_book_change_"))
 async def start_change_book(callback: CallbackQuery, state: FSMContext):
     """Начало изменения книги"""
@@ -753,6 +965,9 @@ async def start_change_book(callback: CallbackQuery, state: FSMContext):
     builder.button(text="✏️ Изменить автора", callback_data=f"admin_book_edit_author_{book_id}")
     builder.button(text="✏️ Изменить описание", callback_data=f"admin_book_edit_desc_{book_id}")
     builder.button(text="✏️ Изменить цену", callback_data=f"admin_book_edit_price_{book_id}")
+    builder.button(text="🖼️ Изменить обложку", callback_data=f"admin_book_edit_cover_{book_id}")
+    builder.button(text="📄 Изменить фото страниц", callback_data=f"admin_book_edit_pages_{book_id}")
+    builder.button(text="📂 Изменить категорию", callback_data=f"admin_book_change_category_{book_id}")
     builder.button(text="🔙 Назад к списку", callback_data="admin_books_menu")
     builder.adjust(1)
     
@@ -951,6 +1166,335 @@ async def process_new_price(message: Message, state: FSMContext):
         await state.clear()
     except (ValueError, TypeError):
         await message.answer("❌ Введите корректную цену (положительное число):")
+
+
+# ============================================
+# РЕДАКТИРОВАНИЕ ОБЛОЖКИ
+# ============================================
+
+@router.callback_query(F.data.regexp(r"^admin_book_edit_cover_\d+$"))
+async def edit_book_cover(callback: CallbackQuery, state: FSMContext):
+    """Показывает текущую обложку и предлагает прислать новую."""
+    book_id = int(callback.data.split("_")[-1])
+    book = await get_book(book_id)
+
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+
+    await state.update_data(edit_book_id=book_id)
+    await state.set_state(EditBookState.waiting_for_new_cover)
+
+    current = book.get("cover_photo") or book.get("emoji") or ""
+    if current.startswith("http"):
+        preview_text = "🖼 <b>Текущая обложка:</b> картинка по ссылке"
+    elif current:
+        preview_text = f"🖼 <b>Текущая обложка:</b> {current}"
+    else:
+        preview_text = "🖼 <b>Текущая обложка:</b> не задана"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Удалить обложку", callback_data=f"admin_book_clear_cover_{book_id}")
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    builder.adjust(1)
+
+    try:
+        await callback.message.delete()
+        if current.startswith("http"):
+            await callback.message.answer_photo(
+                photo=current,
+                caption=(
+                    f"{preview_text}\n\n"
+                    "📸 <b>Пришлите новую обложку</b>\n\n"
+                    "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…"
+                ),
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+        else:
+            await callback.message.answer(
+                f"{preview_text}\n\n"
+                "📸 <b>Пришлите новую обложку</b>\n\n"
+                "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…",
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при показе обложки: {e}")
+        await callback.message.answer(
+            "📸 <b>Пришлите новую обложку</b>\n\n"
+            "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.message(EditBookState.waiting_for_new_cover, F.photo)
+async def process_new_cover_photo(message: Message, state: FSMContext, bot: Bot):
+    """Приём обложки как Telegram-вложения."""
+    data = await state.get_data()
+    book_id = data.get("edit_book_id")
+    if not book_id:
+        await message.answer("❌ Ошибка: книга не выбрана")
+        await state.clear()
+        return
+
+    photo = message.photo[-1]
+    try:
+        file_url = await get_telegram_file_url(bot, photo.file_id)
+    except Exception as e:
+        logger.error(f"Не удалось получить file_path для обложки: {e}")
+        await message.answer(
+            "⚠️ Не удалось сохранить фото. Попробуйте ещё раз или пришлите URL."
+        )
+        return
+
+    # cover_photo хранит URL для БД; emoji — поле, которое читает
+    # Mini App / catalog.py для отрисовки обложки. Держим их в синхроне.
+    await update_book_full(book_id, cover_photo=file_url, emoji=file_url)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    await message.answer("✅ Обложка обновлена!", reply_markup=builder.as_markup())
+    await state.clear()
+
+
+@router.message(EditBookState.waiting_for_new_cover)
+async def process_new_cover_url(message: Message, state: FSMContext):
+    """Приём обложки как URL."""
+    data = await state.get_data()
+    book_id = data.get("edit_book_id")
+    if not book_id:
+        await message.answer("❌ Ошибка: книга не выбрана")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    if not is_url(text):
+        await message.answer(
+            "❌ Это не похоже на ссылку. Пришлите файл-фото или URL вида https://…"
+        )
+        return
+
+    await update_book_full(book_id, cover_photo=text, emoji=text)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    await message.answer("✅ Обложка обновлена!", reply_markup=builder.as_markup())
+    await state.clear()
+
+
+@router.callback_query(F.data.regexp(r"^admin_book_clear_cover_\d+$"))
+async def clear_book_cover(callback: CallbackQuery, state: FSMContext):
+    """Сбрасывает обложку книги."""
+    book_id = int(callback.data.split("_")[-1])
+    await update_book_full(book_id, cover_photo="", emoji="")
+    await state.clear()
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    await callback.message.answer("🗑 Обложка удалена.", reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+# ============================================
+# РЕДАКТИРОВАНИЕ ФОТО СТРАНИЦ
+# ============================================
+
+@router.callback_query(F.data.regexp(r"^admin_book_edit_pages_\d+$"))
+async def edit_book_pages(callback: CallbackQuery, state: FSMContext):
+    """Список фото страниц с кнопками удалить / добавить / очистить."""
+    book_id = int(callback.data.split("_")[-1])
+    book = await get_book(book_id)
+
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+
+    images = parseBookImages(book.get("images") or "[]")
+
+    text_lines = [f"📄 <b>Фото страниц книги</b> «{book['title']}»", ""]
+    if images:
+        text_lines.append(f"Сейчас: {len(images)} шт.")
+    else:
+        text_lines.append("Пока ни одного фото.")
+
+    builder = InlineKeyboardBuilder()
+    if images:
+        for idx in range(len(images)):
+            builder.button(
+                text=f"🗑 Удалить #{idx + 1}",
+                callback_data=f"admin_book_page_del_{book_id}_{idx}",
+            )
+    builder.button(text="➕ Добавить фото", callback_data=f"admin_book_page_add_{book_id}")
+    if images:
+        builder.button(text="🧹 Очистить все", callback_data=f"admin_book_pages_clear_{book_id}")
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    builder.adjust(1)
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.message.answer("\n".join(text_lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^admin_book_page_add_\d+$"))
+async def add_page_start(callback: CallbackQuery, state: FSMContext):
+    """Просит прислать новое фото страницы."""
+    book_id = int(callback.data.split("_")[-1])
+    await state.update_data(edit_book_id=book_id)
+    await state.set_state(EditBookState.waiting_for_new_page)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data=f"admin_book_edit_pages_{book_id}")
+
+    await callback.message.answer(
+        "📄 <b>Пришлите фото страницы</b>\n\n"
+        "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(EditBookState.waiting_for_new_page, F.photo)
+async def process_new_page_photo(message: Message, state: FSMContext, bot: Bot):
+    """Добавляет фото страницы как Telegram-вложение."""
+    data = await state.get_data()
+    book_id = data.get("edit_book_id")
+    if not book_id:
+        await message.answer("❌ Ошибка: книга не выбрана")
+        await state.clear()
+        return
+
+    photo = message.photo[-1]
+    try:
+        file_url = await get_telegram_file_url(bot, photo.file_id)
+    except Exception as e:
+        logger.error(f"Не удалось получить file_path для фото страницы: {e}")
+        await message.answer("⚠️ Не удалось сохранить фото. Попробуйте ещё раз или пришлите URL.")
+        return
+
+    book = await get_book(book_id)
+    current_images = parseBookImages(book.get("images") or "[]")
+    current_images.append(file_url)
+    await update_book_full(book_id, images=json.dumps(current_images))
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Ещё фото", callback_data=f"admin_book_page_add_{book_id}")
+    builder.button(text="📄 К списку фото", callback_data=f"admin_book_edit_pages_{book_id}")
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    builder.adjust(1)
+    await message.answer(
+        f"✅ Фото #{len(current_images)} добавлено. Всего: {len(current_images)}.",
+        reply_markup=builder.as_markup(),
+    )
+    # Состояние оставляем — пользователь может добавить ещё или нажать кнопку.
+
+
+@router.message(EditBookState.waiting_for_new_page)
+async def process_new_page_url(message: Message, state: FSMContext):
+    """Добавляет фото страницы как URL."""
+    data = await state.get_data()
+    book_id = data.get("edit_book_id")
+    if not book_id:
+        await message.answer("❌ Ошибка: книга не выбрана")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    if not is_url(text):
+        await message.answer(
+            "❌ Это не похоже на ссылку. Пришлите фото или URL вида https://…"
+        )
+        return
+
+    book = await get_book(book_id)
+    current_images = parseBookImages(book.get("images") or "[]")
+    current_images.append(text)
+    await update_book_full(book_id, images=json.dumps(current_images))
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Ещё фото", callback_data=f"admin_book_page_add_{book_id}")
+    builder.button(text="📄 К списку фото", callback_data=f"admin_book_edit_pages_{book_id}")
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    builder.adjust(1)
+    await message.answer(
+        f"✅ Фото #{len(current_images)} добавлено. Всего: {len(current_images)}.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data.regexp(r"^admin_book_page_del_\d+_\d+$"))
+async def delete_book_page(callback: CallbackQuery, state: FSMContext):
+    """Удаляет одну фото страницы по индексу."""
+    parts = callback.data.split("_")
+    # admin_book_page_del_{book_id}_{idx}
+    book_id = int(parts[-2])
+    idx = int(parts[-1])
+
+    book = await get_book(book_id)
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+
+    images = parseBookImages(book.get("images") or "[]")
+    if 0 <= idx < len(images):
+        images.pop(idx)
+        await update_book_full(book_id, images=json.dumps(images))
+        await callback.answer("✅ Удалено")
+    else:
+        await callback.answer("❌ Не найдено", show_alert=True)
+        return
+
+    # Перерисовываем список фото
+    text_lines = [f"📄 <b>Фото страниц книги</b> «{book['title']}»", ""]
+    if images:
+        text_lines.append(f"Сейчас: {len(images)} шт.")
+    else:
+        text_lines.append("Пока ни одного фото.")
+
+    builder = InlineKeyboardBuilder()
+    if images:
+        for i in range(len(images)):
+            builder.button(
+                text=f"🗑 Удалить #{i + 1}",
+                callback_data=f"admin_book_page_del_{book_id}_{i}",
+            )
+    builder.button(text="➕ Добавить фото", callback_data=f"admin_book_page_add_{book_id}")
+    if images:
+        builder.button(text="🧹 Очистить все", callback_data=f"admin_book_pages_clear_{book_id}")
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    builder.adjust(1)
+
+    try:
+        await callback.message.edit_text("\n".join(text_lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    except Exception:
+        await callback.message.answer("\n".join(text_lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.regexp(r"^admin_book_pages_clear_\d+$"))
+async def clear_book_pages(callback: CallbackQuery, state: FSMContext):
+    """Очищает все фото страниц."""
+    book_id = int(callback.data.split("_")[-1])
+    await update_book_full(book_id, images="[]")
+    await state.clear()
+    await callback.answer("🧹 Очищено")
+
+    book = await get_book(book_id)
+    title = book['title'] if book else ""
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Добавить фото", callback_data=f"admin_book_page_add_{book_id}")
+    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    builder.adjust(1)
+    await callback.message.answer(
+        f"🧹 Все фото страниц книги «{title}» удалены.",
+        reply_markup=builder.as_markup(),
+    )
 
 
 @router.callback_query(F.data.regexp(r"^admin_book_delete_\d+$"))
