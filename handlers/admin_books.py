@@ -737,6 +737,217 @@ async def edit_book_menu(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
+# ============================================
+# ИЗМЕНЕНИЕ КАТЕГОРИИ КНИГИ
+#
+# ВАЖНО: эти хендлеры должны быть зарегистрированы ДО start_change_book
+# ниже, потому что admin_book_change_<id> начинается с admin_book_change_,
+# и startswith-prefix-matching в aiogram матчит более ранний обработчик
+# первым — иначе клик по 'Изменить категорию' будет уводить обратно в
+# меню изменения книги.
+# ============================================
+
+@router.callback_query(F.data.startswith("admin_book_change_category_"))
+async def admin_book_change_category(callback: CallbackQuery, state: FSMContext):
+    """Меню выбора категории: существующие + 'ввести новую' + 'назад'."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    book_id = int(callback.data.rsplit("_", 1)[-1])
+    book = await get_book(book_id)
+    if not book:
+        await callback.answer("❌ Книга не найдена", show_alert=True)
+        return
+
+    await state.update_data(edit_book_id=book_id)
+
+    categories = await db.get_all_categories()
+
+    builder = InlineKeyboardBuilder()
+    if categories:
+        for cat in categories:
+            builder.button(
+                text=f"{cat['emoji'] or ''} {cat['name']}".strip(),
+                callback_data=f"admin_book_set_category_{cat['id']}",
+            )
+    builder.button(
+        text="✏️ Ввести новую",
+        callback_data="admin_book_set_category_custom",
+    )
+    builder.button(
+        text="◀️ Назад",
+        callback_data=f"admin_book_change_{book_id}",
+    )
+    builder.adjust(2)
+
+    text = (
+        f"📂 <b>Изменение категории</b>\n\n"
+        f"📖 Текущая категория: <b>{book.get('category') or '—'}</b>\n\n"
+        f"Выберите новую категорию из списка или введите свою:"
+    )
+
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error("Ошибка при показе меню категорий: %s", e)
+        await callback.message.answer(
+            text, reply_markup=builder.as_markup(), parse_mode="HTML"
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_book_set_category_"))
+async def admin_book_set_category(callback: CallbackQuery, state: FSMContext):
+    """Применяет выбранную существующую категорию ИЛИ просит ввести новую.
+
+    `_custom` ветка переходит в FSM; остальные — это `admin_book_set_category_<id>`.
+    """
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    data = await state.get_data()
+    book_id = data.get('edit_book_id')
+    if not book_id:
+        await callback.answer("❌ Ошибка: книга не выбрана", show_alert=True)
+        return
+
+    # Ветка «ввести новую» — запрашиваем имя в FSM.
+    if callback.data == "admin_book_set_category_custom":
+        await state.set_state(EditBookState.waiting_for_new_category_admin)
+
+        builder = InlineKeyboardBuilder()
+        builder.button(
+            text="◀️ Назад",
+            callback_data=f"admin_book_change_category_{book_id}",
+        )
+
+        try:
+            await callback.bot.edit_message_text(
+                chat_id=callback.from_user.id,
+                message_id=callback.message.message_id,
+                text=(
+                    "📂 Введите <b>название новой категории</b>:\n\n"
+                    "Если категория с таким именем уже существует — будет использована она."
+                ),
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error("Ошибка при запросе новой категории: %s", e)
+            await callback.message.answer(
+                "📂 Введите название новой категории:",
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+        await callback.answer()
+        return
+
+    # Ветка «существующая категория».
+    try:
+        cat_id = int(callback.data.rsplit("_", 1)[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка", show_alert=True)
+        return
+
+    categories = await db.get_all_categories()
+    cat = next((c for c in categories if c['id'] == cat_id), None)
+    if not cat:
+        await callback.answer("❌ Категория не найдена", show_alert=True)
+        return
+
+    await update_book_full(book_id, category=cat['name'], category_id=cat_id)
+    await state.clear()
+
+    book = await get_book(book_id)
+    title = book['title'] if book else "Книга"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}"
+    )
+
+    await callback.message.answer(
+        f"✅ <b>Категория обновлена!</b>\n\n"
+        f"📖 {title}\n"
+        f"📂 Новая категория: <b>{cat['emoji'] or ''} {cat['name']}</b>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(EditBookState.waiting_for_new_category_admin)
+async def process_new_category_admin(message: Message, state: FSMContext):
+    """Применяет введённую категорию: переиспользует существующую или создаёт новую."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав")
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    book_id = data.get('edit_book_id')
+    new_category_name = message.text.strip()
+
+    if not book_id:
+        await message.answer("❌ Ошибка: книга не выбрана")
+        await state.clear()
+        return
+
+    if not new_category_name:
+        await message.answer("❌ Название не может быть пустым. Попробуйте ещё раз:")
+        return
+
+    categories = await db.get_all_categories()
+    existing_cat = next(
+        (c for c in categories if c['name'].lower() == new_category_name.lower()),
+        None,
+    )
+
+    if existing_cat:
+        await update_book_full(
+            book_id,
+            category=existing_cat['name'],
+            category_id=existing_cat['id'],
+        )
+        cat_label = f"{existing_cat['emoji'] or ''} {existing_cat['name']}".strip()
+        response_text = (
+            f"✅ <b>Категория найдена и применена!</b>\n\n"
+            f"📂 {cat_label}"
+        )
+    else:
+        new_cat_id = await db.add_category(new_category_name, "")
+        await update_book_full(
+            book_id,
+            category=new_category_name,
+            category_id=new_cat_id,
+        )
+        response_text = (
+            f"✅ <b>Новая категория создана и применена!</b>\n\n"
+            f"📂 {new_category_name}\n\n"
+            f"💡 Вы можете добавить эмодзи для неё через '📂 Управление категориями'"
+        )
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}"
+    )
+
+    await message.answer(
+        response_text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await state.clear()
+
+
 @router.callback_query(F.data.startswith("admin_book_change_"))
 async def start_change_book(callback: CallbackQuery, state: FSMContext):
     """Начало изменения книги"""
@@ -1354,208 +1565,3 @@ async def delete_book_confirm(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка при удалении книги: {e}")
         await callback.answer("❌ Ошибка при удалении", show_alert=True)
-
-
-# ============================================
-# ИЗМЕНЕНИЕ КАТЕГОРИИ КНИГИ
-# ============================================
-
-@router.callback_query(F.data.startswith("admin_book_change_category_"))
-async def admin_book_change_category(callback: CallbackQuery, state: FSMContext):
-    """Меню выбора категории: существующие + 'ввести новую' + 'назад'."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет прав", show_alert=True)
-        return
-
-    book_id = int(callback.data.rsplit("_", 1)[-1])
-    book = await get_book(book_id)
-    if not book:
-        await callback.answer("❌ Книга не найдена", show_alert=True)
-        return
-
-    await state.update_data(edit_book_id=book_id)
-
-    categories = await db.get_all_categories()
-
-    builder = InlineKeyboardBuilder()
-    if categories:
-        for cat in categories:
-            builder.button(
-                text=f"{cat['emoji'] or ''} {cat['name']}".strip(),
-                callback_data=f"admin_book_set_category_{cat['id']}",
-            )
-    builder.button(
-        text="✏️ Ввести новую",
-        callback_data="admin_book_set_category_custom",
-    )
-    builder.button(
-        text="◀️ Назад",
-        callback_data=f"admin_book_change_{book_id}",
-    )
-    builder.adjust(2)
-
-    text = (
-        f"📂 <b>Изменение категории</b>\n\n"
-        f"📖 Текущая категория: <b>{book.get('category') or '—'}</b>\n\n"
-        f"Выберите новую категорию из списка или введите свою:"
-    )
-
-    try:
-        await callback.bot.edit_message_text(
-            chat_id=callback.from_user.id,
-            message_id=callback.message.message_id,
-            text=text,
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.error("Ошибка при показе меню категорий: %s", e)
-        await callback.message.answer(
-            text, reply_markup=builder.as_markup(), parse_mode="HTML"
-        )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("admin_book_set_category_"))
-async def admin_book_set_category(callback: CallbackQuery, state: FSMContext):
-    """Применяет выбранную существующую категорию ИЛИ просит ввести новую.
-
-    `_custom` ветка переходит в FSM; остальные — это `admin_book_set_category_<id>`.
-    """
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет прав", show_alert=True)
-        return
-
-    data = await state.get_data()
-    book_id = data.get('edit_book_id')
-    if not book_id:
-        await callback.answer("❌ Ошибка: книга не выбрана", show_alert=True)
-        return
-
-    # Ветка «ввести новую» — запрашиваем имя в FSM.
-    if callback.data == "admin_book_set_category_custom":
-        await state.set_state(EditBookState.waiting_for_new_category_admin)
-
-        builder = InlineKeyboardBuilder()
-        builder.button(
-            text="◀️ Назад",
-            callback_data=f"admin_book_change_category_{book_id}",
-        )
-
-        try:
-            await callback.bot.edit_message_text(
-                chat_id=callback.from_user.id,
-                message_id=callback.message.message_id,
-                text=(
-                    "��� Введите <b>название новой категории</b>:\n\n"
-                    "Если категория с таким именем уже существует — будет использована она."
-                ),
-                reply_markup=builder.as_markup(),
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.error("Ошибка при запросе новой категории: %s", e)
-            await callback.message.answer(
-                "📂 Введите название новой категории:",
-                reply_markup=builder.as_markup(),
-                parse_mode="HTML",
-            )
-        await callback.answer()
-        return
-
-    # Ветка «существующая категория».
-    try:
-        cat_id = int(callback.data.rsplit("_", 1)[-1])
-    except (ValueError, IndexError):
-        await callback.answer("❌ Ошибка", show_alert=True)
-        return
-
-    categories = await db.get_all_categories()
-    cat = next((c for c in categories if c['id'] == cat_id), None)
-    if not cat:
-        await callback.answer("❌ Категория не найдена", show_alert=True)
-        return
-
-    await update_book_full(book_id, category=cat['name'], category_id=cat_id)
-    await state.clear()
-
-    book = await get_book(book_id)
-    title = book['title'] if book else "Книга"
-
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}"
-    )
-
-    await callback.message.answer(
-        f"✅ <b>Категория обновлена!</b>\n\n"
-        f"📖 {title}\n"
-        f"📂 Новая категория: <b>{cat['emoji'] or ''} {cat['name']}</b>",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
-    await callback.answer()
-
-
-@router.message(EditBookState.waiting_for_new_category_admin)
-async def process_new_category_admin(message: Message, state: FSMContext):
-    """Применяет введённую категорию: переиспользует существующую или создаёт новую."""
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ Нет прав")
-        await state.clear()
-        return
-
-    data = await state.get_data()
-    book_id = data.get('edit_book_id')
-    new_category_name = message.text.strip()
-
-    if not book_id:
-        await message.answer("❌ Ошибка: книга не выбрана")
-        await state.clear()
-        return
-
-    if not new_category_name:
-        await message.answer("❌ Название не может быть пустым. Попробуйте ещё раз:")
-        return
-
-    categories = await db.get_all_categories()
-    existing_cat = next(
-        (c for c in categories if c['name'].lower() == new_category_name.lower()),
-        None,
-    )
-
-    if existing_cat:
-        await update_book_full(
-            book_id,
-            category=existing_cat['name'],
-            category_id=existing_cat['id'],
-        )
-        cat_label = f"{existing_cat['emoji'] or ''} {existing_cat['name']}".strip()
-        response_text = (
-            f"✅ <b>Категория найдена и применена!</b>\n\n"
-            f"📂 {cat_label}"
-        )
-    else:
-        new_cat_id = await db.add_category(new_category_name, "")
-        await update_book_full(
-            book_id,
-            category=new_category_name,
-            category_id=new_cat_id,
-        )
-        response_text = (
-            f"✅ <b>Новая категория создана и применена!</b>\n\n"
-            f"📂 {new_category_name}\n\n"
-            f"💡 Вы можете добавить эмодзи для неё через '📂 Управление категориями'"
-        )
-
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}"
-    )
-
-    await message.answer(
-        response_text,
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
-    await state.clear()
