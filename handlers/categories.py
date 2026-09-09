@@ -2,16 +2,74 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
+import logging
 
 import db
 from config import settings
 from states import CategoryState
 
+logger = logging.getLogger(__name__)
 router = Router()
+
+CATEGORY_PAGE_SIZE = 20  # сколько категорий показывать на одной странице
 
 
 def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
+
+
+async def show_categories_list(callback: CallbackQuery, page: int):
+    """Список категорий текстом + по кнопке редактирования на каждую (с пагинацией)."""
+    offset = page * CATEGORY_PAGE_SIZE
+    all_categories = await db.get_all_categories()
+    total = len(all_categories)
+    total_pages = (total + CATEGORY_PAGE_SIZE - 1) // CATEGORY_PAGE_SIZE if total > 0 else 1
+
+    categories = all_categories[offset:offset + CATEGORY_PAGE_SIZE]
+
+    text = f"📂 <b>Управление категориями</b>\n\n"
+    text += f"Страница {page + 1} из {total_pages}\n"
+    text += f"Всего категорий: <b>{total}</b>\n\n"
+
+    if categories:
+        for cat in categories:
+            books_count = await db.get_category_books_count(cat['id'])
+            emoji = cat['emoji'] or '📂'
+            text += f"{emoji} <b>{cat['name']}</b> — {books_count} книг\n"
+    else:
+        text += "Пока нет категорий."
+
+    builder = InlineKeyboardBuilder()
+
+    if categories:
+        for cat in categories:
+            builder.button(
+                text=f"✏️ {cat['emoji'] or ''} {cat['name']}".strip(),
+                callback_data=f"category_edit_{cat['id']}",
+            )
+
+        nav = []
+        if page > 0:
+            nav.append(("⬅️ Назад", f"admin_categories_page_{page - 1}"))
+        if page < total_pages - 1:
+            nav.append(("➡️ Вперёд", f"admin_categories_page_{page + 1}"))
+        for btn_text, btn_data in nav:
+            builder.button(text=btn_text, callback_data=btn_data)
+
+    builder.button(text="➕ Добавить категорию", callback_data="category_add")
+    builder.button(text="◀️ В меню админа", callback_data="admin_menu")
+    builder.adjust(1)
+
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения категорий: {e}")
 
 
 @router.callback_query(F.data == "admin_categories")
@@ -19,29 +77,20 @@ async def admin_categories_menu(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer(" Нет прав", show_alert=True)
         return
+    await show_categories_list(callback, page=0)
+    await callback.answer()
 
-    categories = await db.get_all_categories()
 
-    builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Добавить категорию", callback_data="category_add")
-    builder.button(text="◀️ Назад", callback_data="admin_menu")
-    builder.adjust(1)
-
-    if categories:
-        for cat in categories:
-            books_count = await db.get_category_books_count(cat['id'])
-            builder.button(
-                text=f"{cat['emoji'] or ''} {cat['name']} ({books_count} книг)".strip(),
-                callback_data=f"category_edit_{cat['id']}"
-            )
-
-    await callback.message.edit_text(
-        f"📂 <b>Управление категориями</b>\n\n"
-        f"Всего категорий: <b>{len(categories)}</b>\n\n"
-        f"Выберите действие:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
+@router.callback_query(F.data.startswith("admin_categories_page_"))
+async def categories_page_navigation(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer(" Нет прав", show_alert=True)
+        return
+    try:
+        page = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        page = 0
+    await show_categories_list(callback, page=page)
     await callback.answer()
 
 
