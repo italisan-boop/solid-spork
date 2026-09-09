@@ -45,12 +45,13 @@ def parseBookImages(field):
 # (<!doctype>, <script>, <html>, любой <class=...> кроме tg-spoiler, …)
 # приводит к Bad Request: can't parse entities.
 #
-# 'a' сюда намеренно НЕ включён — он обрабатывается отдельным проходом
-# (sanitize_telegram_html) с проверкой href. Так меньше шанс оставить
-# «голый» <a>/</a> и сломать парсер Telegram.
+# 'a' и 'span' сюда намеренно НЕ включены — оба обрабатываются
+# отдельными проходами (sanitize_telegram_html) с проверкой допустимых
+# атрибутов. Так меньше шанс оставить «голый» <a>/</a> или
+# <span style="..."> (Telegram требует class="tg-spoiler").
 _ALLOWED_TAGS = {
     "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
-    "code", "pre", "blockquote", "tg-spoiler", "tg-emoji", "span",
+    "code", "pre", "blockquote", "tg-spoiler", "tg-emoji",
 }
 _TAG_RE = re.compile(
     r"<\s*(/?)\s*([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>", re.DOTALL
@@ -118,6 +119,23 @@ def sanitize_telegram_html(text: str) -> str:
     # На всякий случай — осиротевшие </a>.
     text = re.sub(r"<\s*/\s*a\s*>", "", text, flags=re.IGNORECASE)
 
+    # Проход 3.5: <span class="tg-spoiler">...</span> → плейсхолдер.
+    # Telegram принимает <span> ТОЛЬКО с этим классом (для спойлеров);
+    # любой <span style="..."> или просто <span>...</span> отвергается
+    # как 'Tag "span" must have class "tg-spoiler"'. Все остальные <span>
+    # ниже вырезаются целиком (с сохранением внутреннего текста).
+    spans: list[str] = []
+    span_re = re.compile(
+        r'<\s*span\b[^>]*class\s*=\s*"tg-spoiler"[^>]*>(.*?)<\s*/\s*span\s*>',
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+    def _stash_span(m: re.Match) -> str:
+        spans.append(f'<span class="tg-spoiler">{m.group(1)}</span>')
+        return f"\x00S{len(spans) - 1}\x00"
+
+    text = span_re.sub(_stash_span, text)
+
     def _replace_tag(m: re.Match) -> str:
         closing = m.group(1) == "/"
         tag = m.group(2).lower()
@@ -139,11 +157,15 @@ def sanitize_telegram_html(text: str) -> str:
     # Проход 4: чистим остальные теги.
     text = _TAG_RE.sub(_replace_tag, text)
 
-    # Проход 5: возвращаем валидные пары ссылок на место.
+    # Проход 5: возвращаем валидные пары ссылок и спойлеров на место.
     def _restore(m: re.Match) -> str:
         return pairs[int(m.group(1))]
 
-    return re.sub(r"\x00A(\d+)\x00", _restore, text)
+    def _restore_span(m: re.Match) -> str:
+        return spans[int(m.group(1))]
+
+    text = re.sub(r"\x00A(\d+)\x00", _restore, text)
+    return re.sub(r"\x00S(\d+)\x00", _restore_span, text)
 
 
 __all__ = ["setup_logger", "format_local_time", "parseBookImages", "sanitize_telegram_html"]
