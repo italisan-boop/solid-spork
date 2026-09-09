@@ -6,6 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import logging
 from config.settings import settings
 from db.users import get_all_users
+from utils import sanitize_telegram_html
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -35,8 +36,12 @@ async def start_broadcast(callback: CallbackQuery, state: FSMContext):
         text=(
             f"📢 <b>Рассылка сообщений пользователям</b>\n\n"
             f"Всего пользователей: {user_count}\n\n"
-            "Отправьте текст сообщения для рассылки:\n"
-            "Вы можете использовать HTML-разметку."
+            "Отправьте текст сообщения для рассылки.\n\n"
+            "Поддерживается Telegram-HTML:\n"
+            "<code>&lt;b&gt;</code> <code>&lt;i&gt;</code> <code>&lt;u&gt;</code> "
+            "<code>&lt;s&gt;</code> <code>&lt;code&gt;</code> <code>&lt;pre&gt;</code> "
+            "<code>&lt;a href=\"...\"&gt;</code>\n"
+            "Остальные теги будут автоматически удалены."
         ),
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
@@ -48,26 +53,37 @@ async def start_broadcast(callback: CallbackQuery, state: FSMContext):
 async def process_message(message: Message, state: FSMContext):
     """Обработка текста рассылки"""
     if message.text and message.text.strip():
-        text = message.text.strip()
+        raw_text = message.text.strip()
+        # Telegram HTML парсер принимает только ограниченный набор тегов;
+        # прогоняем через санитайзер, чтобы <!doctype>, <script> и прочее
+        # не валили рассылку с Bad Request: can't parse entities.
+        text = sanitize_telegram_html(raw_text).strip()
+        if not text:
+            await message.answer(
+                "❌ После очистки HTML текст пустой. Попробуйте еще раз:"
+            )
+            return
         await state.update_data(message_text=text)
-        
+
         # Получаем количество пользователей
         users = await get_all_users()
         user_count = len(users) if users else 0
-        
+
         builder = InlineKeyboardBuilder()
         builder.button(text="✅ Подтвердить рассылку", callback_data="admin_broadcast_confirm")
         builder.button(text="✏️ Изменить текст", callback_data="admin_broadcast_edit")
         builder.button(text="❌ Отмена", callback_data="admin_menu")
         builder.adjust(1)
-        
+
         preview_text = text[:500] + "..." if len(text) > 500 else text
-        
+
+        # Показываем именно то, что увидят получатели — без дополнительной
+        # обёртки <i>, чтобы пользователь сразу видел итоговый вид.
         await message.answer(
             f"📢 <b>Предпросмотр рассылки</b>\n\n"
             f"Получателей: {user_count}\n\n"
-            f"<i>{preview_text}</i>\n\n"
-            "Подтвердите отправку или измените текст:",
+            f"{preview_text}\n\n"
+            f"Подтвердите отправку или измените текст:",
             reply_markup=builder.as_markup(),
             parse_mode="HTML"
         )
