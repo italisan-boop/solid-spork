@@ -6,7 +6,7 @@ import logging
 import json
 from config.settings import settings
 from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated
-from db.categories import get_all_categories
+from db.categories import get_all_categories, add_category
 from utils import parseBookImages
 from states import EditBookState, AddBookState as BookAddState
 import re
@@ -923,7 +923,7 @@ async def process_new_category_admin(message: Message, state: FSMContext):
             f"📂 {cat_label}"
         )
     else:
-        new_cat_id = await db.add_category(new_category_name, "")
+        new_cat_id = await add_category(new_category_name, "")
         await update_book_full(
             book_id,
             category=new_category_name,
