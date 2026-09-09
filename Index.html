@@ -663,16 +663,16 @@
                         <span class="cart-total-value" id="cartFinalTotal" style="font-size: 22px;">0 ₽</span>
                     </div>
                 </div>
+                <div class="cart-actions">
+                    <button class="cart-clear-btn" onclick="clearCart()">🗑️ Очистить</button>
+                    <button class="cart-checkout-btn" id="cartCheckoutBtn" onclick="checkoutFromModal()">Оформить заказ</button>
+                </div>
                 <div class="promo-section" id="cartPromoSection">
                     <div class="promo-input-wrapper">
                         <input type="text" class="promo-input" id="cartPromoInput" placeholder="Введите промокод" autocomplete="off">
                         <button class="promo-apply-btn" id="cartPromoApplyBtn">Применить</button>
                     </div>
                     <div class="promo-message" id="cartPromoMessage"></div>
-                </div>
-                <div class="cart-actions">
-                    <button class="cart-clear-btn" onclick="clearCart()">🗑️ Очистить</button>
-                    <button class="cart-checkout-btn" id="cartCheckoutBtn" onclick="checkoutFromModal()">Оформить заказ</button>
                 </div>
             </div>
         </div>
