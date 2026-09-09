@@ -7,79 +7,74 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Marck+Script&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         :root {
-            --tg-bg: var(--tg-theme-bg-color, #f5f1e8);
-            --tg-text: var(--tg-theme-text-color, #2c3e2d);
-            --tg-hint: var(--tg-theme-hint-color, #5a6b5c);
-            --tg-link: var(--tg-theme-link-color, #2d5a27);
-            --tg-button: var(--tg-theme-button-color, #2d5a27);
-            --tg-button-text: var(--tg-theme-button-text-color, #ffffff);
-            --tg-secondary-bg: var(--tg-theme-secondary-bg-color, #e8e4d9);
+            --bg: #ffffff;
+            --surface: #ffffff;
+            --surface-alt: #f5f5f5;
+            --text: #111111;
+            --text-muted: #6b6b6b;
+            --border: #e6e6e6;
+            --accent: #111111;
+            --accent-text: #ffffff;
+            --danger: #c0392b;
+            --success: #1f7a3a;
+            --radius: 10px;
 
-            --primary-green: var(--tg-button, #2d5a27);
-            --light-green: #4a7c43;
-            --accent-green: #7cb342;
-            --bg-cream: var(--tg-bg, #f5f1e8);
-            --card-bg: var(--tg-secondary-bg, #fffef9);
-            --text-dark: var(--tg-text, #2c3e2d);
-            --text-light: var(--tg-hint, #5a6b5c);
-            --border-sage: #c5d5c0;
-            --heart-color: #e53935;
+            /* legacy aliases — minimalist remap so existing rules keep working */
+            --card-bg: var(--surface);
+            --bg-cream: var(--bg);
+            --text-dark: var(--text);
+            --text-light: var(--text-muted);
+            --border-sage: var(--border);
+            --primary-green: var(--accent);
+            --light-green: var(--accent);
+            --accent-green: var(--accent);
+            --heart-color: var(--accent);
+            --tg-bg: var(--bg);
+            --tg-text: var(--text);
+            --tg-hint: var(--text-muted);
+            --tg-link: var(--accent);
+            --tg-button: var(--accent);
+            --tg-button-text: var(--accent-text);
+            --tg-secondary-bg: var(--surface);
         }
 
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
         body {
-            font-family: 'Georgia', 'Times New Roman', serif;
-            background: var(--bg-cream);
-            color: var(--text-dark);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
             padding: 16px;
             padding-bottom: 110px;
             min-height: 100vh;
-            transition: background-color 0.3s, color 0.3s;
+            font-size: 15px;
+            line-height: 1.45;
+            -webkit-font-smoothing: antialiased;
         }
 
         .header {
             text-align: center;
-            padding: 24px 0;
-            margin-bottom: 20px;
-            position: relative;
+            padding: 20px 0 16px;
+            margin-bottom: 16px;
         }
-        .header::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 32px; opacity: 0.3; }
-        .header::after { content: ""; position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 32px; opacity: 0.3; }
         .header h1 {
-            font-family: 'Caveat', 'Marck Script', cursive;
-            font-size: 42px;
-            color: var(--primary-green);
-            margin-bottom: 12px;
-            font-weight: 700;
-            letter-spacing: 1px;
-            text-shadow: 2px 2px 4px rgba(45, 90, 39, 0.1);
+            font-family: inherit;
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.2px;
+            color: var(--text);
+            margin-bottom: 4px;
         }
         .header p {
-            font-family: 'Caveat', cursive;
-            font-size: 22px;
-            color: var(--accent-green);
-            font-style: italic;
-            font-weight: 600;
-            letter-spacing: 2px;
-            position: relative;
-            display: inline-block;
-            padding: 0 20px;
+            font-size: 13px;
+            color: var(--text-muted);
+            font-weight: 400;
         }
-        .header p::before,
-        .header p::after {
-            content: "🌿";
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 18px;
-            opacity: 0.6;
-        }
-        .header p::before { left: -5px; }
-        .header p::after { right: -5px; }
 
         .header-buttons {
             position: fixed;
@@ -200,7 +195,7 @@
             cursor: pointer; transition: all 0.3s; white-space: nowrap;
         }
         .category-tab.active {
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            background: var(--accent);
             color: var(--tg-button-text); border-color: var(--primary-green);
         }
 
@@ -221,7 +216,7 @@
         .book-card .check-mark {
             position: absolute; top: 10px; right: 10px;
             width: 32px; height: 32px;
-            background: linear-gradient(135deg, var(--accent-green), var(--light-green));
+            background: var(--accent);
             color: white; border-radius: 50%;
             display: none; align-items: center; justify-content: center;
             font-size: 18px; font-weight: bold; z-index: 3;
@@ -256,7 +251,7 @@
         .book-cover {
             width: 100%;
             height: 200px;
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            background: var(--accent);
             position: relative;
             overflow: hidden;
             display: flex;
@@ -318,7 +313,7 @@
             height: 320px;
             position: relative;
             overflow: hidden;
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            background: var(--accent);
             touch-action: pan-y;
             display: flex;
             align-items: center;
@@ -348,12 +343,12 @@
         .modal-price-row { display: flex; justify-content: space-between; align-items: center; padding-top: 16px; border-top: 2px solid var(--border-sage); }
         .modal-price { font-size: 28px; font-weight: 700; color: var(--primary-green); }
         .modal-add-btn {
-            padding: 14px 28px; background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            padding: 14px 28px; background: var(--accent);
             color: var(--tg-button-text); border: none; border-radius: 25px; font-size: 16px; font-weight: 600;
             cursor: pointer; transition: all 0.3s;
         }
         .modal-add-btn:active { transform: scale(0.95); }
-        .modal-add-btn.in-cart { background: linear-gradient(135deg, var(--accent-green), #9ccc65); }
+        .modal-add-btn.in-cart { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
 
         .cart-items { max-height: 400px; overflow-y: auto; margin-bottom: 16px; }
         .cart-item {
@@ -394,17 +389,17 @@
         .cart-total-value { font-size: 18px; font-weight: 700; color: var(--primary-green); }
         .cart-discount { color: var(--accent-green); }
 
-        .cart-actions { display: flex; gap: 10px; }
+        .cart-actions { display: flex; gap: 10px; flex-wrap: wrap; }
         .cart-clear-btn {
-            flex: 1; padding: 14px;
-            background: var(--card-bg); color: var(--heart-color);
-            border: 2px solid var(--heart-color); border-radius: 12px;
+            flex: 1 1 120px; min-width: 0; padding: 14px;
+            background: var(--card-bg); color: var(--text-dark);
+            border: 2px solid var(--border-sage); border-radius: 12px;
             font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
         }
         .cart-clear-btn:active { transform: scale(0.95); }
         .cart-checkout-btn {
-            flex: 2; padding: 14px;
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            flex: 2 1 160px; min-width: 0; padding: 14px;
+            background: var(--accent);
             color: var(--tg-button-text); border: none; border-radius: 12px;
             font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
         }
@@ -412,7 +407,7 @@
         .cart-checkout-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .cart-summary {
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            background: var(--accent);
             border-radius: 16px; padding: 16px 20px; margin-bottom: 16px;
             display: flex; justify-content: space-between; align-items: center;
             box-shadow: 0 4px 12px rgba(45, 90, 39, 0.3); font-weight: 600; color: var(--tg-button-text);
@@ -424,9 +419,9 @@
             padding: 16px; margin-bottom: 16px;
             box-shadow: 0 4px 12px rgba(45, 90, 39, 0.15);
         }
-        .promo-input-wrapper { display: flex; gap: 10px; }
+        .promo-input-wrapper { display: flex; gap: 10px; flex-wrap: wrap; }
         .promo-input {
-            flex: 1; padding: 12px;
+            flex: 1 1 140px; min-width: 0; padding: 12px;
             border: 2px solid var(--border-sage); border-radius: 12px;
             font-size: 14px; background: var(--bg-cream); color: var(--text-dark);
             outline: none; text-transform: uppercase; font-family: inherit;
@@ -434,7 +429,7 @@
         .promo-input:focus { border-color: var(--accent-green); }
         .promo-apply-btn {
             padding: 12px 20px;
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            background: var(--accent);
             color: var(--tg-button-text); border: none; border-radius: 12px;
             font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
         }
@@ -451,7 +446,7 @@
 
         .main-button {
             position: fixed; bottom: 0; left: 0; right: 0;
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            background: var(--accent);
             color: var(--tg-button-text); border: none; padding: 18px 24px; font-size: 17px; font-weight: 700;
             cursor: pointer; width: 100%; display: flex; justify-content: space-between; align-items: center;
             box-shadow: 0 -4px 20px rgba(45, 90, 39, 0.4);
@@ -520,7 +515,7 @@
         }
         .payment-confirm-btn {
             width: 100%; padding: 16px;
-            background: linear-gradient(135deg, var(--primary-green), var(--light-green));
+            background: var(--accent);
             color: var(--tg-button-text); border: none; border-radius: 12px;
             font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit;
         }
@@ -599,7 +594,7 @@
     <div class="books-grid" id="booksGrid"></div>
 
     <div class="empty-state" id="emptyState" style="display: none;">
-        <div class="emoji" id="emptyEmoji">🌱</div>
+        <div class="emoji" id="emptyEmoji"></div>
         <div class="text" id="emptyText">Ничего не найдено</div>
     </div>
 
@@ -901,10 +896,10 @@
 
             if (viewMode === 'wishlist') {
                 emptyText.textContent = 'Список избранного пуст';
-                emptyEmoji.textContent = '💔';
+                emptyEmoji.textContent = '';
             } else {
                 emptyText.textContent = 'Ничего не найдено';
-                emptyEmoji.textContent = '🌱';
+                emptyEmoji.textContent = '';
             }
 
             applyFiltersAndRender();
