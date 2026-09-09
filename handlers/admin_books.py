@@ -6,7 +6,7 @@ import logging
 import json
 from config.settings import settings
 from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated
-from db.categories import get_all_categories
+from db.categories import get_all_categories, add_category
 from utils import parseBookImages
 from states import EditBookState, AddBookState as BookAddState
 import re
@@ -762,7 +762,7 @@ async def admin_book_change_category(callback: CallbackQuery, state: FSMContext)
 
     await state.update_data(edit_book_id=book_id)
 
-    categories = await db.get_all_categories()
+    categories = await get_all_categories()
 
     builder = InlineKeyboardBuilder()
     if categories:
@@ -857,7 +857,7 @@ async def admin_book_set_category(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Ошибка", show_alert=True)
         return
 
-    categories = await db.get_all_categories()
+    categories = await get_all_categories()
     cat = next((c for c in categories if c['id'] == cat_id), None)
     if not cat:
         await callback.answer("❌ Категория не найдена", show_alert=True)
@@ -905,7 +905,7 @@ async def process_new_category_admin(message: Message, state: FSMContext):
         await message.answer("❌ Название не может быть пустым. Попробуйте ещё раз:")
         return
 
-    categories = await db.get_all_categories()
+    categories = await get_all_categories()
     existing_cat = next(
         (c for c in categories if c['name'].lower() == new_category_name.lower()),
         None,
@@ -923,7 +923,7 @@ async def process_new_category_admin(message: Message, state: FSMContext):
             f"📂 {cat_label}"
         )
     else:
-        new_cat_id = await db.add_category(new_category_name, "")
+        new_cat_id = await add_category(new_category_name, "")
         await update_book_full(
             book_id,
             category=new_category_name,

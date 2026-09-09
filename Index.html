@@ -663,6 +663,13 @@
                         <span class="cart-total-value" id="cartFinalTotal" style="font-size: 22px;">0 ₽</span>
                     </div>
                 </div>
+                <div class="promo-section" id="cartPromoSection">
+                    <div class="promo-input-wrapper">
+                        <input type="text" class="promo-input" id="cartPromoInput" placeholder="Введите промокод" autocomplete="off">
+                        <button class="promo-apply-btn" id="cartPromoApplyBtn">Применить</button>
+                    </div>
+                    <div class="promo-message" id="cartPromoMessage"></div>
+                </div>
                 <div class="cart-actions">
                     <button class="cart-clear-btn" onclick="clearCart()">🗑️ Очистить</button>
                     <button class="cart-checkout-btn" id="cartCheckoutBtn" onclick="checkoutFromModal()">Оформить заказ</button>
@@ -1316,6 +1323,9 @@
             const buttonBadge = document.getElementById('buttonBadge');
             const mainButton = document.getElementById('mainButton');
             const promoSection = document.getElementById('promoSection');
+            const cartPromoSection = document.getElementById('cartPromoSection');
+            const cartPromoMessage = document.getElementById('cartPromoMessage');
+            const cartPromoInput = document.getElementById('cartPromoInput');
             const cartBadge = document.getElementById('cartBadge');
 
             const totalItems = cart.reduce((sum, b) => sum + (b.quantity || 1), 0);
@@ -1328,6 +1338,7 @@
                 totalEl.textContent = total.toLocaleString('ru-RU');
 
                 promoSection.style.display = 'block';
+                cartPromoSection.style.display = 'block';
 
                 if (discount > 0) {
                     buttonText.textContent = `Оформить · ${finalTotal.toLocaleString('ru-RU')} ₽ (-${discount} ₽)`;
@@ -1344,6 +1355,7 @@
             } else {
                 summary.style.display = 'none';
                 promoSection.style.display = 'none';
+                cartPromoSection.style.display = 'none';
                 buttonText.textContent = 'Корзина пуста';
                 buttonBadge.style.display = 'none';
                 mainButton.disabled = true;
@@ -1352,6 +1364,8 @@
                 document.getElementById('promoInput').value = '';
                 document.getElementById('promoMessage').textContent = '';
                 document.getElementById('promoDiscount').style.display = 'none';
+                cartPromoInput.value = '';
+                cartPromoMessage.textContent = '';
                 cartBadge.style.display = 'none';
             }
 
@@ -1361,6 +1375,9 @@
             if (discount > 0) {
                 document.getElementById('cartDiscountRow').style.display = 'flex';
                 document.getElementById('cartDiscountValue').textContent = `-${discount.toLocaleString('ru-RU')} ₽`;
+                cartPromoInput.value = promoCode;
+                cartPromoMessage.textContent = `✅ Применён промокод: ${promoCode}`;
+                cartPromoMessage.className = 'promo-message success';
             } else {
                 document.getElementById('cartDiscountRow').style.display = 'none';
             }
@@ -1372,24 +1389,29 @@
         const promoDiscount = document.getElementById('promoDiscount');
         const discountAmount = document.getElementById('discountAmount');
 
-        promoApplyBtn.addEventListener('click', async () => {
-            const code = promoInput.value.trim().toUpperCase();
+        // Зеркало промокода в корзине — общий promoCode/discount, но
+        // собственные message/applyBtn, чтобы ввод в корзине не дёргал UI
+        // главной страницы во время редактирования.
+        const cartPromoInput = document.getElementById('cartPromoInput');
+        const cartPromoApplyBtn = document.getElementById('cartPromoApplyBtn');
+        const cartPromoMessage = document.getElementById('cartPromoMessage');
 
+        async function tryApplyPromo(code, messageEl, applyBtn) {
             if (!code) {
-                promoMessage.textContent = 'Введите промокод';
-                promoMessage.className = 'promo-message error';
+                messageEl.textContent = 'Введите промокод';
+                messageEl.className = 'promo-message error';
                 return;
             }
 
             if (cart.length === 0) {
-                promoMessage.textContent = 'Сначала добавьте товары в корзину';
-                promoMessage.className = 'promo-message error';
+                messageEl.textContent = 'Сначала добавьте товары в корзину';
+                messageEl.className = 'promo-message error';
                 return;
             }
 
-            promoApplyBtn.disabled = true;
-            promoMessage.textContent = 'Проверяем...';
-            promoMessage.className = 'promo-message';
+            applyBtn.disabled = true;
+            messageEl.textContent = 'Проверяем...';
+            messageEl.className = 'promo-message';
 
             try {
                 const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
@@ -1404,31 +1426,48 @@
                 if (result.valid) {
                     promoCode = code;
                     discount = result.discount;
-                    promoMessage.textContent = `✅ Промокод применён! Скидка: ${discount} ₽`;
-                    promoMessage.className = 'promo-message success';
+                    messageEl.textContent = `✅ Промокод применён! Скидка: ${discount} ₽`;
+                    messageEl.className = 'promo-message success';
                     promoDiscount.style.display = 'block';
                     discountAmount.textContent = discount;
                     tg.HapticFeedback.notificationOccurred('success');
                 } else {
                     promoCode = '';
                     discount = 0;
-                    promoMessage.textContent = `❌ ${result.error}`;
-                    promoMessage.className = 'promo-message error';
+                    messageEl.textContent = `❌ ${result.error}`;
+                    messageEl.className = 'promo-message error';
                     promoDiscount.style.display = 'none';
                     tg.HapticFeedback.notificationOccurred('error');
                 }
 
                 updateUI();
             } catch (error) {
-                promoMessage.textContent = '❌ Ошибка сети';
-                promoMessage.className = 'promo-message error';
+                messageEl.textContent = '❌ Ошибка сети';
+                messageEl.className = 'promo-message error';
             } finally {
-                promoApplyBtn.disabled = false;
+                applyBtn.disabled = false;
             }
+        }
+
+        promoApplyBtn.addEventListener('click', async () => {
+            const code = promoInput.value.trim().toUpperCase();
+            await tryApplyPromo(code, promoMessage, promoApplyBtn);
         });
 
         promoInput.addEventListener('input', () => {
             promoInput.value = promoInput.value.toUpperCase();
+        });
+
+        cartPromoApplyBtn.addEventListener('click', async () => {
+            const code = cartPromoInput.value.trim().toUpperCase();
+            await tryApplyPromo(code, cartPromoMessage, cartPromoApplyBtn);
+            // Синхронизируем основное поле, чтобы при закрытии корзины
+            // пользователь видел уже применённый код.
+            promoInput.value = promoCode || code;
+        });
+
+        cartPromoInput.addEventListener('input', () => {
+            cartPromoInput.value = cartPromoInput.value.toUpperCase();
         });
 
         document.getElementById('mainButton').addEventListener('click', async () => {
