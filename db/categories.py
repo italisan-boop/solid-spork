@@ -51,7 +51,15 @@ async def add_category(name: str, emoji: str = "", sort_order: int = 0) -> int:
 
 
 async def update_category(category_id: int, **kwargs) -> bool:
-    """Обновить категорию"""
+    """Обновить категорию.
+
+    books.category — это денормализованная копия названия категории;
+    mini app фильтрует книги именно по ней. Если переименовать категорию
+    и оставить books.category как есть, карточки «пропадают» из вкладки
+    с новым названием (хотя JOIN по category_id продолжает возвращать
+    корректный emoji). Поэтому при изменении имени каскадим апдейт в
+    books.category — держим денормализацию согласованной.
+    """
     async with aiosqlite.connect(DB_NAME) as db:
         updates = []
         params = []
@@ -64,6 +72,15 @@ async def update_category(category_id: int, **kwargs) -> bool:
         params.append(category_id)
         query = f"UPDATE categories SET {', '.join(updates)} WHERE id = ?"
         await db.execute(query, params)
+
+        # Каскад переименования в books.category, чтобы mini app продолжал
+        # находить книги по новому названию вкладки.
+        if 'name' in kwargs and kwargs['name'] is not None:
+            await db.execute(
+                "UPDATE books SET category = ? WHERE category_id = ?",
+                (kwargs['name'], category_id),
+            )
+
         await db.commit()
         return True
 
