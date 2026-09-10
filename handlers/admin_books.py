@@ -558,7 +558,7 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
 async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
     """Подтверждение и добавление книги в БД"""
     data = await state.get_data()
-    
+
     try:
         # Добавляем книгу в БД
         book_id = await add_book(
@@ -570,34 +570,38 @@ async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
             cover_photo=data.get('cover_photo'),  # URL или None
             page_photos=data.get('page_photos', [])
         )
-        
-        # Отправляем сообщение об успехе с кнопкой возврата в админ-панель
-        builder = InlineKeyboardBuilder()
-        builder.button(text="🔙 В админ-панель", callback_data="admin_menu")
-        
-        await callback.message.answer(
+
+        logger.info(f"Книга '{data['title']}' добавлена админом {callback.from_user.id}")
+        result_text = (
             f"✅ <b>Книга успешно добавлена!</b>\n\n"
             f"ID: {book_id}\n"
-            f"Название: {data['title']}",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
+            f"Название: {data['title']}"
         )
-        
-        logger.info(f"Книга '{data['title']}' добавлена админом {callback.from_user.id}")
     except Exception as e:
         logger.error(f"Ошибка при добавлении книги: {e}")
-        
-        builder = InlineKeyboardBuilder()
-        builder.button(text="🔙 В админ-панель", callback_data="admin_menu")
-        
-        await callback.message.answer(
+        result_text = (
             f"❌ <b>Ошибка при добавлении книги</b>\n\n"
-            f"{str(e)}",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
+            f"{str(e)}"
         )
-    
+
+    # Удаляем сообщение с формой подтверждения, чтобы оно не висело в чате
+    # (могло быть как текстом, так и фото с подписью — delete работает в обоих случаях).
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение подтверждения: {e}")
+
+    # Отправляем итоговое сообщение с кнопкой возврата в админ-панель
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 В админ-панель", callback_data="admin_menu")
+    await callback.message.answer(
+        result_text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
     await state.clear()
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_books_cancel")
