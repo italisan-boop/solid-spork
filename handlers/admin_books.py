@@ -2,19 +2,39 @@ from aiogram import Bot, Router, F
 from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import logging
 import json
 from config.settings import settings
 from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated
 from db.categories import get_all_categories, add_category
-from utils import parseBookImages
+from utils import parseBookImages, setup_logger
 from states import EditBookState, AddBookState as BookAddState
 import re
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 router = Router()
 
 PAGE_SIZE = 20  # Количество книг на странице
+
+# Лимиты полей книги. Telegram ограничивает caption 1024 символами, а текст
+# сообщения бота — 4096 символами; описание в каталоге рендерится без обрезки,
+# поэтому держим запас и просим админа уложиться в 3500.
+MAX_DESCRIPTION_LENGTH = 3500
+# Телеграм нормально показывает превью альбома до 10 фото, но Mini App
+# загружает все URL по сети — слишком много = долго и падает на слабом Wi-Fi.
+MAX_PAGE_PHOTOS = 20
+# Telegram Bot API не принимает файлы больше 10 МБ на одну загрузку.
+# Оставляем запас до 9 МБ, чтобы учесть кодеки и обёртку multipart.
+MAX_PHOTO_FILE_BYTES = 9 * 1024 * 1024
+
+# Дружелюбный текст ограничений — используется в ошибках валидации.
+DESCRIPTION_LIMIT_NOTE = (
+    f"\n\n📏 Лимит: не более {MAX_DESCRIPTION_LENGTH} символов "
+    f"(сейчас {{current}})."
+)
+PAGE_PHOTOS_LIMIT_NOTE = (
+    f"\n\n📏 Лимит: не более {MAX_PAGE_PHOTOS} фото страниц "
+    f"(сейчас {{current}})."
+)
 
 
 def is_admin(user_id: int) -> bool:
@@ -151,13 +171,21 @@ async def back_to_author(callback: CallbackQuery, state: FSMContext):
 async def process_description(message: Message, state: FSMContext):
     """Обработка описания книги"""
     if message.text and message.text.strip():
-        await state.update_data(description=message.text.strip(), step=3)
-        
+        description = message.text.strip()
+        if len(description) > MAX_DESCRIPTION_LENGTH:
+            await message.answer(
+                "❌ Описание слишком длинное."
+                + DESCRIPTION_LIMIT_NOTE.format(current=len(description))
+                + "\n\nСократите и пришлите заново:"
+            )
+            return
+        await state.update_data(description=description, step=3)
+
         builder = InlineKeyboardBuilder()
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_description")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
         builder.adjust(1)
-        
+
         await message.answer(
             "💰 Введите цену книги (в рублях):",
             reply_markup=builder.as_markup()
@@ -407,7 +435,23 @@ async def process_page_photo(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     page_photos = data.get('page_photos', [])
 
+    if len(page_photos) >= MAX_PAGE_PHOTOS:
+        await message.answer(
+            "❌ Уже загружено максимум фото страниц."
+            + PAGE_PHOTOS_LIMIT_NOTE.format(current=len(page_photos))
+            + "\n\nНажмите «✅ Готово» чтобы продолжить."
+        )
+        return
+
     photo = message.photo[-1]
+    if photo.file_size and photo.file_size > MAX_PHOTO_FILE_BYTES:
+        size_mb = round(photo.file_size / (1024 * 1024), 1)
+        await message.answer(
+            f"❌ Фото слишком большое ({size_mb} МБ). "
+            f"Telegram Bot API принимает файлы до 10 МБ; "
+            f"сожмите изображение или пришлите URL."
+        )
+        return
     try:
         file_url = await get_telegram_file_url(bot, photo.file_id)
     except Exception as e:
@@ -443,6 +487,13 @@ async def process_page_photo_url(message: Message, state: FSMContext):
     if is_url(text):
         data = await state.get_data()
         page_photos = data.get('page_photos', [])
+        if len(page_photos) >= MAX_PAGE_PHOTOS:
+            await message.answer(
+                "❌ Уже загружено максимум фото страниц."
+                + PAGE_PHOTOS_LIMIT_NOTE.format(current=len(page_photos))
+                + "\n\nНажмите «✅ Готово» чтобы продолжить."
+            )
+            return
         page_photos.append(text)
         await state.update_data(page_photos=page_photos)
         
