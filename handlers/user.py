@@ -25,7 +25,10 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
     """Обработка /start с реферальным кодом"""
     # Сохраняем пользователя в БД
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
-    
+    # /start означает начало новой сессии — выходим из активного диалога с поддержкой
+    settings.support_pending_users.discard(message.from_user.id)
+    settings.broadcast_pending_users.discard(message.from_user.id)
+
     ref_code = message.text.split()[1] if len(message.text.split()) > 1 else ""
     referrer_id = await db.parse_referral_code(ref_code)
 
@@ -58,6 +61,9 @@ async def cmd_start(message: Message):
     """Обычный старт без параметров"""
     # Сохраняем пользователя в БД
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
+    # /start означает начало новой сессии — выходим из активного диалога с поддержкой
+    settings.support_pending_users.discard(message.from_user.id)
+    settings.broadcast_pending_users.discard(message.from_user.id)
     await _send_start_menu(message)
 
 
@@ -124,7 +130,9 @@ async def support_callback(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "🆘 <b>Служба поддержки</b>\n\n"
         "Напишите ваш вопрос, и администратор ответит!\n\n"
-        "/cancel для отмены",
+        "💬 Вы можете отправлять несколько сообщений подряд — все они уйдут "
+        "в поддержку, отвечать на них можно прямо здесь.\n\n"
+        "/cancel — выйти из диалога с поддержкой.",
         parse_mode="HTML"
     )
     await callback.answer()
@@ -180,12 +188,11 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
     # === ПОДДЕРЖКА (проверяем ПЕРВОЙ, чтобы любое FSM-состояние не
     # перехватило сообщение раньше, чем мы перешлём его админу) ===
     if user_id in settings.support_pending_users:
-        settings.support_pending_users.discard(user_id)
         for admin_id in settings.ADMIN_IDS:
             try:
                 await bot.send_message(
                     admin_id,
-                    f"🆘 <b>Вопрос от пользователя</b>\n\n"
+                    f"🆘 <b>Сообщение от пользователя</b>\n\n"
                     f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
                     f"💬 Текст: {message.text}\n\n"
                     f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>",
@@ -193,7 +200,13 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
                 )
             except Exception as e:
                 print(f"Не удалось отправить админу {admin_id}: {e}")
-        await message.answer("✅ Ваш вопрос отправлен администратору!\nМы ответим в ближайшее время. 🌱")
+        # Не убираем пользователя из support_pending_users — пусть продолжает
+        # диалог, не нажимая каждый раз кнопку «Поддержка».
+        await message.answer(
+            "✅ <b>Сообщение отправлено в поддержку!</b>\n\n"
+            "Можете продолжать писать здесь — администратор ответит в этом же чате.\n"
+            "Чтобы выйти из диалога, отправьте /cancel."
+        )
         return
 
     # 🔧 ВАЖНО: пропускаем сообщения, если пользователь в состоянии настройки оплаты
@@ -962,9 +975,15 @@ async def admin_reply_to_user(message: Message):
         reply_text = parts[1] if len(parts) > 1 else "Без текста"
         await message.bot.send_message(
             user_id,
-            f"💬 <b>Ответ от поддержки «Семена Знаний»:</b>\n\n{reply_text}",
+            f"💬 <b>Ответ от поддержки «Семена Знаний»:</b>\n\n"
+            f"{reply_text}\n\n"
+            f"Можете ответить прямо здесь — сообщение придёт администратору.",
             parse_mode="HTML"
         )
+        # На случай, если пользователь был сброшен из support_pending_users
+        # (например, после перезапуска бота) — вернём его в режим диалога,
+        # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
+        settings.support_pending_users.add(user_id)
         await message.answer(f"✅ Ответ отправлен пользователю ID {user_id}!")
     except (ValueError, IndexError):
         await message.answer("❌ Неверный формат: `/reply_ID текст`", parse_mode="HTML")
