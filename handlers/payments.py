@@ -2,6 +2,7 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
+from utils import setup_logger
 
 import db
 from db.orders import save_admin_notification_ids, clear_admin_notifications
@@ -9,8 +10,9 @@ from config import settings
 from states import PaymentSettingsState
 
 router = Router()
+logger = setup_logger(__name__)
 
-print("✅ payments.py загружен")
+logger.info("payments.py загружен")
 
 
 def is_admin(user_id: int) -> bool:
@@ -23,7 +25,7 @@ def is_admin(user_id: int) -> bool:
 
 @router.callback_query(F.data == "admin_payments")
 async def admin_payments_menu(callback: CallbackQuery):
-    print(f"🔍 [DEBUG] admin_payments_menu вызван")
+    logger.debug(f" admin_payments_menu вызван")
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
@@ -66,7 +68,7 @@ async def admin_payments_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data == "pay_toggle_enabled")
 async def pay_toggle_enabled(callback: CallbackQuery):
-    print(f"🔍 [DEBUG] pay_toggle_enabled вызван")
+    logger.debug(f" pay_toggle_enabled вызван")
     if not is_admin(callback.from_user.id): return
 
     current = await db.get_payment_setting('payment_enabled', '1')
@@ -80,7 +82,7 @@ async def pay_toggle_enabled(callback: CallbackQuery):
 
 @router.callback_query(F.data == "pay_set_card")
 async def pay_set_card_start(callback: CallbackQuery, state: FSMContext):
-    print(f"🔍 [DEBUG] pay_set_card_start вызван")
+    logger.debug(f" pay_set_card_start вызван")
     if not is_admin(callback.from_user.id): return
     await state.set_state(PaymentSettingsState.waiting_for_card)
     await callback.message.answer(
@@ -94,7 +96,7 @@ async def pay_set_card_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_set_sbp_phone")
 async def pay_set_sbp_phone_start(callback: CallbackQuery, state: FSMContext):
-    print(f"🔍 [DEBUG] pay_set_sbp_phone_start вызван")
+    logger.debug(f" pay_set_sbp_phone_start вызван")
     if not is_admin(callback.from_user.id): return
     await state.set_state(PaymentSettingsState.waiting_for_sbp_phone)
     await callback.message.answer(
@@ -108,7 +110,7 @@ async def pay_set_sbp_phone_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_set_sbp_bank")
 async def pay_set_sbp_bank_start(callback: CallbackQuery, state: FSMContext):
-    print(f"🔍 [DEBUG] pay_set_sbp_bank_start вызван")
+    logger.debug(f" pay_set_sbp_bank_start вызван")
     if not is_admin(callback.from_user.id): return
     await state.set_state(PaymentSettingsState.waiting_for_sbp_bank)
     await callback.message.answer(
@@ -122,7 +124,7 @@ async def pay_set_sbp_bank_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_set_recipient")
 async def pay_set_recipient_start(callback: CallbackQuery, state: FSMContext):
-    print(f"🔍 [DEBUG] pay_set_recipient_start вызван")
+    logger.debug(f" pay_set_recipient_start вызван")
     if not is_admin(callback.from_user.id): return
     await state.set_state(PaymentSettingsState.waiting_for_recipient)
     await callback.message.answer(
@@ -136,7 +138,7 @@ async def pay_set_recipient_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_set_instructions")
 async def pay_set_instructions_start(callback: CallbackQuery, state: FSMContext):
-    print(f"🔍 [DEBUG] pay_set_instructions_start вызван")
+    logger.debug(f" pay_set_instructions_start вызван")
     if not is_admin(callback.from_user.id): return
     await state.set_state(PaymentSettingsState.waiting_for_instructions)
 
@@ -153,7 +155,7 @@ async def pay_set_instructions_start(callback: CallbackQuery, state: FSMContext)
 # Обработка текстовых сообщений для настройки оплаты
 @router.message(PaymentSettingsState.waiting_for_card)
 async def process_card(message: Message, state: FSMContext):
-    print(f"🔍 [DEBUG] process_card: {message.text}")
+    logger.debug(f" process_card: {message.text}")
     await db.set_payment_setting('card_number', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Номер карты обновлён: <code>{message.text.strip()}</code>", parse_mode="HTML")
@@ -161,7 +163,7 @@ async def process_card(message: Message, state: FSMContext):
 
 @router.message(PaymentSettingsState.waiting_for_sbp_phone)
 async def process_sbp_phone(message: Message, state: FSMContext):
-    print(f"🔍 [DEBUG] process_sbp_phone: {message.text}")
+    logger.debug(f" process_sbp_phone: {message.text}")
     await db.set_payment_setting('sbp_phone', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Телефон для СБП обновлён: <code>{message.text.strip()}</code>", parse_mode="HTML")
@@ -169,7 +171,7 @@ async def process_sbp_phone(message: Message, state: FSMContext):
 
 @router.message(PaymentSettingsState.waiting_for_sbp_bank)
 async def process_sbp_bank(message: Message, state: FSMContext):
-    print(f"🔍 [DEBUG] process_sbp_bank: {message.text}")
+    logger.debug(f" process_sbp_bank: {message.text}")
     await db.set_payment_setting('sbp_bank', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Банк для СБП обновлён: {message.text.strip()}")
@@ -177,7 +179,7 @@ async def process_sbp_bank(message: Message, state: FSMContext):
 
 @router.message(PaymentSettingsState.waiting_for_recipient)
 async def process_recipient(message: Message, state: FSMContext):
-    print(f"🔍 [DEBUG] process_recipient: {message.text}")
+    logger.debug(f" process_recipient: {message.text}")
     await db.set_payment_setting('recipient_name', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Получатель обновлён: {message.text.strip()}")
@@ -185,7 +187,7 @@ async def process_recipient(message: Message, state: FSMContext):
 
 @router.message(PaymentSettingsState.waiting_for_instructions)
 async def process_instructions(message: Message, state: FSMContext):
-    print(f"🔍 [DEBUG] process_instructions: {message.text}")
+    logger.debug(f" process_instructions: {message.text}")
     await db.set_payment_setting('payment_instructions', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Инструкция обновлена!")
@@ -197,7 +199,7 @@ async def process_instructions(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_stars_settings")
 async def admin_stars_menu(callback: CallbackQuery):
-    print(f"🔍 [DEBUG] admin_stars_menu вызван")
+    logger.debug(f" admin_stars_menu вызван")
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
@@ -231,7 +233,7 @@ async def admin_stars_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data == "stars_toggle")
 async def stars_toggle(callback: CallbackQuery):
-    print(f"🔍 [DEBUG] stars_toggle вызван")
+    logger.debug(f" stars_toggle вызван")
     if not is_admin(callback.from_user.id): return
 
     current = await db.get_stars_setting('stars_enabled', '0')
@@ -245,7 +247,7 @@ async def stars_toggle(callback: CallbackQuery):
 
 @router.callback_query(F.data == "stars_set_rate")
 async def stars_set_rate_start(callback: CallbackQuery, state: FSMContext):
-    print(f"🔍 [DEBUG] stars_set_rate_start вызван")
+    logger.debug(f" stars_set_rate_start вызван")
     if not is_admin(callback.from_user.id): return
 
     await state.set_state(PaymentSettingsState.waiting_for_stars_rate)
@@ -263,7 +265,7 @@ async def stars_set_rate_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(PaymentSettingsState.waiting_for_stars_rate)
 async def process_stars_rate(message: Message, state: FSMContext):
-    print(f"🔍 [DEBUG] process_stars_rate: {message.text}")
+    logger.debug(f" process_stars_rate: {message.text}")
 
     try:
         rate = int(message.text.strip())
@@ -284,11 +286,11 @@ async def process_stars_rate(message: Message, state: FSMContext):
 
 @router.pre_checkout_query()
 async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery, bot: Bot):
-    print(f"🔍 [DEBUG] process_pre_checkout вызван")
+    logger.debug(f" process_pre_checkout вызван")
     try:
         await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
     except Exception as e:
-        print(f"❌ Ошибка pre_checkout: {e}")
+        logger.warning(f"Ошибка pre_checkout: {e}")
         await bot.answer_pre_checkout_query(
             pre_checkout_query.id,
             ok=False,
@@ -298,7 +300,7 @@ async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery, bot: Bot):
 
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message, bot: Bot):
-    print(f"🔍 [DEBUG] process_successful_payment вызван")
+    logger.debug(f" process_successful_payment вызван")
     payment = message.successful_payment
 
     try:
@@ -343,7 +345,7 @@ async def process_successful_payment(message: Message, bot: Bot):
 @router.callback_query(F.data.startswith("user_paid_"))
 async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
     """Пользователь нажал 'Я оплатил'"""
-    print(f"🔍 [DEBUG] user_confirm_payment вызван: {callback.data}")
+    logger.debug(f" user_confirm_payment вызван: {callback.data}")
 
     if not callback.data.startswith("user_paid_"):
         return
@@ -354,15 +356,15 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Ошибка: неверный номер заказа", show_alert=True)
         return
 
-    print(f"🔍 [DEBUG] order_id: {order_id}")
+    logger.debug(f" order_id: {order_id}")
 
     order = await db.get_order_full(order_id)
     if not order:
-        print(f"❌ Заказ #{order_id} не найден")
+        logger.warning(f"Заказ #{order_id} не найден")
         await callback.answer("❌ Заказ не найден", show_alert=True)
         return
 
-    print(f"🔍 [DEBUG] Текущий статус заказа: {order['status']}")
+    logger.debug(f" Текущий статус заказа: {order['status']}")
 
     # Более гибкая проверка: заказ не должен быть уже оплачен/подтверждён/выполнен
     if order['status'] in ['paid', 'confirmed', 'completed']:
@@ -403,11 +405,11 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
             )
-            print(f"✅ Уведомление отправлено админу {admin_id}, message_id={msg.message_id}")
+            logger.info(f"Уведомление отправлено админу {admin_id}, message_id={msg.message_id}")
             admin_ids.append(admin_id)
             message_ids.append(msg.message_id)
         except Exception as e:
-            print(f"❌ Ошибка отправки админу {admin_id}: {e}")
+            logger.warning(f"Ошибка отправки админу {admin_id}: {e}")
     
     # Сохраняем ID сообщений в БД
     if admin_ids and message_ids:
@@ -417,45 +419,45 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("admin_paid_"))
 async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
     """Админ подтверждает оплату"""
-    print(f"🔍 [DEBUG] admin_confirm_payment вызван: {callback.data}")
-    print(f"🔍 [DEBUG] От: {callback.from_user.id}")
+    logger.debug(f" admin_confirm_payment вызван: {callback.data}")
+    logger.debug(f" От: {callback.from_user.id}")
 
     if not is_admin(callback.from_user.id):
-        print(f"❌ Пользователь {callback.from_user.id} не админ")
+        logger.warning(f"Пользователь {callback.from_user.id} не админ")
         await callback.answer("❌ Нет прав", show_alert=True)
         return
 
     try:
         order_id = int(callback.data.split("_")[-1])
-        print(f"🔍 [DEBUG] order_id: {order_id}")
+        logger.debug(f" order_id: {order_id}")
     except (ValueError, IndexError) as e:
-        print(f"❌ Ошибка парсинга order_id: {e}")
+        logger.warning(f"Ошибка парсинга order_id: {e}")
         await callback.answer("❌ Неверный номер заказа", show_alert=True)
         return
 
     order = await db.get_order_full(order_id)
     if not order:
-        print(f"❌ Заказ #{order_id} не найден")
+        logger.warning(f"Заказ #{order_id} не найден")
         await callback.answer("❌ Заказ не найден", show_alert=True)
         return
 
-    print(f"🔍 [DEBUG] Текущий статус заказа: {order['status']}")
+    logger.debug(f" Текущий статус заказа: {order['status']}")
 
     # Обновляем статус на "подтверждён"
     try:
         await db.update_order_status(order_id, 'confirmed')
-        print(f"✅ Статус заказа #{order_id} обновлён на 'confirmed'")
+        logger.info(f"Статус заказа #{order_id} обновлён на 'confirmed'")
     except Exception as e:
-        print(f"❌ Ошибка обновления статуса: {e}")
+        logger.warning(f"Ошибка обновления статуса: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
         return
 
     # Удаляем уведомления у всех админов
     try:
         await clear_admin_notifications(order_id, bot)
-        print(f"✅ Уведомления админам для заказа #{order_id} удалены")
+        logger.info(f"Уведомления админам для заказа #{order_id} удалены")
     except Exception as e:
-        print(f"⚠️ Не удалось удалить уведомления: {e}")
+        logger.warning(f"Не удалось удалить уведомления: {e}")
 
     # Обновляем сообщение
     try:
@@ -466,9 +468,9 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
             f"Пользователь уведомлён.",
             parse_mode="HTML"
         )
-        print(f"✅ Сообщение обновлено")
+        logger.info(f"Сообщение обновлено")
     except Exception as e:
-        print(f"⚠️ Не удалось обновить сообщение: {e}")
+        logger.warning(f"Не удалось обновить сообщение: {e}")
         # Продолжаем, даже если не удалось обновить сообщение
 
     await callback.answer("✅ Оплата подтверждена!", show_alert=True)
@@ -485,9 +487,9 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
             f"Спасибо, что выбрали «Семена Знаний»! 🌿",
             parse_mode="HTML"
         )
-        print(f"✅ Пользователь {order['user_id']} уведомлён")
+        logger.info(f"Пользователь {order['user_id']} уведомлён")
     except Exception as e:
-        print(f"⚠️ Не удалось уведомить пользователя {order['user_id']}: {e}")
+        logger.warning(f"Не удалось уведомить пользователя {order['user_id']}: {e}")
 
 
 from datetime import datetime
@@ -543,7 +545,7 @@ async def cmd_balance(message: Message, bot: Bot):
         await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
     except Exception as e:
-        print(f"❌ Ошибка получения транзакций Stars: {e}")
+        logger.warning(f"Ошибка получения транзакций Stars: {e}")
         await message.answer(
             f"❌ Не удалось получить данные.\n\n"
             f"💡 Полный баланс смотрите в @BotFather → Ваш бот → **Balance**"
