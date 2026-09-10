@@ -47,7 +47,14 @@ dp.include_router(user.router)  # user.router должен быть ПОСЛЕД
 async def on_startup():
     """Инициализация при запуске бота."""
     await db.init_db()
-    logger.info("База данных инициализирована")
+    # Восстанавливаем активные диалоги с поддержкой из БД,
+    # чтобы они переживали рестарт бота.
+    active_support_users = await db.get_all_support_active_user_ids()
+    settings.support_pending_users = set(active_support_users)
+    logger.info(
+        f"База данных инициализирована. "
+        f"Активных диалогов поддержки: {len(active_support_users)}"
+    )
 
 
 async def on_shutdown():
