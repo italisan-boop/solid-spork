@@ -5,17 +5,35 @@ from aiogram.types import Message, WebAppInfo, CallbackQuery, LabeledPrice
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramForbiddenError
 
 import db
 from config import settings
 from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
-from utils import format_local_time, parseBookImages
+from utils import format_local_time, parseBookImages, setup_logger
 
 router = Router()
+logger = setup_logger(__name__)
 
 
 def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
+
+
+async def set_support_mode(user_id: int, active: bool) -> None:
+    """Включить/выключить режим диалога с поддержкой.
+
+    Пишет и в in-memory кэш (быстрая проверка на каждом сообщении),
+    и в БД (переживает рестарт бота).
+    """
+    if active:
+        settings.support_pending_users.add(user_id)
+    else:
+        settings.support_pending_users.discard(user_id)
+    try:
+        await db.set_support_active(user_id, active)
+    except Exception as e:
+        logger.warning(f"Не удалось обновить is_support_active для {user_id}: {e}")
 
 
 
@@ -26,7 +44,7 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
     # Сохраняем пользователя в БД
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
     # /start означает начало новой сессии — выходим из активного диалога с поддержкой
-    settings.support_pending_users.discard(message.from_user.id)
+    await set_support_mode(message.from_user.id, False)
     settings.broadcast_pending_users.discard(message.from_user.id)
 
     ref_code = message.text.split()[1] if len(message.text.split()) > 1 else ""
@@ -62,7 +80,7 @@ async def cmd_start(message: Message):
     # Сохраняем пользователя в БД
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
     # /start означает начало новой сессии — выходим из активного диалога с поддержкой
-    settings.support_pending_users.discard(message.from_user.id)
+    await set_support_mode(message.from_user.id, False)
     settings.broadcast_pending_users.discard(message.from_user.id)
     await _send_start_menu(message)
 
@@ -96,17 +114,21 @@ async def handle_webapp_data(message: Message, bot: Bot):
         if data.get('action') == 'checkout':
             await process_checkout(message, data, bot)
     except Exception as e:
-        print(f"Ошибка web_app_data: {e}")
+        logger.warning(f"Ошибка web_app_data: {e}")
         await message.answer("❌ Ошибка при обработке данных")
 
 
 @router.callback_query(F.data == "my_orders")
 async def my_orders_callback(callback: CallbackQuery):
+    # Навигация по каталогу выводит из режима диалога с поддержкой
+    await set_support_mode(callback.from_user.id, False)
     await show_user_orders(callback, callback.from_user.id)
 
 
 @router.callback_query(F.data == "about")
 async def about_callback(callback: CallbackQuery):
+    # Навигация по разделам выводит из режима диалога с поддержкой
+    await set_support_mode(callback.from_user.id, False)
     await callback.message.answer(
         "📚 <b>Семена Знаний</b> — это:\n"
         "• Ботанические атласы и травники\n"
@@ -126,7 +148,7 @@ async def support_callback(callback: CallbackQuery, state: FSMContext):
     # сообщение гарантированно ушло в поддержку, а не было проглочено
     # обработчиком какого-нибудь waiting_for_* из админки.
     await state.clear()
-    settings.support_pending_users.add(callback.from_user.id)
+    await set_support_mode(callback.from_user.id, True)
     await callback.message.answer(
         "🆘 <b>Служба поддержки</b>\n\n"
         "Напишите ваш вопрос, и администратор ответит!\n\n"
@@ -166,6 +188,8 @@ async def cancel_order(callback: CallbackQuery):
 
 @router.callback_query(F.data == "main_menu")
 async def back_to_menu(callback: CallbackQuery):
+    # Возврат в главное меню выводит из режима диалога с поддержкой
+    await set_support_mode(callback.from_user.id, False)
     builder = InlineKeyboardBuilder()
     builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=settings.WEBAPP_URL))
     builder.button(text="📜 Мои заказы", callback_data="my_orders")
@@ -187,7 +211,18 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
 
     # === ПОДДЕРЖКА (проверяем ПЕРВОЙ, чтобы любое FSM-состояние не
     # перехватило сообщение раньше, чем мы перешлём его админу) ===
-    if user_id in settings.support_pending_users:
+    # Сверяемся и с кэшем, и с БД — на случай если процесс перезапускался
+    # между сообщениями и кэш пуст, а в БД флаг ещё активен.
+    in_support = user_id in settings.support_pending_users
+    if not in_support:
+        try:
+            if await db.is_support_active(user_id):
+                settings.support_pending_users.add(user_id)
+                in_support = True
+        except Exception as e:
+            logger.warning(f"is_support_active({user_id}) упал: {e}")
+
+    if in_support:
         for admin_id in settings.ADMIN_IDS:
             try:
                 await bot.send_message(
@@ -199,7 +234,7 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
                     parse_mode="HTML"
                 )
             except Exception as e:
-                print(f"Не удалось отправить админу {admin_id}: {e}")
+                logger.warning(f"Не удалось отправить сообщение админу {admin_id}: {e}")
         # Не убираем пользователя из support_pending_users — пусть продолжает
         # диалог, не нажимая каждый раз кнопку «Поддержка».
         await message.answer(
@@ -983,10 +1018,20 @@ async def admin_reply_to_user(message: Message):
         # На случай, если пользователь был сброшен из support_pending_users
         # (например, после перезапуска бота) — вернём его в режим диалога,
         # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
-        settings.support_pending_users.add(user_id)
+        await set_support_mode(user_id, True)
         await message.answer(f"✅ Ответ отправлен пользователю ID {user_id}!")
     except (ValueError, IndexError):
         await message.answer("❌ Неверный формат: `/reply_ID текст`", parse_mode="HTML")
+    except TelegramForbiddenError:
+        # Пользователь заблокировал бота — переключаем его из режима диалога,
+        # чтобы дальнейшие попытки не сыпались в пустоту.
+        await set_support_mode(user_id, False)
+        logger.warning(f"Не удалось отправить ответ пользователю {user_id}: бот заблокирован")
+        await message.answer(
+            f"🚫 Пользователь ID <code>{user_id}</code> заблокировал бота — "
+            f"доставить ответ нельзя. Диалог с поддержкой для него закрыт.",
+            parse_mode="HTML"
+        )
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
@@ -994,18 +1039,28 @@ async def admin_reply_to_user(message: Message):
 @router.message(Command("cancel"))
 async def cancel_action(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    was_active = False
+    cancelled = []  # список человекочитаемых строк: что именно отменили
 
     current_state = await state.get_state()
     if current_state:
         await state.clear()
-        was_active = True
+        cancelled.append(f"текущий шаг (<code>{current_state}</code>)")
 
-    settings.broadcast_pending_users.discard(user_id)
-    settings.support_pending_users.discard(user_id)
+    if user_id in settings.support_pending_users or await db.is_support_active(user_id):
+        await set_support_mode(user_id, False)
+        cancelled.append("диалог с поддержкой")
 
-    if was_active:
-        await message.answer("✅ Действие отменено.")
+    if user_id in settings.broadcast_pending_users:
+        settings.broadcast_pending_users.discard(user_id)
+        cancelled.append("черновик рассылки")
+
+    if cancelled:
+        await message.answer(
+            "✅ <b>Отменено:</b> " + ", ".join(cancelled) + ".",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer("ℹ️ Нечего отменять — сейчас нет активных действий.")
 
 
 async def show_user_orders(message_or_callback, user_id: int):
@@ -1026,7 +1081,7 @@ async def show_user_orders(message_or_callback, user_id: int):
             await message_or_callback.message.answer(text, parse_mode="HTML")
             await message_or_callback.answer()
     except Exception as e:
-        print(f"Ошибка заказов: {e}")
+        logger.warning(f"Ошибка заказов: {e}")
         if isinstance(message_or_callback, Message):
             await message_or_callback.answer("❌ Ошибка при загрузке заказов")
         else:
@@ -1089,6 +1144,8 @@ async def ref_decline_callback(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "invite_friend")
 async def invite_friend_callback(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
+    # Раздел «Пригласить» выводит из режима диалога с поддержкой
+    await set_support_mode(user_id, False)
     ref_code = await db.get_referral_code(user_id)
     me = await bot.get_me()
     ref_link = f"https://t.me/{me.username}?start={ref_code}"

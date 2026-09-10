@@ -64,7 +64,10 @@ from db.orders import (
 from db.users import (
     get_all_users,
     get_user,
-    add_user
+    add_user,
+    set_support_active,
+    is_support_active,
+    get_all_support_active_user_ids,
 )
 
 from db.books import (
@@ -89,6 +92,12 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Миграция: флаг активного диалога с поддержкой (выживает рестарт бота)
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN is_support_active INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass  # колонка уже есть
         
         # Таблица заказов
         await db.execute("""
