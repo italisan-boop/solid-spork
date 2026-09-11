@@ -330,16 +330,31 @@ async def back_to_price(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("admin_book_cat_"))
-async def process_category(callback: CallbackQuery, state: FSMContext):
+async def process_category(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Обработка выбора категории"""
-    category_id = int(callback.data.split("_")[-1])
-    await state.update_data(category_id=category_id, step=5)
-    
+    suffix = callback.data.split("_")[-1]
+    if suffix == "none":
+        # Шаблон «Без категории» — сбрасываем category_id, чтобы карточка
+        # показывалась с плейсхолдером category_display(cat=None).
+        await state.update_data(category_id=None, step=5)
+    else:
+        category_id = int(suffix)
+        await state.update_data(category_id=category_id, step=5)
+
+    # Если это правка из карточки подтверждения (editing=True) — возвращаемся
+    # на карточку, а не движем flow дальше к загрузке обложки.
+    data = await state.get_data()
+    if data.get('editing'):
+        await state.update_data(editing=False)
+        await render_book_confirmation(callback, state, bot)
+        await callback.answer()
+        return
+
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_category")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
-    
+
     await callback.bot.edit_message_text(
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
@@ -848,6 +863,9 @@ async def edit_book_field(callback: CallbackQuery, state: FSMContext):
     if target_state == BookAddState.waiting_for_category:
         categories = await get_all_categories()
         builder = InlineKeyboardBuilder()
+        # Шаблон «Без категории» — админ может снять категорию с книги,
+        # тогда category_display() в карточке подставит плейсхолдер.
+        builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
         for cat in categories:
             builder.button(
                 text=f"{cat['emoji'] or ''} {cat['name']}".strip(),
