@@ -189,6 +189,17 @@ async def init_db():
             await db.execute("ALTER TABLE books ADD COLUMN cover_photo TEXT")
             print("✅ Добавлена колонка 'cover_photo'")
 
+        if 'created_at' not in existing_columns:
+            await db.execute(
+                "ALTER TABLE books ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            )
+            # Проставляем created_at для существующих книг, чтобы сортировка
+            # «по дате добавления» не свалила их всех в один «сейчас».
+            await db.execute(
+                "UPDATE books SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+            )
+            print("✅ Добавлена колонка 'created_at'")
+
         # Инициализация категорий
         await init_categories()
 

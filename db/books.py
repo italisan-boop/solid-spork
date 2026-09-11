@@ -161,30 +161,79 @@ async def update_book_full(book_id: int, **kwargs) -> bool:
     return True
 
 
-async def get_books_count(is_active: bool = True) -> int:
-    """Получить количество книг"""
+async def get_books_count(is_active: bool = True, search_query: str = "") -> int:
+    """Получить количество книг с опциональным поиском по названию.
+
+    Поиск регистронезависимый и матчит подстроку в title, чтобы админ
+    мог быстро найти книгу, созданную «условно несколько месяцев назад».
+    """
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM books WHERE is_active = ?",
-            (1 if is_active else 0,)
-        )
+        if search_query:
+            like = f"%{search_query}%"
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM books WHERE is_active = ? AND LOWER(title) LIKE LOWER(?)",
+                (1 if is_active else 0, like),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM books WHERE is_active = ?",
+                (1 if is_active else 0,),
+            )
         result = await cursor.fetchone()
         return result[0] if result else 0
 
 
-async def get_all_books_paginated(limit: int = PAGE_SIZE, offset: int = 0) -> list:
-    """Получить книги с пагинацией"""
+# ORDER BY сортировки для админского списка книг. Каждый ключ — это
+# callback_data `admin_books_sort_<key>`, см. handlers/admin_books.py.
+_BOOKS_SORT_ORDERS = {
+    "default": "b.sort_order ASC, b.id ASC",
+    "title": "b.title COLLATE NOCASE ASC",
+    "category": "b.category COLLATE NOCASE ASC, b.id ASC",
+    "date_new": "b.created_at DESC, b.id DESC",
+    "date_old": "b.created_at ASC, b.id ASC",
+}
+
+
+async def get_all_books_paginated(
+    limit: int = PAGE_SIZE,
+    offset: int = 0,
+    sort_by: str = "default",
+    search_query: str = "",
+) -> list:
+    """Получить книги с пагинацией, сортировкой и поиском.
+
+    sort_by: ключ из _BOOKS_SORT_ORDERS; неизвестные значения трактуются
+    как «default», чтобы случайный callback не сломал SQL.
+    search_query: подстрока для LOWER(title) LIKE LOWER('%…%').
+    """
+    order_clause = _BOOKS_SORT_ORDERS.get(sort_by, _BOOKS_SORT_ORDERS["default"])
+
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            """SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images, b.category_id, b.sort_order,
-                      c.emoji as category_emoji
-               FROM books b
-               LEFT JOIN categories c ON b.category_id = c.id
-               WHERE b.is_active = 1
-               ORDER BY b.sort_order ASC, b.id ASC
-               LIMIT ? OFFSET ?""",
-            (limit, offset)
-        )
+        if search_query:
+            like = f"%{search_query}%"
+            cursor = await db.execute(
+                f"""SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images,
+                           b.category_id, b.sort_order, b.created_at,
+                           c.emoji as category_emoji
+                    FROM books b
+                    LEFT JOIN categories c ON b.category_id = c.id
+                    WHERE b.is_active = 1 AND LOWER(b.title) LIKE LOWER(?)
+                    ORDER BY {order_clause}
+                    LIMIT ? OFFSET ?""",
+                (like, limit, offset),
+            )
+        else:
+            cursor = await db.execute(
+                f"""SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images,
+                           b.category_id, b.sort_order, b.created_at,
+                           c.emoji as category_emoji
+                    FROM books b
+                LEFT JOIN categories c ON b.category_id = c.id
+                    WHERE b.is_active = 1
+                    ORDER BY {order_clause}
+                    LIMIT ? OFFSET ?""",
+                (limit, offset),
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
