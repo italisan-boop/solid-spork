@@ -286,6 +286,9 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
         categories = await get_all_categories()
 
         builder = InlineKeyboardBuilder()
+        # Шаблон «Без категории» — админ может добавить книгу без категории,
+        # тогда карточка покажется с плейсхолдером.
+        builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
         for cat in categories:
             builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
@@ -374,6 +377,7 @@ async def back_to_category(callback: CallbackQuery, state: FSMContext):
     categories = await get_all_categories()
 
     builder = InlineKeyboardBuilder()
+    builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
     for cat in categories:
         builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
@@ -432,14 +436,22 @@ async def process_cover_photo(message: Message, state: FSMContext, bot: Bot):
         )
         return
     await state.update_data(cover_photo=file_url, cover_photo_id=file_id, step=6)
-    
+
+    # Если это правка из карточки подтверждения (editing=True) — возвращаемся
+    # на карточку, а не идём дальше на шаг фото страниц.
+    data = await state.get_data()
+    if data.get('editing'):
+        await state.update_data(editing=False)
+        await render_book_confirmation(message, state, bot)
+        return
+
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
     builder.button(text="⏭️ Пропустить", callback_data="admin_book_skip_pages")
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(2)
-    
+
     await message.answer(
         "📸 <b>Фото обложки получено!</b>\n\n"
         "Хотите добавить фото страниц книги?\n"
@@ -451,19 +463,27 @@ async def process_cover_photo(message: Message, state: FSMContext, bot: Bot):
 
 
 @router.message(BookAddState.waiting_for_cover_photo)
-async def process_cover_photo_url(message: Message, state: FSMContext):
+async def process_cover_photo_url(message: Message, state: FSMContext, bot: Bot):
     """Обработка URL обложки"""
     text = message.text.strip() if message.text else ""
     if is_url(text):
         await state.update_data(cover_photo=text, step=6)
-        
+
+        # В режиме правки из карточки — возвращаемся на неё, не уходим
+        # на шаг фото страниц.
+        data = await state.get_data()
+        if data.get('editing'):
+            await state.update_data(editing=False)
+            await render_book_confirmation(message, state, bot)
+            return
+
         builder = InlineKeyboardBuilder()
         builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
         builder.button(text="⏭️ Пропустить", callback_data="admin_book_skip_pages")
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
         builder.adjust(2)
-        
+
         await message.answer(
             "📸 <b>URL обложки принят!</b>\n\n"
             "Хотите добавить фото страниц книги?\n"
@@ -888,8 +908,9 @@ async def _maybe_render_after_edit(message: Message, state: FSMContext, bot: Bot
     data = await state.get_data()
     if data.get('editing'):
         await state.update_data(editing=False)
-        # Чистим вспомогательные поля, чтобы они не висели в state
-        await state.update_data(cover_photo_id=None, cover_photo=None)
+        # НЕ сбрасываем cover_photo_id/cover_photo — render_book_confirmation
+        # читает их, чтобы показать обложку в карточке. Без них правка
+        # описания/категории/цены стирала бы обложку у будущей книги.
         await render_book_confirmation(message, state, bot)
         return True
     return False

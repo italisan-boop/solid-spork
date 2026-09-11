@@ -138,10 +138,16 @@ async def get_category_by_id(category_id: int) -> dict | None:
 def category_display(category: dict | None) -> dict:
     """Нормализовать категорию к виду {name, emoji} для UI.
 
-    Если категория None / пустая / нет в БД, возвращает заглушку
-    «Без категории», чтобы карточка в каталоге никогда не показывалась
-    с пустой строкой категории.
+    Если категория None / пустая / нет в БД / заглушка «Неизвестно»,
+    возвращает «Без категории», чтобы карточка в каталоге никогда не
+    показывалась с пустой строкой или устаревшим плейсхолдером.
     """
-    if category and category.get('name'):
-        return category
-    return {'name': NO_CATEGORY_NAME, 'emoji': NO_CATEGORY_EMOJI}
+    if not category:
+        return {'name': NO_CATEGORY_NAME, 'emoji': NO_CATEGORY_EMOJI}
+    name = (category.get('name') or '').strip()
+    # Старые книги без категории сохранялись как «Неизвестно» — продолжаем
+    # показывать их под «Без категории», чтобы вкладки и фильтры каталога
+    # работали одинаково.
+    if not name or name == 'Неизвестно':
+        return {'name': NO_CATEGORY_NAME, 'emoji': NO_CATEGORY_EMOJI}
+    return category
