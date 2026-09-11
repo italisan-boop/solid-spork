@@ -8,6 +8,7 @@ import db
 from config import settings
 from states import AddBookState, EditBookState
 from utils import parseBookImages
+from db.categories import category_display
 
 router = Router()
 
@@ -171,11 +172,16 @@ async def _show_edit_book_menu(callback: CallbackQuery, state: FSMContext, book_
     builder.button(text="◀️ Назад", callback_data="catalog_edit_list")
     builder.adjust(1)
 
+    # Если категория была удалена — показываем «Без категории»,
+    # а не пустую строку, чтобы UI не ломался.
+    cat = category_display({'name': book['category'], 'emoji': book.get('category_emoji', '')})
+    category_line = f"📂 {cat['emoji']} {cat['name']}".strip()
+
     text = (
         f"✏️ <b>Редактирование</b>\n\n"
         f"📖 {book['title']}\n"
         f"💰 {book['price']} ₽\n"
-        f"📂 {book['category']}\n"
+        f"{category_line}\n"
         f"🎨 {emoji_display}\n"
         f"📊 Порядок: {current_order}\n\n"
         f"Что изменить?"
@@ -718,7 +724,8 @@ async def catalog_show_list(callback: CallbackQuery):
     for i, b in enumerate(books, 1):
         emoji_display = "🖼️ [Картинка]" if b['emoji'].startswith('http') else b['emoji']
         order = b.get('sort_order', 0) or 0
-        text += f"{i}. {emoji_display} <b>{b['title']}</b>\n   💰 {b['price']} ₽ | 📂 {b['category']} | 📊 {order}\n\n"
+        cat = category_display({'name': b['category'], 'emoji': b.get('category_emoji', '')})
+        text += f"{i}. {emoji_display} <b>{b['title']}</b>\n   💰 {b['price']} ₽ | 📂 {cat['name']} | 📊 {order}\n\n"
 
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()

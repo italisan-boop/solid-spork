@@ -115,3 +115,33 @@ async def get_category_books_count(category_id: int) -> int:
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+NO_CATEGORY_NAME = "Без категории"
+NO_CATEGORY_EMOJI = "📦"
+
+
+async def get_category_by_id(category_id: int) -> dict | None:
+    """Получить категорию по id, или None если её нет/она скрыта."""
+    if not category_id:
+        return None
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, name, emoji FROM categories WHERE id = ? AND is_active = 1",
+            (category_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+def category_display(category: dict | None) -> dict:
+    """Нормализовать категорию к виду {name, emoji} для UI.
+
+    Если категория None / пустая / нет в БД, возвращает заглушку
+    «Без категории», чтобы карточка в каталоге никогда не показывалась
+    с пустой строкой категории.
+    """
+    if category and category.get('name'):
+        return category
+    return {'name': NO_CATEGORY_NAME, 'emoji': NO_CATEGORY_EMOJI}
