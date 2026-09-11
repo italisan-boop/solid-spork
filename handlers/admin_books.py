@@ -286,6 +286,9 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
         categories = await get_all_categories()
 
         builder = InlineKeyboardBuilder()
+        # Шаблон «Без категории» — админ может добавить книгу без категории,
+        # тогда карточка покажется с плейсхолдером.
+        builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
         for cat in categories:
             builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
@@ -330,16 +333,31 @@ async def back_to_price(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("admin_book_cat_"))
-async def process_category(callback: CallbackQuery, state: FSMContext):
+async def process_category(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Обработка выбора категории"""
-    category_id = int(callback.data.split("_")[-1])
-    await state.update_data(category_id=category_id, step=5)
-    
+    suffix = callback.data.split("_")[-1]
+    if suffix == "none":
+        # Шаблон «Без категории» — сбрасываем category_id, чтобы карточка
+        # показывалась с плейсхолдером category_display(cat=None).
+        await state.update_data(category_id=None, step=5)
+    else:
+        category_id = int(suffix)
+        await state.update_data(category_id=category_id, step=5)
+
+    # Если это правка из карточки подтверждения (editing=True) — возвращаемся
+    # на карточку, а не движем flow дальше к загрузке обложки.
+    data = await state.get_data()
+    if data.get('editing'):
+        await state.update_data(editing=False)
+        await render_book_confirmation(callback, state, bot)
+        await callback.answer()
+        return
+
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_category")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(1)
-    
+
     await callback.bot.edit_message_text(
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
@@ -357,14 +375,15 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
 async def back_to_category(callback: CallbackQuery, state: FSMContext):
     """Возврат к выбору категории"""
     categories = await get_all_categories()
-    
+
     builder = InlineKeyboardBuilder()
+    builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
     for cat in categories:
         builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(2)
-    
+
     await callback.bot.edit_message_text(
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
@@ -373,6 +392,30 @@ async def back_to_category(callback: CallbackQuery, state: FSMContext):
         reply_markup=builder.as_markup()
     )
     await state.set_state(BookAddState.waiting_for_category)
+
+
+@router.message(BookAddState.waiting_for_category)
+async def process_category_text_fallback(message: Message, state: FSMContext):
+    """Перехватываем текст во время выбора категории.
+
+    В admin-флоу категория выбирается кнопками, поэтому любой текст —
+    случайный ввод, а не команда. Без этого хендлера сообщение проваливается
+    в universal_text_handler в user.py и тот запускает устаревший flow
+    («Отправьте эмодзи…»), который тут вообще неуместен.
+    """
+    categories = await get_all_categories()
+    builder = InlineKeyboardBuilder()
+    for cat in categories:
+        builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
+    builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
+    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
+    builder.adjust(2)
+
+    await message.answer(
+        "📂 Выберите категорию для книги, нажав на кнопку ниже.\n\n"
+        "Текст в этом шаге не принимается.",
+        reply_markup=builder.as_markup()
+    )
 
 
 @router.message(BookAddState.waiting_for_cover_photo, F.photo)
@@ -393,14 +436,22 @@ async def process_cover_photo(message: Message, state: FSMContext, bot: Bot):
         )
         return
     await state.update_data(cover_photo=file_url, cover_photo_id=file_id, step=6)
-    
+
+    # Если это правка из карточки подтверждения (editing=True) — возвращаемся
+    # на карточку, а не идём дальше на шаг фото страниц.
+    data = await state.get_data()
+    if data.get('editing'):
+        await state.update_data(editing=False)
+        await render_book_confirmation(message, state, bot)
+        return
+
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
     builder.button(text="⏭️ Пропустить", callback_data="admin_book_skip_pages")
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(2)
-    
+
     await message.answer(
         "📸 <b>Фото обложки получено!</b>\n\n"
         "Хотите добавить фото страниц книги?\n"
@@ -412,19 +463,27 @@ async def process_cover_photo(message: Message, state: FSMContext, bot: Bot):
 
 
 @router.message(BookAddState.waiting_for_cover_photo)
-async def process_cover_photo_url(message: Message, state: FSMContext):
+async def process_cover_photo_url(message: Message, state: FSMContext, bot: Bot):
     """Обработка URL обложки"""
     text = message.text.strip() if message.text else ""
     if is_url(text):
         await state.update_data(cover_photo=text, step=6)
-        
+
+        # В режиме правки из карточки — возвращаемся на неё, не уходим
+        # на шаг фото страниц.
+        data = await state.get_data()
+        if data.get('editing'):
+            await state.update_data(editing=False)
+            await render_book_confirmation(message, state, bot)
+            return
+
         builder = InlineKeyboardBuilder()
         builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
         builder.button(text="⏭️ Пропустить", callback_data="admin_book_skip_pages")
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
         builder.adjust(2)
-        
+
         await message.answer(
             "📸 <b>URL обложки принят!</b>\n\n"
             "Хотите добавить фото страниц книги?\n"
@@ -686,11 +745,11 @@ async def add_more_pages(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_book_skip_pages")
 @router.callback_query(F.data == "admin_book_pages_done")
-async def finish_pages(callback: CallbackQuery, state: FSMContext):
+async def finish_pages(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Завершение добавления фото и переход к подтверждению"""
     data = await state.get_data()
     page_photos = data.get('page_photos', [])
-    
+
     # Формируем итоговое сообщение
     cover_photo_id = data.get('cover_photo_id')
     cover_photo_url = data.get('cover_photo')
@@ -701,7 +760,7 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
     price = data.get('price')
     category_id = data.get('category_id')
 
-    await render_book_confirmation(callback, state, bot)
+    await render_book_confirmation(callback, state, callback.bot)
 
 
 async def render_book_confirmation(target, state: FSMContext, bot: Bot):
@@ -750,13 +809,10 @@ async def render_book_confirmation(target, state: FSMContext, bot: Bot):
     builder.button(text="📸 Обложка", callback_data="admin_book_edit_cover")
     builder.button(text="🖼 Страницы", callback_data="admin_book_edit_pages")
     builder.adjust(2)
-    # Подтверждение / отмена — отдельно
-    builder.row(
-        InlineKeyboardBuilder()
-        .button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
-        .button(text="❌ Отмена", callback_data="admin_books_cancel")
-        .adjust(2)
-    )
+    # Подтверждение / отмена — на отдельной строке (последний adjust(2) уже
+    # действует, поэтому две кнопки уйдут в один ряд).
+    builder.button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
+    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
 
     cover_to_show = cover_photo_id or cover_photo_url
     await state.set_state(BookAddState.confirming)
@@ -827,6 +883,9 @@ async def edit_book_field(callback: CallbackQuery, state: FSMContext):
     if target_state == BookAddState.waiting_for_category:
         categories = await get_all_categories()
         builder = InlineKeyboardBuilder()
+        # Шаблон «Без категории» — админ может снять категорию с книги,
+        # тогда category_display() в карточке подставит плейсхолдер.
+        builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
         for cat in categories:
             builder.button(
                 text=f"{cat['emoji'] or ''} {cat['name']}".strip(),
@@ -849,8 +908,9 @@ async def _maybe_render_after_edit(message: Message, state: FSMContext, bot: Bot
     data = await state.get_data()
     if data.get('editing'):
         await state.update_data(editing=False)
-        # Чистим вспомогательные поля, чтобы они не висели в state
-        await state.update_data(cover_photo_id=None, cover_photo=None)
+        # НЕ сбрасываем cover_photo_id/cover_photo — render_book_confirmation
+        # читает их, чтобы показать обложку в карточке. Без них правка
+        # описания/категории/цены стирала бы обложку у будущей книги.
         await render_book_confirmation(message, state, bot)
         return True
     return False

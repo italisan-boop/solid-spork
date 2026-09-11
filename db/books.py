@@ -2,18 +2,21 @@
 import aiosqlite
 import json
 from db import DB_NAME
+from db.categories import NO_CATEGORY_NAME
 
 PAGE_SIZE = 20  # Количество книг на странице
 
 
-async def add_book(title: str, price: int, category_id: int, 
-                   author: str = "", description: str = "", 
+async def add_book(title: str, price: int, category_id: int,
+                   author: str = "", description: str = "",
                    cover_photo: str = None, page_photos: list = None) -> int:
     """Добавить новую книгу в каталог"""
     # Преобразуем список фото страниц в JSON
     images_json = json.dumps(page_photos) if page_photos else "[]"
-    
-    # Получаем название категории по ID
+
+    # Получаем название категории по ID. Если категория не указана или
+    # удалена — сохраняем плейсхолдер NO_CATEGORY_NAME, чтобы catalog.py /
+    # Mini App корректно отрисовали «📦 Без категории» через category_display.
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -21,8 +24,8 @@ async def add_book(title: str, price: int, category_id: int,
             (category_id,)
         )
         row = await cursor.fetchone()
-        category_name = row['name'] if row else "Неизвестно"
-    
+        category_name = row['name'] if row else NO_CATEGORY_NAME
+
     async with aiosqlite.connect(DB_NAME) as db:
         # Зеркалим cover_photo в поле emoji — фронтенд Mini App и
         # catalog.py читают именно emoji. Без этого каталог рисует 📚
