@@ -774,13 +774,10 @@ async def render_book_confirmation(target, state: FSMContext, bot: Bot):
     builder.button(text="📸 Обложка", callback_data="admin_book_edit_cover")
     builder.button(text="🖼 Страницы", callback_data="admin_book_edit_pages")
     builder.adjust(2)
-    # Подтверждение / отмена — отдельно
-    builder.row(
-        InlineKeyboardBuilder()
-        .button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
-        .button(text="❌ Отмена", callback_data="admin_books_cancel")
-        .adjust(2)
-    )
+    # Подтверждение / отмена — на отдельной строке (последний adjust(2) уже
+    # действует, поэтому две кнопки уйдут в один ряд).
+    builder.button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
+    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
 
     cover_to_show = cover_photo_id or cover_photo_url
     await state.set_state(BookAddState.confirming)
