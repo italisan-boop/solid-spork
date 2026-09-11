@@ -30,6 +30,11 @@ class EditBookState(StatesGroup):
     waiting_for_new_category_admin = State()  # новая категория из admin_books (возврат в admin_book_edit)
 
 
+class AdminBooksState(StatesGroup):
+    """Состояния админского списка книг: сортировка и поиск."""
+    waiting_for_search = State()  # админ ввёл подстроку для поиска
+
+
 class CategoryState(StatesGroup):
     waiting_for_name = State()
     waiting_for_emoji = State()

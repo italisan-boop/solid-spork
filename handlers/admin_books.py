@@ -8,13 +8,24 @@ from config.settings import settings
 from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
 from db.categories import get_all_categories, add_category, get_category_by_id, category_display, NO_CATEGORY_NAME
 from utils import parseBookImages, setup_logger
-from states import EditBookState, AddBookState as BookAddState
+from states import EditBookState, AddBookState as BookAddState, AdminBooksState
 import re
 
 logger = setup_logger(__name__)
 router = Router()
 
-PAGE_SIZE = 20  # Количество книг на странице
+PAGE_SIZE = 10  # Количество книг на странице (было 20; книг стало больше — пора уменьшить)
+
+
+# Ключи сортировки админского списка книг. Каждому соответствует строка
+# ORDER BY в db.books._BOOKS_SORT_ORDERS и подпись в кнопке.
+_BOOKS_SORT_LABELS = {
+    "default": ("📋 По умолчанию", "Сортировка по умолчанию"),
+    "title": ("🔤 По названию", "По алфавиту"),
+    "category": ("📂 По категории", "Группировка по категории"),
+    "date_new": ("🆕 Сначала новые", "Сначала новые"),
+    "date_old": ("📅 Сначала старые", "Сначала старые"),
+}
 
 # Лимиты полей книги. Telegram ограничивает caption 1024 символами, а текст
 # сообщения бота — 4096 символами; описание в каталоге рендерится без обрезки,
@@ -995,65 +1006,102 @@ async def cancel_add_book(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_books_menu")
 async def books_menu(callback: CallbackQuery, state: FSMContext):
-    """Меню управления книгами с пагинацией"""
+    """Меню управления книгами с пагинацией, поиском и сортировкой."""
     await state.clear()
-    
-    # Получаем общее количество книг
-    total_books = await get_books_count()
-    total_pages = (total_books + PAGE_SIZE - 1) // PAGE_SIZE if total_books > 0 else 1
-    
-    # Сохраняем текущую страницу в состоянии
-    await state.update_data(current_page=0, total_pages=total_pages)
-    
-    await show_books_list(callback, 0)
+    await state.update_data(
+        current_page=0,
+        sort_by="default",
+        search_query="",
+    )
+    await show_books_list(callback, state, page=0)
 
 
-async def show_books_list(callback: CallbackQuery, page: int):
-    """Отображение списка книг с пагинацией"""
+async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int):
+    """Отображение списка книг с пагинацией, поиском и сортировкой.
+
+    Текущая сортировка и поиск читаются из FSM state, чтобы пагинация
+    и кнопки сортировки/поиска работали согласованно между переходами.
+    """
+    data = await state.get_data()
+    sort_by = data.get("sort_by", "default") or "default"
+    search_query = data.get("search_query", "") or ""
+
     offset = page * PAGE_SIZE
-    books = await get_all_books_paginated(limit=PAGE_SIZE, offset=offset)
-    total_books = await get_books_count()
+    books = await get_all_books_paginated(
+        limit=PAGE_SIZE, offset=offset, sort_by=sort_by, search_query=search_query,
+    )
+    total_books = await get_books_count(search_query=search_query)
     total_pages = (total_books + PAGE_SIZE - 1) // PAGE_SIZE if total_books > 0 else 1
-    
-    text = f"📚 <b>Управление книгами</b>\n\n"
-    text += f"Страница {page + 1} из {total_pages}\n"
+
+    sort_label, sort_hint = _BOOKS_SORT_LABELS.get(
+        sort_by, _BOOKS_SORT_LABELS["default"]
+    )
+
+    text = "📚 <b>Управление книгами</b>\n\n"
+    text += f"🔀 Сортировка: {sort_label}\n"
+    if search_query:
+        # Экранируем HTML в подстроке, чтобы бот не упал на «<» или «&».
+        safe_q = (
+            search_query.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        text += f"🔎 Поиск: <i>{safe_q}</i>\n"
+    text += f"Страница {page + 1} из {max(total_pages, 1)}\n"
     text += f"Всего книг: {total_books}\n\n"
-    
+
     if books:
         for book in books:
             emoji = book.get('category_emoji') or '📖'
             text += f"{emoji} <b>{book['title']}</b> - {book['price']} ₽\n"
+    elif search_query:
+        text += "По этому запросу ничего не найдено."
     else:
         text += "Пока нет добавленных книг."
-    
+
     builder = InlineKeyboardBuilder()
-    
+
     if books:
         # Кнопки для каждой книги на странице
         for book in books:
-            builder.button(text=f"📝 {book['title']}", callback_data=f"admin_book_edit_{book['id']}")
-        
-        # Навигация
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(("⬅️ Назад", f"admin_books_page_{page - 1}"))
-        if page < total_pages - 1:
-            nav_buttons.append(("➡️ Вперед", f"admin_books_page_{page + 1}"))
-        
-        for btn_text, btn_data in nav_buttons:
-            builder.button(text=btn_text, callback_data=btn_data)
-    
+            builder.button(
+                text=f"📝 {book['title']}",
+                callback_data=f"admin_book_edit_{book['id']}",
+            )
+
+    # Навигация между страницами
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(("⬅️ Назад", f"admin_books_page_{page - 1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(("➡️ Вперёд", f"admin_books_page_{page + 1}"))
+    for btn_text, btn_data in nav_buttons:
+        builder.button(text=btn_text, callback_data=btn_data)
+
+    # Поиск
+    builder.button(text="🔎 Поиск по названию", callback_data="admin_books_search")
+    if search_query:
+        builder.button(text="✖ Сбросить поиск", callback_data="admin_books_clear_search")
+
+    # Сортировка — все доступные варианты; текущий помечаем ✅.
+    for key, (label, _hint) in _BOOKS_SORT_LABELS.items():
+        prefix = "✅ " if key == sort_by else ""
+        builder.button(
+            text=f"{prefix}{label}",
+            callback_data=f"admin_books_sort_{key}",
+        )
+
     builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     builder.adjust(1)
-    
+
     try:
         await callback.bot.edit_message_text(
             chat_id=callback.from_user.id,
             message_id=callback.message.message_id,
             text=text,
             reply_markup=builder.as_markup(),
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
@@ -1061,9 +1109,145 @@ async def show_books_list(callback: CallbackQuery, page: int):
 
 @router.callback_query(F.data.startswith("admin_books_page_"))
 async def books_page_navigation(callback: CallbackQuery, state: FSMContext):
-    """Навигация по страницам списка книг"""
+    """Навигация по страницам списка книг (с учётом текущей сортировки/поиска)."""
     page = int(callback.data.split("_")[-1])
-    await show_books_list(callback, page)
+    await state.update_data(current_page=page)
+    await show_books_list(callback, state, page=page)
+
+
+@router.callback_query(F.data.startswith("admin_books_sort_"))
+async def books_sort(callback: CallbackQuery, state: FSMContext):
+    """Сменить сортировку админского списка книг. Возвращаемся на 1-ю страницу."""
+    sort_by = callback.data.split("admin_books_sort_")[-1]
+    if sort_by not in _BOOKS_SORT_LABELS:
+        await callback.answer("Неизвестная сортировка", show_alert=True)
+        return
+    await state.update_data(sort_by=sort_by, current_page=0)
+    await show_books_list(callback, state, page=0)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_books_search")
+async def books_search_prompt(callback: CallbackQuery, state: FSMContext):
+    """Предлагаем админу ввести подстроку для поиска по названию."""
+    await state.set_state(AdminBooksState.waiting_for_search)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data="admin_books_menu")
+    await callback.message.answer(
+        "🔎 <b>Поиск книги по названию</b>\n\n"
+        "Введите часть названия (без учёта регистра). Бот покажет только "
+        "книги, у которых в названии встречается эта подстрока.\n\n"
+        "Чтобы выйти без поиска — нажмите «Отмена».",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AdminBooksState.waiting_for_search)
+async def books_search_apply(message: Message, state: FSMContext):
+    """Применяем введённую подстроку и возвращаемся к списку книг."""
+    query = (message.text or "").strip()
+    if not query:
+        await message.answer("Введите непустую подстроку для поиска.")
+        return
+    # Ограничиваем длину, чтобы админ случайно не вставил многотомный роман.
+    if len(query) > 100:
+        query = query[:100]
+    await state.update_data(search_query=query, current_page=0)
+    await state.set_state(None)
+    # Прячем подсказку про поиск, чтобы она не висела в чате.
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    # Шлём обновлённый список как новое сообщение (не edit, т.к. message —
+    # это текст от админа, а список рисуется с клавиатурой).
+    await render_books_list_for_message(message, state)
+
+
+@router.callback_query(F.data == "admin_books_clear_search")
+async def books_clear_search(callback: CallbackQuery, state: FSMContext):
+    """Сбросить поисковую подстроку, остаться на текущей странице/сортировке."""
+    await state.update_data(search_query="", current_page=0)
+    await show_books_list(callback, state, page=0)
+    await callback.answer("Поиск сброшен")
+
+
+async def render_books_list_for_message(message: Message, state: FSMContext):
+    """Рендер списка книг из message-хендлера (после ввода поиска).
+
+    По сути — show_books_list, но шлёт новое сообщение с клавиатурой
+    вместо edit_message_text, потому что у message-хендлера нет callback'а.
+    """
+    data = await state.get_data()
+    sort_by = data.get("sort_by", "default") or "default"
+    search_query = data.get("search_query", "") or ""
+    page = data.get("current_page", 0) or 0
+
+    offset = page * PAGE_SIZE
+    books = await get_all_books_paginated(
+        limit=PAGE_SIZE, offset=offset, sort_by=sort_by, search_query=search_query,
+    )
+    total_books = await get_books_count(search_query=search_query)
+    total_pages = (total_books + PAGE_SIZE - 1) // PAGE_SIZE if total_books > 0 else 1
+    sort_label, _ = _BOOKS_SORT_LABELS.get(sort_by, _BOOKS_SORT_LABELS["default"])
+
+    text = "📚 <b>Управление книгами</b>\n\n"
+    text += f"🔀 Сортировка: {sort_label}\n"
+    if search_query:
+        safe_q = (
+            search_query.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        text += f"🔎 Поиск: <i>{safe_q}</i>\n"
+    text += f"Страница {page + 1} из {max(total_pages, 1)}\n"
+    text += f"Всего книг: {total_books}\n\n"
+
+    if books:
+        for book in books:
+            emoji = book.get('category_emoji') or '📖'
+            text += f"{emoji} <b>{book['title']}</b> - {book['price']} ₽\n"
+    elif search_query:
+        text += "По этому запросу ничего не найдено."
+    else:
+        text += "Пока нет добавленных книг."
+
+    builder = InlineKeyboardBuilder()
+    if books:
+        for book in books:
+            builder.button(
+                text=f"📝 {book['title']}",
+                callback_data=f"admin_book_edit_{book['id']}",
+            )
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(("⬅️ Назад", f"admin_books_page_{page - 1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(("➡️ Вперёд", f"admin_books_page_{page + 1}"))
+    for btn_text, btn_data in nav_buttons:
+        builder.button(text=btn_text, callback_data=btn_data)
+
+    builder.button(text="🔎 Поиск по названию", callback_data="admin_books_search")
+    if search_query:
+        builder.button(text="✖ Сбросить поиск", callback_data="admin_books_clear_search")
+    for key, (label, _hint) in _BOOKS_SORT_LABELS.items():
+        prefix = "✅ " if key == sort_by else ""
+        builder.button(
+            text=f"{prefix}{label}",
+            callback_data=f"admin_books_sort_{key}",
+        )
+    builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
+    builder.button(text="🔙 В меню админа", callback_data="admin_menu")
+    builder.adjust(1)
+
+    await message.answer(
+        text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data.regexp(r"^admin_book_edit_\d+$"))
