@@ -37,6 +37,30 @@ async def add_book(title: str, price: int, category_id: int,
         return cursor.lastrowid
 
 
+async def find_book_by_title_author(title: str, author: str) -> dict | None:
+    """Найти активную книгу с тем же (title, author). Регистр и пробелы по краям
+    игнорируются, чтобы дубликат ловился и для 'Книга' / 'книга' / ' Книга '.
+
+    Возвращает {'id', 'title', 'author', 'category'} или None.
+    Используется в админке для предупреждения о дубликатах при добавлении.
+    """
+    if not title:
+        return None
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT id, title, author, category
+               FROM books
+               WHERE is_active = 1
+                 AND LOWER(TRIM(title)) = LOWER(TRIM(?))
+                 AND LOWER(TRIM(COALESCE(author, ''))) = LOWER(TRIM(COALESCE(?, '')))
+               LIMIT 1""",
+            (title, author or '')
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
 async def get_all_books() -> list:
     """Получить все активные книги"""
     async with aiosqlite.connect(DB_NAME) as db:

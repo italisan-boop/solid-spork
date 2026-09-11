@@ -2,10 +2,11 @@ from aiogram import Bot, Router, F
 from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+import asyncio
 import json
 from config.settings import settings
-from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated
-from db.categories import get_all_categories, add_category
+from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
+from db.categories import get_all_categories, add_category, get_category_by_id, category_display, NO_CATEGORY_NAME
 from utils import parseBookImages, setup_logger
 from states import EditBookState, AddBookState as BookAddState
 import re
@@ -84,16 +85,16 @@ async def start_add_book(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookAddState.waiting_for_title)
-async def process_title(message: Message, state: FSMContext):
+async def process_title(message: Message, state: FSMContext, bot: Bot):
     """Обработка названия книги"""
     if message.text and message.text.strip():
         await state.update_data(title=message.text.strip(), step=1)
-        
+        if await _maybe_render_after_edit(message, state, bot):
+            return
         builder = InlineKeyboardBuilder()
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_title")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
         builder.adjust(1)
-        
         await message.answer(
             "✍️ Введите автора книги:",
             reply_markup=builder.as_markup()
@@ -124,23 +125,69 @@ async def back_to_title(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookAddState.waiting_for_author)
-async def process_author(message: Message, state: FSMContext):
+async def process_author(message: Message, state: FSMContext, bot: Bot):
     """Обработка автора книги"""
-    if message.text and message.text.strip():
-        await state.update_data(author=message.text.strip(), step=2)
-        
-        builder = InlineKeyboardBuilder()
-        builder.button(text="⬅️ Назад", callback_data="admin_book_back_author")
+    if not (message.text and message.text.strip()):
+        await message.answer("❌ Автор не может быть пустым. Попробуйте еще раз:")
+        return
+
+    author = message.text.strip()
+    await state.update_data(author=author, step=2)
+
+    # Если это правка из карточки — сразу возвращаемся к ней.
+    if await _maybe_render_after_edit(message, state, bot):
+        return
+
+    # Проверка дубликатов по (title, author). Сравнение по LOWER+TRIM
+    # уже сделано в db.find_book_by_title_author.
+    data = await state.get_data()
+    title = data.get('title', '')
+    duplicate = await find_book_by_title_author(title, author)
+
+    builder = InlineKeyboardBuilder()
+    if duplicate:
+        # Дубликат — спрашиваем, продолжать ли
+        await state.set_state(BookAddState.waiting_for_description)
+        builder.button(text="✅ Всё равно добавить", callback_data="admin_book_duplicate_continue")
+        builder.button(text="✏️ Изменить название/автора", callback_data="admin_book_back_title")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
         builder.adjust(1)
-        
         await message.answer(
-            "📝 Введите описание книги:",
-            reply_markup=builder.as_markup()
+            f"⚠️ <b>Такая книга уже есть в каталоге.</b>\n\n"
+            f"📖 <b>{duplicate['title']}</b>\n"
+            f"✍️ {duplicate['author'] or 'Автор не указан'}\n"
+            f"📁 {duplicate['category'] or 'Без категории'}\n"
+            f"🆔 ID: {duplicate['id']}\n\n"
+            f"Хотите добавить её ещё раз (например, другое издание)?",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
         )
-        await state.set_state(BookAddState.waiting_for_description)
-    else:
-        await message.answer("❌ Автор не может быть пустым. Попробуйте еще раз:")
+        return
+
+    builder.button(text="⬅️ Назад", callback_data="admin_book_back_author")
+    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
+    builder.adjust(1)
+
+    await message.answer(
+        "📝 Введите описание книги:",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(BookAddState.waiting_for_description)
+
+
+@router.callback_query(F.data == "admin_book_duplicate_continue")
+async def duplicate_continue(callback: CallbackQuery, state: FSMContext):
+    """Админ подтвердил добавление книги-дубликата — продолжаем обычный флоу."""
+    await callback.message.edit_text(
+        "📝 Введите описание книги:",
+        reply_markup=InlineKeyboardBuilder()
+            .button(text="⬅️ Назад", callback_data="admin_book_back_author")
+            .button(text="❌ Отмена", callback_data="admin_books_cancel")
+            .adjust(1)
+            .as_markup()
+    )
+    await state.set_state(BookAddState.waiting_for_description)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_book_back_author")
@@ -168,7 +215,7 @@ async def back_to_author(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookAddState.waiting_for_description)
-async def process_description(message: Message, state: FSMContext):
+async def process_description(message: Message, state: FSMContext, bot: Bot):
     """Обработка описания книги"""
     if message.text and message.text.strip():
         description = message.text.strip()
@@ -180,12 +227,12 @@ async def process_description(message: Message, state: FSMContext):
             )
             return
         await state.update_data(description=description, step=3)
-
+        if await _maybe_render_after_edit(message, state, bot):
+            return
         builder = InlineKeyboardBuilder()
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_description")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
         builder.adjust(1)
-
         await message.answer(
             "💰 Введите цену книги (в рублях):",
             reply_markup=builder.as_markup()
@@ -222,25 +269,29 @@ async def back_to_description(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookAddState.waiting_for_price)
-async def process_price(message: Message, state: FSMContext):
+async def process_price(message: Message, state: FSMContext, bot: Bot):
     """Обработка цены книги"""
     try:
         price = int(message.text.strip())
         if price <= 0:
             raise ValueError
-        
+
         await state.update_data(price=price, step=4)
-        
+
+        # Если это правка из карточки — сразу возвращаемся к ней.
+        if await _maybe_render_after_edit(message, state, bot):
+            return
+
         # Получаем категории
         categories = await get_all_categories()
-        
+
         builder = InlineKeyboardBuilder()
         for cat in categories:
             builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
         builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
         builder.adjust(2)
-        
+
         await message.answer(
             "📂 Выберите категорию для книги:",
             reply_markup=builder.as_markup()
@@ -429,9 +480,105 @@ async def start_add_pages(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(BookAddState.waiting_for_page_photos, F.photo)
+# Буфер для альбомов фото страниц: ключ (user_id, media_group_id) → {messages, task}.
+# Не держим в FSMStorage, потому что сообщения одного альбома приходят
+# быстрее, чем FSMStorage успевает среагировать — проще ждать в памяти.
+_album_buffers: dict = {}
+_ALBUM_FLUSH_SECONDS = 0.7  # Telegram отдаёт альбом за <100 мс; 0.7 — с запасом
+
+
+async def _save_page_photo_url(bot: Bot, photo) -> str | None:
+    """Получить публичный URL фото по file_id, либо None если не удалось."""
+    if photo.file_size and photo.file_size > MAX_PHOTO_FILE_BYTES:
+        return None
+    try:
+        return await get_telegram_file_url(bot, photo.file_id)
+    except Exception as e:
+        logger.error(f"Не удалось получить file_path для фото страницы: {e}")
+        return None
+
+
+async def _flush_album(user_id: int, media_group_id: str, state: FSMContext, bot: Bot):
+    """Достать собранный альбом из буфера и добавить фото в состояние."""
+    key = (user_id, media_group_id)
+    entry = _album_buffers.pop(key, None)
+    if not entry:
+        return
+
+    messages = entry['messages']
+    page_photos = (await state.get_data()).get('page_photos', [])
+    added = 0
+    skipped_big = 0
+    for m in messages:
+        if len(page_photos) >= MAX_PAGE_PHOTOS:
+            break
+        photo = m.photo[-1] if m.photo else None
+        if not photo:
+            continue
+        file_url = await _save_page_photo_url(bot, photo)
+        if file_url is None:
+            if photo.file_size and photo.file_size > MAX_PHOTO_FILE_BYTES:
+                skipped_big += 1
+            continue
+        page_photos.append(file_url)
+        added += 1
+    await state.update_data(page_photos=page_photos)
+
+    count = len(page_photos)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Готово", callback_data="admin_book_pages_done")
+    builder.button(text="➕ Еще фото", callback_data="admin_book_add_more_pages")
+    builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
+    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
+    builder.adjust(2)
+
+    note = ""
+    if skipped_big:
+        note = f"\n\n⚠️ {skipped_big} фото пропущены: больше 9 МБ."
+    if added == 0 and not skipped_big:
+        return  # ничего не добавили и не отфильтровали — молчим
+
+    await messages[-1].answer(
+        f"📥 <b>Альбом принят: +{added} фото</b>\n\n"
+        f"Всего фото страниц: {count}"
+        + note + "\n\nДобавить ещё или завершить?",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.message(BookAddState.waiting_for_page_photos, F.media_group_id, F.photo)
+async def collect_album_photo(message: Message, state: FSMContext, bot: Bot):
+    """Собрать фото из Telegram-альбома и одним пакетом добавить в состояние."""
+    user_id = message.from_user.id
+    media_group_id = message.media_group_id
+    key = (user_id, media_group_id)
+
+    entry = _album_buffers.setdefault(key, {'messages': [], 'task': None})
+    entry['messages'].append(message)
+
+    # Первое фото в альбоме — запускаем таймер флаша. Последующие фото
+    # той же группы добавятся в entry['messages'] до истечения таймера.
+    if entry['task'] is None or entry['task'].done():
+        async def _schedule_flush():
+            try:
+                await asyncio.sleep(_ALBUM_FLUSH_SECONDS)
+                await _flush_album(user_id, media_group_id, state, bot)
+            except asyncio.CancelledError:
+                # Бот ушёл в рестарт во время сбора альбома — молча выходим
+                return
+
+        entry['task'] = asyncio.create_task(_schedule_flush())
+
+
+@router.message(BookAddState.waiting_for_page_photos, F.photo, ~F.media_group_id)
 async def process_page_photo(message: Message, state: FSMContext, bot: Bot):
-    """Обработка фото страницы (вложение Telegram)"""
+    """Обработка одиночного фото страницы (вложение Telegram).
+
+    Альбомы (media_group) обрабатываются отдельным хендлером ниже —
+    ждём ~0.7с, пока Telegram дошлёт все фото в группе, и добавляем их
+    одним пакетом, чтобы админ мог прислать сразу 5–10 страниц.
+    """
     data = await state.get_data()
     page_photos = data.get('page_photos', [])
 
@@ -554,55 +701,166 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
     price = data.get('price')
     category_id = data.get('category_id')
 
-    # Получаем название категории
-    categories = await get_all_categories()
-    category_name = next((cat['name'] for cat in categories if cat['id'] == category_id), "Неизвестно")
+    await render_book_confirmation(callback, state, bot)
+
+
+async def render_book_confirmation(target, state: FSMContext, bot: Bot):
+    """Показать карточку книги в том виде, как её увидит покупатель в Mini App,
+    плюс кнопки редактирования конкретного поля и подтверждения.
+
+    Используется и в finish_pages, и в per-field edit хендлерах — они
+    подменяют данные в state и снова вызывают эту функцию.
+    """
+    data = await state.get_data()
+    page_photos = data.get('page_photos', [])
+    cover_photo_id = data.get('cover_photo_id')
+    cover_photo_url = data.get('cover_photo')
+    has_cover = bool(cover_photo_id or cover_photo_url)
+    title = data.get('title') or '—'
+    author = data.get('author') or '—'
+    description = data.get('description') or ''
+    price = data.get('price')
+    category_id = data.get('category_id')
+
+    cat = await get_category_by_id(category_id) if category_id else None
+    cat_disp = category_display(cat)
+    cat_label = f"{cat_disp['emoji']} {cat_disp['name']}".strip()
+
+    desc_preview = description if len(description) <= 300 else description[:300] + '…'
 
     text = (
-        f"📚 <b>Подтверждение добавления книги</b>\n\n"
-        f"📖 Название: {title}\n"
-        f"✍️ Автор: {author}\n"
-        f"📝 Описание: {description[:200]}{'...' if len(description) > 200 else ''}\n"
-        f"💰 Цена: {price} ₽\n"
-        f"📁 Категория: {category_name}\n"
-        f"📸 Фото обложки: {'✅' if has_cover else '❌'}\n"
+        f"📚 <b>Карточка книги</b> — так её увидит покупатель\n\n"
+        f"📖 <b>{title}</b>\n"
+        f"✍️ {author}\n"
+        f"📂 {cat_label}\n"
+        f"💰 {price} ₽\n\n"
+        f"{desc_preview or '<i>Без описания</i>'}\n\n"
+        f"📸 Обложка: {'✅' if has_cover else '❌'}\n"
         f"📄 Фото страниц: {len(page_photos)} шт.\n\n"
-        "Все верно?"
+        f"<b>Что хотите изменить?</b>"
     )
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
-    builder.button(text="✏️ Изменить", callback_data="admin_book_back_title")
-    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
-    builder.adjust(1)
+    # Per-field edits (2 в строку)
+    builder.button(text="📝 Название", callback_data="admin_book_edit_title")
+    builder.button(text="✍️ Автор", callback_data="admin_book_edit_author")
+    builder.button(text="💰 Цена", callback_data="admin_book_edit_price")
+    builder.button(text="📂 Категория", callback_data="admin_book_edit_category")
+    builder.button(text="📄 Описание", callback_data="admin_book_edit_description")
+    builder.button(text="📸 Обложка", callback_data="admin_book_edit_cover")
+    builder.button(text="🖼 Страницы", callback_data="admin_book_edit_pages")
+    builder.adjust(2)
+    # Подтверждение / отмена — отдельно
+    builder.row(
+        InlineKeyboardBuilder()
+        .button(text="✅ Подтвердить", callback_data="admin_book_confirm_add")
+        .button(text="❌ Отмена", callback_data="admin_books_cancel")
+        .adjust(2)
+    )
 
-    try:
-        # Показываем обложку независимо от того, как её прислали:
-        # Telegram file_id (attachment) — бот пересылает по file_id.
-        # Внешний URL — Telegram сам подгружает картинку и шлёт превью.
-        cover_to_show = cover_photo_id or cover_photo_url
-        if cover_to_show:
-            await callback.message.delete()
-            await callback.message.answer_photo(
-                photo=cover_to_show,
-                caption=text,
-                reply_markup=builder.as_markup(),
-                parse_mode="HTML"
-            )
-        else:
-            await callback.bot.edit_message_text(
-                chat_id=callback.from_user.id,
-                message_id=callback.message.message_id,
+    cover_to_show = cover_photo_id or cover_photo_url
+    await state.set_state(BookAddState.confirming)
+
+    # Если у карточки есть обложка — перерисуем сообщение с фото,
+    # иначе edit_message_text (если сообщение уже было фото — удалим и пришлём текстом).
+    msg = target.message if hasattr(target, 'message') else target
+    if cover_to_show:
+        try:
+            await target.bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+        except Exception as e:
+            logger.warning(f"Не удалось удалить старое сообщение подтверждения: {e}")
+        await msg.answer_photo(
+            photo=cover_to_show,
+            caption=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    else:
+        try:
+            await target.bot.edit_message_text(
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
                 text=text,
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
             )
+        except Exception as e:
+            # Если текущее сообщение было фото, edit_message_text упадёт —
+            # удалим и пришлём заново текстом.
+            logger.warning(f"edit_message_text упал на карточке: {e}; шлём новое")
+            try:
+                await target.bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+            except Exception:
+                pass
+            await msg.answer(
+                text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
 
-        await state.set_state(BookAddState.confirming)
-    except Exception as e:
-        logger.error(f"Ошибка при отображении подтверждения: {e}")
-        await callback.message.answer("❌ Произошла ошибка. Попробуйте еще раз.")
-        await state.clear()
+
+# Словарь edit-обработчиков: callback_data → (state, prompt_text)
+# Используем общий хендлер admin_book_edit_field ниже.
+_EDIT_FIELD_PROMPTS = {
+    "admin_book_edit_title": (BookAddState.waiting_for_title, "📝 Введите новое название книги:"),
+    "admin_book_edit_author": (BookAddState.waiting_for_author, "✍️ Введите нового автора книги:"),
+    "admin_book_edit_price": (BookAddState.waiting_for_price, "💰 Введите новую цену (в рублях):"),
+    "admin_book_edit_category": (BookAddState.waiting_for_category, "📂 Выберите новую категорию:"),
+    "admin_book_edit_description": (BookAddState.waiting_for_description, "📄 Введите новое описание книги:"),
+    "admin_book_edit_cover": (BookAddState.waiting_for_cover_photo, "📸 Пришлите новую обложку (фото или URL):"),
+    "admin_book_edit_pages": (BookAddState.waiting_for_page_photos, "📸 Пришлите новые фото страниц (или нажмите «Готово»):"),
+}
+
+
+@router.callback_query(F.data.in_(list(_EDIT_FIELD_PROMPTS.keys())))
+async def edit_book_field(callback: CallbackQuery, state: FSMContext):
+    """Админ нажал кнопку «изменить поле» — переключаем на нужный шаг.
+
+    Помечаем state.editing = True, чтобы хендлер поля после получения
+    нового значения не шёл дальше по флоу, а вернулся к карточке.
+    """
+    target_state, prompt_text = _EDIT_FIELD_PROMPTS[callback.data]
+    await state.update_data(editing=True)
+    await state.set_state(target_state)
+
+    # Для категории показываем клавиатуру выбора; иначе — поле ввода.
+    if target_state == BookAddState.waiting_for_category:
+        categories = await get_all_categories()
+        builder = InlineKeyboardBuilder()
+        for cat in categories:
+            builder.button(
+                text=f"{cat['emoji'] or ''} {cat['name']}".strip(),
+                callback_data=f"admin_book_cat_{cat['id']}"
+            )
+        builder.button(text="⬅️ Назад к карточке", callback_data="admin_book_back_to_confirm")
+        builder.adjust(2)
+        await callback.message.answer(prompt_text, reply_markup=builder.as_markup())
+    else:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="⬅️ Назад к карточке", callback_data="admin_book_back_to_confirm")
+        await callback.message.answer(prompt_text, reply_markup=builder.as_markup())
+
+    await callback.answer()
+
+
+async def _maybe_render_after_edit(message: Message, state: FSMContext, bot: Bot):
+    """Если поле было отредактировано (editing=True), возвращаемся к карточке;
+    иначе ничего не делаем — вызвавший код сам двинет флоу дальше."""
+    data = await state.get_data()
+    if data.get('editing'):
+        await state.update_data(editing=False)
+        # Чистим вспомогательные поля, чтобы они не висели в state
+        await state.update_data(cover_photo_id=None, cover_photo=None)
+        await render_book_confirmation(message, state, bot)
+        return True
+    return False
+
+
+@router.callback_query(F.data == "admin_book_back_to_confirm")
+async def back_to_confirmation(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Возврат к экрану подтверждения без изменения поля."""
+    await render_book_confirmation(callback, state, bot)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_book_confirm_add")
