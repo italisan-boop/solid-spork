@@ -357,14 +357,14 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
 async def back_to_category(callback: CallbackQuery, state: FSMContext):
     """Возврат к выбору категории"""
     categories = await get_all_categories()
-    
+
     builder = InlineKeyboardBuilder()
     for cat in categories:
         builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
     builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
     builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
     builder.adjust(2)
-    
+
     await callback.bot.edit_message_text(
         chat_id=callback.from_user.id,
         message_id=callback.message.message_id,
@@ -373,6 +373,30 @@ async def back_to_category(callback: CallbackQuery, state: FSMContext):
         reply_markup=builder.as_markup()
     )
     await state.set_state(BookAddState.waiting_for_category)
+
+
+@router.message(BookAddState.waiting_for_category)
+async def process_category_text_fallback(message: Message, state: FSMContext):
+    """Перехватываем текст во время выбора категории.
+
+    В admin-флоу категория выбирается кнопками, поэтому любой текст —
+    случайный ввод, а не команда. Без этого хендлера сообщение проваливается
+    в universal_text_handler в user.py и тот запускает устаревший flow
+    («Отправьте эмодзи…»), который тут вообще неуместен.
+    """
+    categories = await get_all_categories()
+    builder = InlineKeyboardBuilder()
+    for cat in categories:
+        builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
+    builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
+    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
+    builder.adjust(2)
+
+    await message.answer(
+        "📂 Выберите категорию для книги, нажав на кнопку ниже.\n\n"
+        "Текст в этом шаге не принимается.",
+        reply_markup=builder.as_markup()
+    )
 
 
 @router.message(BookAddState.waiting_for_cover_photo, F.photo)
@@ -686,11 +710,11 @@ async def add_more_pages(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_book_skip_pages")
 @router.callback_query(F.data == "admin_book_pages_done")
-async def finish_pages(callback: CallbackQuery, state: FSMContext):
+async def finish_pages(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Завершение добавления фото и переход к подтверждению"""
     data = await state.get_data()
     page_photos = data.get('page_photos', [])
-    
+
     # Формируем итоговое сообщение
     cover_photo_id = data.get('cover_photo_id')
     cover_photo_url = data.get('cover_photo')
@@ -701,7 +725,7 @@ async def finish_pages(callback: CallbackQuery, state: FSMContext):
     price = data.get('price')
     category_id = data.get('category_id')
 
-    await render_book_confirmation(callback, state, bot)
+    await render_book_confirmation(callback, state, callback.bot)
 
 
 async def render_book_confirmation(target, state: FSMContext, bot: Bot):
