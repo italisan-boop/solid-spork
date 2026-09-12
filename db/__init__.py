@@ -143,7 +143,8 @@ async def init_db():
                 images TEXT DEFAULT '[]',
                 emoji TEXT DEFAULT '',
                 sort_order INTEGER DEFAULT 0,
-                is_active INTEGER DEFAULT 1
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -190,11 +191,11 @@ async def init_db():
             print("✅ Добавлена колонка 'cover_photo'")
 
         if 'created_at' not in existing_columns:
-            await db.execute(
-                "ALTER TABLE books ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-            )
-            # Проставляем created_at для существующих книг, чтобы сортировка
-            # «по дате добавления» не свалила их всех в один «сейчас».
+            # SQLite запрещает неконстантный DEFAULT в ADD COLUMN
+            # («Cannot add a column with non-constant default»), поэтому
+            # добавляем колонку без дефолта (NULL) и тут же проставляем
+            # значение для уже существующих строк.
+            await db.execute("ALTER TABLE books ADD COLUMN created_at TIMESTAMP")
             await db.execute(
                 "UPDATE books SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
             )
