@@ -31,9 +31,12 @@ async def add_book(title: str, price: int, category_id: int,
         # catalog.py читают именно emoji. Без этого каталог рисует 📚
         # вместо присланной обложки.
         emoji_value = cover_photo or ''
+        # created_at проставляем явно: после миграции колонка added без
+        # DEFAULT (SQLite запрещает неконстантный дефолт в ADD COLUMN), и
+        # DEFAULT из CREATE TABLE работает только на свежих инсталляциях.
         cursor = await db.execute(
-            """INSERT INTO books (title, price, category, category_id, author, description, cover_photo, images, emoji)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO books (title, price, category, category_id, author, description, cover_photo, images, emoji, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
             (title, price, category_name, category_id, author, description, cover_photo, images_json, emoji_value)
         )
         await db.commit()
