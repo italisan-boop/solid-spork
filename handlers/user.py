@@ -16,11 +16,30 @@ router = Router()
 logger = setup_logger(__name__)
 
 # Карта закреплённых тикетов поддержки: user_id -> admin_id.
-# Если пользователь в диалоге и его тикет закреплён — сообщения летят
-# только этому админу, чтобы коллеги не отвечали параллельно.
+# Если пользователь в диалоге и е��о тикет закреплён — сообщения летят
+# только эт��му админу, чтобы коллеги не отвечали параллельно.
 # Живёт в памяти процесса (рядом с support_pending_users), при рестарте
 # обнуляется — это сознательно: никто не окажется «вечно залоченным».
 support_claims: dict[int, int] = {}
+
+# Шаблоны быстрых ответов поддержки. Использование:
+#   /reply_<user_id> +<имя>  →  бот подставит текст из этого словаря.
+# Текст шаблона уходит пользователю как есть, без префикса «Ответ от поддержки».
+SUPPORT_TEMPLATES: dict[str, str] = {
+    "greeting": "Здравствуйте! 👋 Чем можем помочь?",
+    "wait": "Спасибо за обращение! 🙏 Мы разберёмся и скоро вернёмся с ответом.",
+    "ask_details": (
+        "Подскажите, пожалуйста, подробнее:\n"
+        "• номер заказа или название книги\n"
+        "• что именно произошло\n"
+        "Так мы сможем помочь быстрее."
+    ),
+    "payment": (
+        "Оплата доступна прямо в Mini App через раздел «Корзина».\n"
+        "Если что-то не получается — опишите, что видите на экране, поможем."
+    ),
+    "resolved": "Ваш вопрос решён ✅. Если появятся ещё вопросы — пишите, мы на связи.",
+}
 
 
 def is_admin(user_id: int) -> bool:
@@ -243,7 +262,9 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         claim_note = (
             f"\n🔒 <i>Тикет закреплён за вами. Чтобы отпустить: "
             f"<code>/release_{user_id}</code></i>"
-            if claimed_by else ""
+            if claimed_by
+            else f"\nЧтобы взять тикет в работу и не отвечать параллельно с коллегами: "
+                 f"<code>/claim_{user_id}</code>"
         )
         for admin_id in recipients:
             try:
@@ -1030,19 +1051,55 @@ async def admin_reply_to_user(message: Message):
     try:
         parts = message.text.split(maxsplit=1)
         user_id = int(parts[0].replace("/reply_", ""))
-        reply_text = parts[1] if len(parts) > 1 else "Без текста"
-        await message.bot.send_message(
-            user_id,
-            f"💬 <b>Ответ от поддержки «Семена Знаний»:</b>\n\n"
-            f"{reply_text}\n\n"
-            f"Можете ответить прямо здесь — сообщение придёт администратору.",
-            parse_mode="HTML"
-        )
+        body = parts[1].strip() if len(parts) > 1 else ""
+
+        # Шаблон быстрого ответа: /reply_<id> +<имя> → подставляем текст.
+        # Шаблон отправляется пользователю как есть, без обёртки «Ответ от
+        # поддержки», чтобы не дублировать приветствие из самого шаблона.
+        is_template = body.startswith("+")
+        if is_template:
+            template_name = body[1:].split()[0] if body[1:].strip() else ""
+            reply_text = SUPPORT_TEMPLATES.get(template_name)
+            if reply_text is None:
+                names = ", ".join(f"<code>+{n}</code>" for n in SUPPORT_TEMPLATES)
+                await message.answer(
+                    f"❌ Шаблон <code>+{template_name}</code> не найден.\n\n"
+                    f"Доступные шаблоны: {names}\n"
+                    f"Полный список с текстами — /templates",
+                    parse_mode="HTML",
+                )
+                return
+            user_message = f"{reply_text}\n\nМожете ответить прямо здесь — сообщение придёт администратору."
+        else:
+            # Обычный ответ: оборачиваем в шапку «Ответ от поддержки».
+            if not body:
+                body = "Без текста"
+            user_message = (
+                f"💬 <b>Ответ от поддержки «Семена Знаний»:</b>\n\n"
+                f"{body}\n\n"
+                f"Можете ответить прямо здесь — сообщение придёт администратору."
+            )
+
+        await message.bot.send_message(user_id, user_message, parse_mode="HTML")
         # На случай, если пользователь был сброшен из support_pending_users
         # (например, после перезапуска бота) — вернём его в режим диалога,
         # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
         await set_support_mode(user_id, True)
-        await message.answer(f"✅ Ответ отправлен пользователю ID {user_id}!")
+        claim_hint = (
+            f"\n\n💡 <i>Чтобы коллеги не отвечали параллельно — "
+            f"закрепите тикет за собой:</i> <code>/claim_{user_id}</code>\n"
+            f"<i>Когда закончите — отпустите:</i> <code>/release_{user_id}</code>"
+            if support_claims.get(user_id) != message.from_user.id
+            else f"\n\n🔒 <i>Тикет уже закреплён за вами. "
+                 f"Отпустить:</i> <code>/release_{user_id}</code>"
+        )
+        used_note = (
+            f" (шаблон <code>+{template_name}</code>)" if is_template else ""
+        )
+        await message.answer(
+            f"✅ Ответ отправлен пользователю ID {user_id}!{used_note}{claim_hint}",
+            parse_mode="HTML",
+        )
     except (ValueError, IndexError):
         await message.answer("❌ Неверный формат: `/reply_ID текст`", parse_mode="HTML")
     except TelegramForbiddenError:
@@ -1057,6 +1114,25 @@ async def admin_reply_to_user(message: Message):
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
+
+
+@router.message(Command("templates"))
+async def admin_list_templates(message: Message):
+    """Показывает админу список быстрых шаблонов и их текст."""
+    if not is_admin(message.from_user.id):
+        return
+    if not SUPPORT_TEMPLATES:
+        await message.answer("ℹ️ Шаблонов пока нет.")
+        return
+    lines = ["📝 <b>Шаблоны быстрых ответов</b>\n"]
+    lines.append(
+        "Использование: <code>/reply_&lt;user_id&gt; +&lt;имя&gt;</code>\n"
+    )
+    for name, text in SUPPORT_TEMPLATES.items():
+        # Пре��ью режем по строкам, чтобы карточка не разрасталась.
+        preview = text if len(text) <= 120 else text[:120] + "…"
+        lines.append(f"<b>+{name}</b>\n<code>{preview}</code>")
+    await message.answer("\n\n".join(lines), parse_mode="HTML")
 
 
 @router.message(F.text.startswith("/claim_"))
