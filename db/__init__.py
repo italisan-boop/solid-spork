@@ -55,7 +55,7 @@ from db.orders import (
     get_order_full,
     get_user_orders,
     update_order_status,
-    get_unnotified_new_orders,
+    get_unnotified_pending_orders,
     mark_new_order_notified,
     get_all_orders,
     get_orders_count,
@@ -78,6 +78,8 @@ from db.books import (
     update_book_sort_order,
     get_book,
     delete_book,
+    restore_book,
+    get_archived_books,
     update_book,
     update_book_full
 )
@@ -119,7 +121,7 @@ async def init_db():
         except Exception:
             pass  # Колонка уже существует
 
-        # Флаг «админы уже получили авто-уведомление о новом заказе». Нужен,
+        # Флаг «админы уже получили авто-уведомление о заказе». Нужен,
         # чтобы поллер не спамил дубликатами при каждом тике.
         try:
             await db.execute("ALTER TABLE orders ADD COLUMN new_order_notified INTEGER NOT NULL DEFAULT 0")
@@ -153,6 +155,7 @@ async def init_db():
                 emoji TEXT DEFAULT '',
                 sort_order INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
+                is_archived INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -209,6 +212,10 @@ async def init_db():
                 "UPDATE books SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
             )
             print("✅ Добавлена колонка 'created_at'")
+
+        if 'is_archived' not in existing_columns:
+            await db.execute("ALTER TABLE books ADD COLUMN is_archived INTEGER DEFAULT 0")
+            print("✅ Добавлена колонка 'is_archived'")
 
         # Инициализация категорий
         await init_categories()

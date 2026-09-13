@@ -10,7 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 import db
-from db.orders import save_admin_notification_ids, clear_admin_notifications
+from db.orders import save_admin_notification_ids, clear_admin_notifications, PENDING_STATUSES
 from config import settings
 from utils import setup_logger, format_local_time
 
@@ -671,6 +671,13 @@ async def _notify_admins_new_order(bot: Bot, order: dict) -> bool:
     """
     order_id = order['id']
     date_str = format_local_time(order['created_at'])
+    status_names = {
+        'new': '🆕 Новый',
+        'awaiting_payment': '💳 Ожидает оплаты',
+        'awaiting_stars_payment': '⭐ Ожидает Stars',
+        'payment_pending': '⏳ Ожидает подтверждения'
+    }
+    st = status_names.get(order['status'], order['status'])
 
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Принять", callback_data=f"new_order_accept_{order_id}")
@@ -678,9 +685,10 @@ async def _notify_admins_new_order(bot: Bot, order: dict) -> bool:
     builder.adjust(2)
 
     text = (
-        f"🔔 <b>Новый заказ #{order_id}!</b>\n\n"
+        f"🔔 <b>Заказ #{order_id} требует внимания!</b>\n\n"
         f"👤 Клиент: {order['user_name']} (ID: <code>{order['user_id']}</code>)\n"
         f"📅 Дата: {date_str}\n"
+        f"📊 Статус: {st}\n"
         f"💰 Сумма: <b>{order['total']} ₽</b>\n\n"
         f"Примите заказ в работу или отклоните:"
     )
@@ -716,11 +724,11 @@ async def new_orders_notify_loop(bot: Bot):
     logger.info("🔄 Поллер новых заказов запущен")
     while True:
         try:
-            orders = await db.get_unnotified_new_orders()
+            orders = await db.get_unnotified_pending_orders()
             for order in orders:
                 # Заказ могли обработать (принять/отклонить) между тиками поллера
                 current = await db.get_order(order['id'])
-                if not current or current['status'] != 'new':
+                if not current or current['status'] not in PENDING_STATUSES:
                     await db.mark_new_order_notified(order['id'])
                     continue
 
@@ -749,7 +757,7 @@ async def new_order_accept(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Заказ не найден", show_alert=True)
         return
 
-    if order['status'] != 'new':
+    if order['status'] not in PENDING_STATUSES:
         await callback.answer(
             f"⚠️ Заказ уже обработан (статус: {order['status']})",
             show_alert=True
@@ -805,7 +813,7 @@ async def new_order_reject(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Заказ не найден", show_alert=True)
         return
 
-    if order['status'] != 'new':
+    if order['status'] not in PENDING_STATUSES:
         await callback.answer(
             f"⚠️ Заказ уже обработан (статус: {order['status']})",
             show_alert=True

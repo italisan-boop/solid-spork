@@ -1,9 +1,9 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 import requests
 import os
 import sqlite3
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -61,7 +61,8 @@ def init_db():
             description TEXT DEFAULT '',
             images TEXT DEFAULT '[]',
             category_id INTEGER,
-            is_active INTEGER DEFAULT 1
+            is_active INTEGER DEFAULT 1,
+            is_archived INTEGER DEFAULT 0
         )
     ''')
 
@@ -277,7 +278,7 @@ def get_books_sync(sort_by='default'):
                c.emoji as category_emoji
         FROM books b
         LEFT JOIN categories c ON b.category_id = c.id
-        WHERE b.is_active = 1 
+        WHERE b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
         ORDER BY {order_clause}
     """)
     books = cursor.fetchall()
@@ -294,7 +295,7 @@ def get_categories_sync():
         SELECT c.id, c.name, c.emoji, c.sort_order,
                COUNT(b.id) as books_count
         FROM categories c
-        LEFT JOIN books b ON b.category_id = c.id AND b.is_active = 1
+        LEFT JOIN books b ON b.category_id = c.id AND b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
         WHERE c.is_active = 1
         GROUP BY c.id
         ORDER BY c.sort_order ASC, c.name ASC
@@ -337,6 +338,114 @@ def get_all_unique_users():
     users = cursor.fetchall()
     conn.close()
     return [u['user_id'] for u in users]
+
+
+# ============================================
+# ДАШБОРД АДМИНА
+# ============================================
+
+# Статусы, которые считаем состоявшейся продажей (оплачено / принято в работу):
+SALES_STATUSES = "'paid','confirmed','completed'"
+
+# Человекочитаемые названия статусов для CSV-экспорта (бухгалтерия).
+STATUS_LABELS = {
+    'new': 'новый',
+    'awaiting_payment': 'ожидает оплаты',
+    'awaiting_stars_payment': 'ожидает оплаты (Stars)',
+    'payment_pending': 'платёж в обработке',
+    'confirmed': 'подтверждён',
+    'paid': 'оплачен',
+    'completed': 'завершён',
+    'cancelled': 'отменён',
+}
+
+
+def _admin_user_id():
+    """user_id из query args для админ-API (или None, если не передан/не число)."""
+    raw = request.args.get('user_id')
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _csv_response(rows, headers, filename):
+    """CSV-ответ с BOM и разделителем ';' — Excel (ru-RU) открывает сразу."""
+    import csv
+    from io import StringIO
+    buf = StringIO()
+    writer = csv.writer(buf, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    response = Response('\ufeff' + buf.getvalue(), mimetype='text/csv; charset=utf-8')
+    response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+def get_dashboard_stats():
+    """Сводка для дашборда админа.
+
+    Продажи за день/неделю/месяц (скользящие окна от текущего момента),
+    топ-5 книг по количеству проданных экземпляров и средний чек.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # created_at хранится в UTC (дефолт SQLite CURRENT_TIMESTAMP),
+    # поэтому окна строим от datetime.utcnow().
+    now = datetime.utcnow()
+    windows = {
+        'day': now - timedelta(days=1),
+        'week': now - timedelta(days=7),
+        'month': now - timedelta(days=30),
+    }
+
+    periods = {}
+    for key, cutoff in windows.items():
+        cursor.execute(
+            f"SELECT COALESCE(SUM(total), 0) AS revenue, COUNT(*) AS orders "
+            f"FROM orders "
+            f"WHERE status IN ({SALES_STATUSES}) AND created_at >= ?",
+            (cutoff.strftime('%Y-%m-%d %H:%M:%S'),),
+        )
+        row = cursor.fetchone()
+        periods[key] = {'revenue': row['revenue'], 'orders': row['orders']}
+
+    # Топ-5 книг по продажам. quantity не хранится — каждая позиция
+    # в order_items это одна единица товара, считаем по строкам.
+    cursor.execute(
+        f"""SELECT oi.title, COUNT(*) AS qty, SUM(oi.price) AS revenue
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            WHERE o.status IN ({SALES_STATUSES})
+            GROUP BY oi.book_id, oi.title
+            ORDER BY qty DESC, revenue DESC
+            LIMIT 5"""
+    )
+    top_books = [dict(r) for r in cursor.fetchall()]
+
+    # Итоговая статистика для среднего чека
+    cursor.execute(
+        f"SELECT COUNT(*) AS orders, COALESCE(SUM(total), 0) AS revenue "
+        f"FROM orders WHERE status IN ({SALES_STATUSES})"
+    )
+    totals = cursor.fetchone()
+    conn.close()
+
+    t_orders = totals['orders']
+    t_revenue = totals['revenue']
+    avg_check = round(t_revenue / t_orders) if t_orders else 0
+
+    return {
+        'periods': periods,
+        'top_books': top_books,
+        'avg_check': avg_check,
+        'total_orders': t_orders,
+        'total_revenue': t_revenue,
+    }
 
 
 # ============================================
@@ -491,7 +600,11 @@ def send_telegram_with_keyboard(chat_id, text, buttons):
 @app.route('/', methods=['GET'])
 def index():
     """Главная страница"""
-    return send_from_directory('.', 'index.html')
+    # Файл в репозитории называется Index.html (с большой буквы). На
+    # case-sensitive системах (Linux/macOS) send_from_directory с
+    # 'index.html' не найдёт файл, поэтому выбираем имя по факту наличия.
+    page = 'Index.html' if os.path.exists('Index.html') else 'index.html'
+    return send_from_directory('.', page)
 
 
 @app.route('/api/books', methods=['GET'])
@@ -516,6 +629,142 @@ def api_categories():
         return jsonify({'categories': cats})
     except Exception as e:
         print(f"❌ Ошибка /api/categories: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/dashboard', methods=['GET'])
+def api_admin_dashboard():
+    """API: статистика дашборда админа.
+
+    Только для админов (user_id из ADMIN_IDS). Возвращает продажи за
+    день/неделю/месяц, топ-5 книг и средний чек.
+    """
+    try:
+        user_id = int(request.args.get('user_id', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'user_id is required'}), 400
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    try:
+        return jsonify(get_dashboard_stats())
+    except Exception as e:
+        print(f"❌ Ошибка /api/admin/dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/export/orders', methods=['GET'])
+def api_export_orders():
+    """API: CSV-выгрузка всех заказов для бухгалтерии.
+
+    Только для админов. Реестр заказов: id, дата, статус, покупатель,
+    состав заказа и сумма — закрытая сделка целиком.
+    """
+    user_id = _admin_user_id()
+    if user_id is None:
+        return jsonify({'error': 'user_id is required'}), 400
+    if user_id not in ADMIN_IDS:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT id, created_at, status, user_id, user_name, total "
+            "FROM orders ORDER BY id ASC"
+        )
+        orders = [dict(r) for r in cursor.fetchall()]
+
+        if orders:
+            placeholders = ','.join(['?'] * len(orders))
+            cursor.execute(
+                f"SELECT order_id, title, COUNT(*) AS qty "
+                f"FROM order_items WHERE order_id IN ({placeholders}) "
+                f"GROUP BY order_id, title ORDER BY order_id ASC, title ASC",
+                [o['id'] for o in orders],
+            )
+        else:
+            cursor.execute(
+                "SELECT order_id, title, COUNT(*) AS qty "
+                "FROM order_items WHERE 0 GROUP BY order_id, title"
+            )
+        items_map = {}
+        for r in cursor.fetchall():
+            items_map.setdefault(r['order_id'], []).append(f"{r['title']} ×{r['qty']}")
+        conn.close()
+
+        headers = ['id', 'дата', 'статус', 'user_id', 'имя', 'товары', 'сумма']
+        rows = [
+            [
+                o['id'],
+                o['created_at'],
+                STATUS_LABELS.get(o['status'], o['status']),
+                o['user_id'],
+                o['user_name'] or '',
+                ', '.join(items_map.get(o['id'], [])),
+                o['total'],
+            ]
+            for o in orders
+        ]
+        return _csv_response(rows, headers, 'orders.csv')
+    except Exception as e:
+        print(f"❌ Ошибка /api/admin/export/orders: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/export/books', methods=['GET'])
+def api_export_books():
+    """API: CSV-выгрузка книг с продажами для бухгалтерии.
+
+    Только для админов. Каталог книг дополнен количеством проданных
+    экземпляров и выручкой по оплаченным заказам.
+    """
+    user_id = _admin_user_id()
+    if user_id is None:
+        return jsonify({'error': 'user_id is required'}), 400
+    if user_id not in ADMIN_IDS:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""SELECT b.id, b.title, b.price,
+                       COALESCE(c.name, b.category) AS category,
+                       CASE WHEN b.is_active = 1 THEN 'да' ELSE 'нет' END AS is_active,
+                       COALESCE(s.qty, 0) AS qty,
+                       COALESCE(s.revenue, 0) AS revenue
+                FROM books b
+                LEFT JOIN categories c ON c.id = b.category_id
+                LEFT JOIN (
+                    SELECT oi.book_id, COUNT(*) AS qty, SUM(oi.price) AS revenue
+                    FROM order_items oi
+                    JOIN orders o ON o.id = oi.order_id
+                    WHERE o.status IN ({SALES_STATUSES})
+                    GROUP BY oi.book_id
+                ) s ON s.book_id = b.id
+                ORDER BY revenue DESC, b.title ASC"""
+        )
+        rows = [
+            [r['id'], r['title'], r['price'], r['category'], r['is_active'], r['qty'], r['revenue']]
+            for r in cursor.fetchall()
+        ]
+        conn.close()
+
+        headers = ['id', 'название', 'цена', 'категория', 'активна', 'продано_шт', 'выручка']
+        return _csv_response(rows, headers, 'books.csv')
+    except Exception as e:
+        print(f"❌ Ошибка /api/admin/export/books: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -717,21 +966,10 @@ def receive_order():
             )
 
         # === УВЕДОМЛЕНИЕ АДМИНАМ ===
-        admin_message = f"🔔 <b>Новый заказ #{order_id}!</b>\n\n👤 Клиент: {user_name} (ID: {user_id})\n"
-        if applied_promo:
-            admin_message += f"🎟️ Промокод: {applied_promo}\n"
-        if applied_bonus:
-            admin_message += f"🎁 Бонус: {applied_bonus}\n"
-        if discount > 0:
-            admin_message += f"💰 Скидка: {discount} ₽\n"
-        admin_message += f"💳 Сумма: {final_total} ₽\n📦 Товаров: {len(cart)}\n💳 Метод: {payment_method}\n\nДетали: <code>/order_{order_id}</code>"
-
-        for admin_id in ADMIN_IDS:
-            result = send_telegram_message(admin_id, admin_message)
-            if result.get('ok'):
-                print(f"   ✅ Уведомление админу {admin_id}")
-            else:
-                print(f"   ❌ Ошибка админу {admin_id}: {result}")
+        # Карточку с кнопками «Принять / Отклонить» отправляет сам бот:
+        # фоновый поллер в handlers/admin_orders.py подхватывает заказ из БД
+        # (статусы из PENDING_STATUSES) и шлёт уведомление автоматически.
+        # Здесь шлём только подтверждение пользователю.
 
         return jsonify(response_data)
 
