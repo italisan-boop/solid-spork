@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncio
 import json
 from config.settings import settings
-from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
+from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, restore_book, get_archived_books, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
 from db.categories import get_all_categories, add_category, get_category_by_id, category_display, NO_CATEGORY_NAME
 from utils import parseBookImages, setup_logger
 from states import EditBookState, AddBookState as BookAddState, AdminBooksState
@@ -1114,9 +1114,10 @@ async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int)
         )
 
     builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
+    builder.button(text="🗂 Архив", callback_data="admin_books_archive")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
-    # пара на поиск/сброс, пары на сортировку (последний вариант — один), пара снизу.
+    # пара на поиск/сброс, пары на сортировку (последний вариант — один), тройка снизу.
     row_sizes: list[int] = [1] * len(books)
     nav_count = (1 if page > 0 else 0) + (1 if page < total_pages - 1 else 0)
     if nav_count == 2:
@@ -1125,7 +1126,7 @@ async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int)
         row_sizes.append(1)
     row_sizes.append(2 if search_query else 1)
     row_sizes.extend([2, 2, 1])
-    row_sizes.append(2)
+    row_sizes.append(3)
     builder.adjust(*row_sizes)
 
     try:
@@ -1273,9 +1274,10 @@ async def render_books_list_for_message(message: Message, state: FSMContext):
             callback_data=f"admin_books_sort_{key}",
         )
     builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
+    builder.button(text="🗂 Архив", callback_data="admin_books_archive")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
-    # пара на поиск/сброс, пары на сортировку (последний вариант — один), пара снизу.
+    # пара на поиск/сброс, пары на сортировку (последний вариант — один), тройка снизу.
     row_sizes: list[int] = [1] * len(books)
     nav_count = (1 if page > 0 else 0) + (1 if page < total_pages - 1 else 0)
     if nav_count == 2:
@@ -1284,7 +1286,7 @@ async def render_books_list_for_message(message: Message, state: FSMContext):
         row_sizes.append(1)
     row_sizes.append(2 if search_query else 1)
     row_sizes.extend([2, 2, 1])
-    row_sizes.append(2)
+    row_sizes.append(3)
     builder.adjust(*row_sizes)
 
     await message.answer(
@@ -2136,7 +2138,9 @@ async def confirm_delete_book(callback: CallbackQuery, state: FSMContext):
                 f"⚠️ <b>Удаление книги</b>\n\n"
                 f"Вы уверены, что хотите удалить книгу:\n"
                 f"📖 {book['title']}\n\n"
-                f"Это действие нельзя отменить!"
+                f"Книга уйдёт в <b>архив</b> (мягкое удаление): строка останется "
+                f"в базе, ссылки из старых заказов и выгрузок для бухгалтерии "
+                f"сохранятся. Позже её можно восстановить из архива."
             ),
             reply_markup=builder.as_markup(),
             parse_mode="HTML"
@@ -2171,9 +2175,64 @@ async def delete_book_confirm(callback: CallbackQuery, state: FSMContext):
         await callback.bot.edit_message_text(
             chat_id=callback.from_user.id,
             message_id=callback.message.message_id,
-            text=f"✅ Книга успешно удалена",
+            text=f"✅ Книга перенесена в архив (старые заказы не потеряны)",
             reply_markup=builder.as_markup()
         )
     except Exception as e:
         logger.error(f"Ошибка при удалении книги: {e}")
         await callback.answer("❌ Ошибка при удалении", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_books_archive")
+async def show_archive_list(callback: CallbackQuery, state: FSMContext):
+    """Архив книг: мягко удалённые, доступны к восстановлению."""
+    await state.clear()
+    books = await get_archived_books()
+
+    text = "🗂 <b>Архив книг</b>\n\n"
+    if books:
+        text += (
+            "Книги в архиве скрыты из каталога, но их заказы и "
+            "выгрузки для бухгалтерии сохранены. Нажмите кнопку, "
+            "чтобы вернуть книгу в каталог:\n\n"
+        )
+    else:
+        text += "Архив пуст — сюда попадают удалённые книги."
+
+    builder = InlineKeyboardBuilder()
+    for book in books:
+        emoji = book.get('category_emoji') or '📖'
+        builder.button(
+            text=f"↩️ {emoji} {book['title']} — {book['price']} ₽",
+            callback_data=f"admin_book_restore_{book['id']}",
+        )
+    builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
+    builder.button(text="🔙 В меню админа", callback_data="admin_menu")
+
+    row_sizes = [1] * len(books) if books else []
+    row_sizes.append(2)
+    builder.adjust(*row_sizes)
+
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе архива: {e}")
+        await callback.message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^admin_book_restore_\d+$"))
+async def restore_book_handler(callback: CallbackQuery, state: FSMContext):
+    """Вернуть книгу из архива в каталог."""
+    book_id = int(callback.data.split("_")[-1])
+    restored = await restore_book(book_id)
+    if not restored:
+        await callback.answer("❌ Книга не найдена в архиве", show_alert=True)
+        return
+    await show_archive_list(callback, state)

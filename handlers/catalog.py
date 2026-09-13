@@ -698,7 +698,8 @@ async def catalog_delete_confirm(callback: CallbackQuery):
     await db.delete_book(book_id)
 
     await callback.message.answer(
-        f"✅ Книга <b>{book['title']}</b> удалена из каталога.",
+        f"✅ Книга <b>{book['title']}</b> перенесена в архив "
+        f"(старые заказы не потеряны).",
         parse_mode="HTML"
     )
     await callback.answer()

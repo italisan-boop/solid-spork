@@ -78,6 +78,8 @@ from db.books import (
     update_book_sort_order,
     get_book,
     delete_book,
+    restore_book,
+    get_archived_books,
     update_book,
     update_book_full
 )
@@ -153,6 +155,7 @@ async def init_db():
                 emoji TEXT DEFAULT '',
                 sort_order INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
+                is_archived INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -209,6 +212,10 @@ async def init_db():
                 "UPDATE books SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
             )
             print("✅ Добавлена колонка 'created_at'")
+
+        if 'is_archived' not in existing_columns:
+            await db.execute("ALTER TABLE books ADD COLUMN is_archived INTEGER DEFAULT 0")
+            print("✅ Добавлена колонка 'is_archived'")
 
         # Инициализация категорий
         await init_categories()

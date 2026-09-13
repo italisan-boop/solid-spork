@@ -61,7 +61,8 @@ def init_db():
             description TEXT DEFAULT '',
             images TEXT DEFAULT '[]',
             category_id INTEGER,
-            is_active INTEGER DEFAULT 1
+            is_active INTEGER DEFAULT 1,
+            is_archived INTEGER DEFAULT 0
         )
     ''')
 
@@ -277,7 +278,7 @@ def get_books_sync(sort_by='default'):
                c.emoji as category_emoji
         FROM books b
         LEFT JOIN categories c ON b.category_id = c.id
-        WHERE b.is_active = 1 
+        WHERE b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
         ORDER BY {order_clause}
     """)
     books = cursor.fetchall()
@@ -294,7 +295,7 @@ def get_categories_sync():
         SELECT c.id, c.name, c.emoji, c.sort_order,
                COUNT(b.id) as books_count
         FROM categories c
-        LEFT JOIN books b ON b.category_id = c.id AND b.is_active = 1
+        LEFT JOIN books b ON b.category_id = c.id AND b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
         WHERE c.is_active = 1
         GROUP BY c.id
         ORDER BY c.sort_order ASC, c.name ASC
