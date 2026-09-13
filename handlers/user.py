@@ -1,5 +1,6 @@
 import json
 import asyncio
+import time
 from aiogram import Bot, Router, F
 from aiogram.types import Message, WebAppInfo, CallbackQuery, LabeledPrice
 from aiogram.filters import CommandStart, Command
@@ -21,6 +22,31 @@ logger = setup_logger(__name__)
 # Живёт в памяти процесса (рядом с support_pending_users), при рестарте
 # обнуляется — это сознательно: никто не окажется «вечно залоченным».
 support_claims: dict[int, int] = {}
+
+# История переписки с пользователями поддержки: user_id → список сообщений
+# (по одному на каждое сообщение пользователя и на каждый ответ админа).
+# Хранит до HISTORY_LIMIT последних сообщений, чтобы админ по
+# /history_<id> мог быстро вспомнить контекст диалога. Живёт в памяти
+# процесса (как support_claims) — при рестарте обнуляется; в БД не
+# пишем намеренно: история не нужна после рестарта, а постоянный лог
+# диалогов — это уже отдельная фича.
+HISTORY_LIMIT = 50
+support_history: dict[int, list[dict]] = {}
+
+
+def _append_history(user_id: int, role: str, name: str, text: str) -> None:
+    """Дописать сообщение в историю диалога и подрезать до HISTORY_LIMIT.
+
+    role: "user" (сообщение от пользователя) или "admin" (ответ поддержки).
+    """
+    support_history.setdefault(user_id, []).append({
+        "role": role,
+        "name": name,
+        "text": text,
+        "ts": time.time(),
+    })
+    if len(support_history[user_id]) > HISTORY_LIMIT:
+        support_history[user_id] = support_history[user_id][-HISTORY_LIMIT:]
 
 # Шаблоны быстрых ответов поддержки. Использование:
 #   /reply_<user_id> +<имя>  →  бот подставит текст из этого словаря.
@@ -252,6 +278,14 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             logger.warning(f"is_support_active({user_id}) упал: {e}")
 
     if in_support:
+        # Пишем в историю ДО отправки админам — даже если рассылка упадёт,
+        # сообщение пользователя в логе останется.
+        _append_history(
+            user_id,
+            role="user",
+            name=message.from_user.full_name or str(user_id),
+            text=message.text,
+        )
         claimed_by = support_claims.get(user_id)
         # Если тикет закреплён за конкретным админом — шлём только ему,
         # чтобы второй админ не отвечал параллельно.
@@ -273,7 +307,11 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
                     f"🆘 <b>Сообщение от пользователя</b>\n\n"
                     f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
                     f"💬 Текст: {message.text}\n\n"
-                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>"
+                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>\n"
+                    f"Быстрые шаблоны: <code>/reply_{message.from_user.id} +greeting</code> и др. — "
+                    f"список: /templates\n"
+                    f"Посмотреть последние 20 сообщений: "
+                    f"<code>/history_{message.from_user.id}</code>"
                     f"{claim_note}",
                     parse_mode="HTML"
                 )
@@ -1080,6 +1118,16 @@ async def admin_reply_to_user(message: Message):
                 f"Можете ответить прямо здесь — сообщение придёт администратору."
             )
 
+        # В историю пишем «чистый» текст ответа (без обёртки «Ответ от
+        # поддержки…» и трейлера «Можете ответить прямо здесь…»), чтобы
+        # админу в /history_<id> было удобно читать.
+        history_text = reply_text if is_template else (body or "Без текста")
+        _append_history(
+            user_id,
+            role="admin",
+            name=message.from_user.full_name or str(message.from_user.id),
+            text=history_text,
+        )
         await message.bot.send_message(user_id, user_message, parse_mode="HTML")
         # На случай, если пользователь был сброшен из support_pending_users
         # (например, после перезапуска бота) — вернём его в режим диалога,
@@ -1187,7 +1235,10 @@ async def admin_claim_ticket(message: Message):
     await message.answer(
         f"🔒 Тикет пользователя <code>{user_id}</code> закреплён за вами. "
         f"Следующие сообщения от него придут только вам.\n"
-        f"Когда закончите — отпустите командой <code>/release_{user_id}</code>.",
+        f"Когда закончите — отпустите командой <code>/release_{user_id}</code>.\n\n"
+        f"💡 Для быстрых ответов есть шаблоны: <code>/reply_{user_id} +greeting</code> "
+        f"(приветствие), <code>+wait</code>, <code>+resolved</code> и др. "
+        f"Полный список — /templates.",
         parse_mode="HTML",
     )
 
@@ -1221,6 +1272,51 @@ async def admin_release_ticket(message: Message):
         f"Сообщения снова приходят всем админам.",
         parse_mode="HTML",
     )
+
+
+@router.message(F.text.startswith("/history_"))
+async def admin_history(message: Message):
+    """История диалога с пользователем: `/history_<user_id>`.
+
+    Показывает последние 20 сообщений (от пользователя и от поддержки)
+    из in-memory лога, который пишется в `universal_text_handler` и
+    `admin_reply_to_user`. При рестарте процесса лог обнуляется.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        user_id = int(message.text.split()[0].replace("/history_", ""))
+    except (ValueError, IndexError):
+        await message.answer("❌ Неверный формат: `/history_ID`", parse_mode="HTML")
+        return
+
+    entries = support_history.get(user_id) or []
+    if not entries:
+        await message.answer(
+            f"ℹ️ История диалога с <code>{user_id}</code> пуста "
+            f"(либо диалога ещё не было, либо процесс был перезапущен).",
+            parse_mode="HTML",
+        )
+        return
+
+    last = entries[-20:]
+    header = (
+        f"🕘 <b>История диалога с {user_id}</b> "
+        f"(показаны последние {len(last)} из {len(entries)}):\n"
+    )
+    lines = [header]
+    for e in last:
+        ts = time.strftime("%H:%M:%S", time.localtime(e["ts"]))
+        role = "👤 Юзер" if e["role"] == "user" else "👮 Админ"
+        # Имя и текст экранируем, чтобы HTML в сообщении юзера не ломал карточку.
+        raw_name = e["name"] or "—"
+        safe_name = raw_name.replace("<", "&lt;").replace(">", "&gt;")
+        raw_text = e["text"] if len(e["text"]) <= 200 else e["text"][:200] + "…"
+        safe_text = raw_text.replace("<", "&lt;").replace(">", "&gt;")
+        lines.append(
+            f"<i>{ts}</i> {role} <b>{safe_name}</b>:\n<code>{safe_text}</code>"
+        )
+    await message.answer("\n\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("cancel"))
