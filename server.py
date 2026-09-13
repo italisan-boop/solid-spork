@@ -563,7 +563,11 @@ def send_telegram_with_keyboard(chat_id, text, buttons):
 @app.route('/', methods=['GET'])
 def index():
     """Главная страница"""
-    return send_from_directory('.', 'index.html')
+    # Файл в репозитории называется Index.html (с большой буквы). На
+    # case-sensitive системах (Linux/macOS) send_from_directory с
+    # 'index.html' не найдёт файл, поэтому выбираем имя по факту наличия.
+    page = 'Index.html' if os.path.exists('Index.html') else 'index.html'
+    return send_from_directory('.', page)
 
 
 @app.route('/api/books', methods=['GET'])
