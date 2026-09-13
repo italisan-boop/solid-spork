@@ -243,7 +243,9 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         claim_note = (
             f"\n🔒 <i>Тикет закреплён за вами. Чтобы отпустить: "
             f"<code>/release_{user_id}</code></i>"
-            if claimed_by else ""
+            if claimed_by
+            else f"\nЧтобы взять тикет в работу и не отвечать параллельно с коллегами: "
+                 f"<code>/claim_{user_id}</code>"
         )
         for admin_id in recipients:
             try:
@@ -1042,7 +1044,18 @@ async def admin_reply_to_user(message: Message):
         # (например, после перезапуска бота) — вернём его в режим диалога,
         # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
         await set_support_mode(user_id, True)
-        await message.answer(f"✅ Ответ отправлен пользователю ID {user_id}!")
+        claim_hint = (
+            f"\n\n💡 <i>Чтобы коллеги не отвечали параллельно — "
+            f"закрепите тикет за собой:</i> <code>/claim_{user_id}</code>\n"
+            f"<i>Когда закончите — отпустите:</i> <code>/release_{user_id}</code>"
+            if support_claims.get(user_id) != message.from_user.id
+            else f"\n\n🔒 <i>Тикет уже закреплён за вами. "
+                 f"Отпустить:</i> <code>/release_{user_id}</code>"
+        )
+        await message.answer(
+            f"✅ Ответ отправлен пользователю ID {user_id}!{claim_hint}",
+            parse_mode="HTML",
+        )
     except (ValueError, IndexError):
         await message.answer("❌ Неверный формат: `/reply_ID текст`", parse_mode="HTML")
     except TelegramForbiddenError:
