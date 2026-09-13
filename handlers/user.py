@@ -1,6 +1,7 @@
 import json
 import asyncio
 import time
+from collections import deque
 from aiogram import Bot, Router, F
 from aiogram.types import Message, WebAppInfo, CallbackQuery, LabeledPrice
 from aiogram.filters import CommandStart, Command
@@ -32,6 +33,17 @@ support_claims: dict[int, int] = {}
 # диалогов — это уже отдельная фича.
 HISTORY_LIMIT = 50
 support_history: dict[int, list[dict]] = {}
+
+# === РЕЙТ-ЛИМИТ НА ОТВЕТЫ ПОДДЕРЖКИ (/reply_) ===
+# Защита пользователей от спама: нельзя слать ответы чаще, чем раз в
+# REPLY_MIN_GAP секунд одному пользователю, и не больше REPLY_BURST_LIMIT
+# ответов за скользящее окно REPLY_WINDOW на одного админа. Живёт в памяти
+# процесса (как support_claims) — при рестарте обнуляется, это нормально.
+REPLY_MIN_GAP = 3.0        # сек между ответами одному и тому же пользователю
+REPLY_BURST_LIMIT = 8      # макс. ответов админа в скользящем окне
+REPLY_WINDOW = 60.0        # длина окна, сек
+reply_last_user_ts: dict[tuple[int, int], float] = {}
+reply_admin_log: dict[int, deque] = {}
 
 # === ЭСКАЛАЦИЯ НЕОТВЕЧЕННЫХ ТИКЕТОВ ===
 # Последнее сообщение пользователя запоминаем вместе с меткой времени. Если
@@ -1196,6 +1208,29 @@ async def admin_reply_to_user(message: Message):
         parts = message.text.split(maxsplit=1)
         user_id = int(parts[0].replace("/reply_", ""))
         body = parts[1].strip() if len(parts) > 1 else ""
+
+        # Рейт-лимит: пауза между ответами одному пользователю + лимит админа.
+        now = time.monotonic()
+        key = (message.from_user.id, user_id)
+        last_ts = reply_last_user_ts.get(key, 0.0)
+        if now - last_ts < REPLY_MIN_GAP:
+            await message.answer(
+                f"⏳ Слишком часто: одному пользователю можно отвечать "
+                f"не чаще раза в {int(REPLY_MIN_GAP)} сек."
+            )
+            return
+
+        log = reply_admin_log.setdefault(message.from_user.id, deque())
+        while log and now - log[0] > REPLY_WINDOW:
+            log.popleft()
+        if len(log) >= REPLY_BURST_LIMIT:
+            await message.answer(
+                f"⏳ Превышен лимит ответов: не больше {REPLY_BURST_LIMIT} "
+                f"в минуту. Подождите немного."
+            )
+            return
+        log.append(now)
+        reply_last_user_ts[key] = now
 
         # Шаблон быстрого ответа: /reply_<id> +<имя> → подставляем текст.
         # Шаблон отправляется пользователю как есть, без обёртки «Ответ от
