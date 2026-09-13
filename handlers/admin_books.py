@@ -1,6 +1,7 @@
 from aiogram import Bot, Router, F
 from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncio
 import json
@@ -836,12 +837,33 @@ async def render_book_confirmation(target, state: FSMContext, bot: Bot):
             await target.bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
         except Exception as e:
             logger.warning(f"Не удалось удалить старое сообщение подтверждения: {e}")
-        await msg.answer_photo(
-            photo=cover_to_show,
-            caption=text,
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
+        # Telegram не всегда может скачать обложку по HTTP (например, истёк
+        # подписанный URL или хост блокирует ботов). Если не вышло — шлём
+        # текстом, чтобы админ хотя бы увидел карточку и кнопки.
+        try:
+            await msg.answer_photo(
+                photo=cover_to_show,
+                caption=text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+        except TelegramBadRequest as e:
+            logger.warning(
+                f"Telegram не смог загрузить обложку по URL/фото_id "
+                f"({cover_to_show[:80]!r}): {e}. Шлю карточку текстом."
+            )
+            await msg.answer(
+                text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при отправке обложки: {e}")
+            await msg.answer(
+                text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+            )
     else:
         try:
             await target.bot.edit_message_text(
