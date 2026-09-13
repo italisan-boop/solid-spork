@@ -7,6 +7,7 @@ import db
 from config import settings
 from handlers import user, admin_orders, catalog, categories, payments, admin_books, admin_broadcast, admin_promo
 from handlers.admin_orders import new_orders_notify_loop
+from handlers.user import support_escalation_loop
 from utils import setup_logger
 
 # Настраиваем логгер
@@ -73,10 +74,13 @@ async def start_polling():
 
     # Фоновая задача авто-уведомлений о новых заказах
     notifier_task = asyncio.create_task(new_orders_notify_loop(bot))
+    # Фоновая задача эскалации неотвеченных сообщений поддержки
+    escalation_task = asyncio.create_task(support_escalation_loop(bot))
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        escalation_task.cancel()
         notifier_task.cancel()
         await on_shutdown()
 
