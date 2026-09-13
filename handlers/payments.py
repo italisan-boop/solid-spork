@@ -2,15 +2,19 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
+from datetime import datetime, timedelta
 from utils import setup_logger
 
 import db
-from db.orders import save_admin_notification_ids, clear_admin_notifications
+from db.orders import save_admin_notification_ids, clear_admin_notifications, replace_admin_notification_ids
 from config import settings
-from states import PaymentSettingsState
+from states import PaymentSettingsState, PaymentReceiptState
 
 router = Router()
 logger = setup_logger(__name__)
+
+# Окно ожидания фото чека после «Я оплатил»: после него состояние сбрасывается.
+RECEIPT_WAIT_TIMEOUT = timedelta(minutes=30)
 
 logger.info("payments.py загружен")
 
@@ -343,7 +347,7 @@ async def process_successful_payment(message: Message, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("user_paid_"))
-async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
+async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Пользователь нажал 'Я оплатил'"""
     logger.debug(f" user_confirm_payment вызван: {callback.data}")
 
@@ -414,6 +418,152 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot):
     # Сохраняем ID сообщений в БД
     if admin_ids and message_ids:
         await save_admin_notification_ids(order_id, admin_ids, message_ids)
+
+    # Просим прислать фото чека для ускоренной проверки.
+    # Скриншот придёт админу inline-превью с кнопкой подтверждения.
+    skip_builder = InlineKeyboardBuilder()
+    skip_builder.button(text="⏭ Без фото", callback_data=f"payment_skip_photo_{order_id}")
+    await bot.send_message(
+        order['user_id'],
+        f"📸 <b>Пришлите фото чека или скриншот перевода</b> — "
+        f"так администратор подтвердит оплату значительно быстрее.\n\n"
+        f"Просто отправьте фото в этот чат. Если не получилось — нажмите «Без фото».",
+        reply_markup=skip_builder.as_markup()
+    )
+    await state.set_state(PaymentReceiptState.waiting_for_photo)
+    await state.update_data(order_id=order_id, requested_at=datetime.now().timestamp())
+    # Срок ожидания чека — 30 минут; потом состоянием можно пренебречь.
+
+
+@router.message(PaymentReceiptState.waiting_for_photo, F.photo)
+async def payment_receipt_photo(message: Message, bot: Bot, state: FSMContext):
+    """Пользователь прислал фото чека — отдаём админам inline-превью."""
+    data = await state.get_data()
+    order_id = data.get('order_id')
+
+    # Позднее фото (по истечении окна ожидания) не привязываем к заказу
+    if order_id and data.get('requested_at'):
+        if datetime.now() - datetime.fromtimestamp(data['requested_at']) > RECEIPT_WAIT_TIMEOUT:
+            await state.clear()
+            await message.answer(
+                f"⏳ Время на отправку фото чека истекло, но заказ #{order_id} уже передан "
+                f"администратору на проверку. Спасибо! 🌿"
+            )
+            return
+
+    if not order_id:
+        await state.clear()
+        await message.answer("❌ Не удалось определить заказ. Создайте заказ заново.")
+        return
+
+    order = await db.get_order_full(order_id)
+    if not order:
+        await state.clear()
+        await message.answer("❌ Заказ не найден.")
+        return
+
+    # Если заказ уже подтверждён/обработан — фото не нужно
+    if order['status'] in ('paid', 'confirmed', 'completed'):
+        await state.clear()
+        await message.answer(
+            f"ℹ️ Заказ #{order_id} уже обработан — чек не требуется. Спасибо! 🌿"
+        )
+        return
+
+    await state.clear()
+
+    photo = message.photo[-1]
+    items_list = "\n".join([f"• {item['title']}" for item in order['items']])
+    caption = (
+        f"🖼 <b>Чек к заказу #{order_id}</b>\n\n"
+        f"👤 Клиент: {order['user_name']} (ID: {order['user_id']})\n"
+        f"💵 Сумма: {order['total']} ₽\n"
+        f"📦 Состав:\n{items_list}\n\n"
+        f"Проверьте чек и подтвердите оплату:"
+    )
+
+    new_pairs = []
+    for admin_id in settings.ADMIN_IDS:
+        try:
+            builder = InlineKeyboardBuilder()
+            builder.button(text="✅ Подтвердить оплату", callback_data=f"admin_paid_{order_id}")
+
+            msg = await bot.send_photo(
+                admin_id,
+                photo=photo.file_id,
+                caption=caption,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
+            new_pairs.append((admin_id, msg.message_id))
+            logger.info(f"Чек заказа #{order_id} отправлен админу {admin_id} (фото {msg.message_id})")
+        except Exception as e:
+            logger.warning(f"Ошибка отправки чека админу {admin_id}: {e}")
+
+    # Текстовый квиток у админов заменяем фото-чеком, чтобы не дублировать.
+    try:
+        for notif in order.get('admin_notification_ids') or []:
+            admin_id = notif.get('admin_id')
+            msg_id = notif.get('message_id')
+            if admin_id and msg_id:
+                try:
+                    await bot.delete_message(chat_id=admin_id, message_id=msg_id)
+                except Exception:
+                    pass
+        if new_pairs:
+            await replace_admin_notification_ids(order_id, new_pairs)
+    except Exception as e:
+        logger.warning(f"Ошибка замены текстовых уведомлений заказа #{order_id}: {e}")
+
+    if new_pairs:
+        await message.answer(
+            f"✅ <b>Фото чека отправлено администратору!</b>\n\n"
+            f"Заказ #{order_id} будет подтверждён после проверки. "
+            f"Обычно это занимает 5-15 минут 🕐"
+        )
+    else:
+        await message.answer(
+            f"ℹ️ Не удалось доставить чек администратору, но заказ #{order_id} "
+            f"передан на проверку. Если понадобится — администратор свяжется с вами."
+        )
+
+
+@router.message(PaymentReceiptState.waiting_for_photo)
+async def payment_receipt_reminder(message: Message, state: FSMContext):
+    """Юзер шлёт не-фото, пока ждём чек — мягко напоминаем."""
+    data = await state.get_data()
+    if data.get('order_id') and data.get('requested_at'):
+        if datetime.now() - datetime.fromtimestamp(data['requested_at']) > RECEIPT_WAIT_TIMEOUT:
+            await state.clear()
+            await message.answer(
+                f"⏳ Время на отправку фото чека истекло, но заказ #{data['order_id']} уже передан "
+                f"администратору на проверку. Спасибо! 🌿"
+            )
+            return
+    await message.answer(
+        "📸 Пришлите, пожалуйста, <b>фото чека</b> (скриншот перевода) "
+        "или нажмите кнопку «⏭ Без фото», чтобы перейти дальше."
+    )
+
+
+@router.callback_query(PaymentReceiptState.waiting_for_photo, F.data.startswith("payment_skip_photo_"))
+async def payment_skip_photo(callback: CallbackQuery, state: FSMContext):
+    """Пользователь отказался от отправки фото чека."""
+    await state.clear()
+    try:
+        order_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        order_id = None
+    text = (
+        f"⏭ Хорошо, без фото.\n\n"
+        f"Администратор проверит поступление по заказу #{order_id if order_id else ''} "
+        f"и подтвердит оплату вручную. Обычно это занимает 5-15 минут 🕐"
+    )
+    try:
+        await callback.message.edit_text(text)
+    except Exception:
+        pass
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_paid_"))
@@ -492,11 +642,7 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
         logger.warning(f"Не удалось уведомить пользователя {order['user_id']}: {e}")
 
 
-from datetime import datetime
 from aiogram.filters import Command
-
-
-# ... (весь предыдущий код) ...
 
 @router.message(Command("balance"))
 async def cmd_balance(message: Message, bot: Bot):

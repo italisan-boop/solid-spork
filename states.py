@@ -56,6 +56,10 @@ class PromoCodeState(StatesGroup):
 class ReferralState(StatesGroup):
     waiting_for_confirmation = State()
 
+class PaymentReceiptState(StatesGroup):
+    """Ожидание фото чека от пользователя после нажатия «Я оплатил». """
+    waiting_for_photo = State()
+
 class PaymentSettingsState(StatesGroup):
     waiting_for_card = State()
     waiting_for_sbp_phone = State()
