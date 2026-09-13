@@ -1,4 +1,8 @@
 from datetime import datetime
+import asyncio
+import json
+import aiosqlite
+
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
@@ -6,12 +10,17 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 import db
+from db.orders import save_admin_notification_ids, clear_admin_notifications
 from config import settings
-from utils import format_local_time
+from utils import setup_logger, format_local_time
 
 router = Router()
+logger = setup_logger(__name__)
 
 PAGE_SIZE = 20  # Количество заказов на странице
+
+# Интервал опроса новых заказов для авто-уведомлений админам
+NEW_ORDER_POLL_INTERVAL = 15  # секунд
 
 # Множество пользователей, ожидающих сообщение для рассылки
 broadcast_pending_users = set()
@@ -648,6 +657,188 @@ async def restore_order(callback: CallbackQuery):
     await db.update_order_status(order_id, 'new')
     await callback.answer("🔄 Заказ восстановлен!", show_alert=True)
     await order_detail(callback)
+
+
+# ============================================
+# АВТО-УВЕДОМЛЕНИЯ О НОВЫХ ЗАКАЗАХ
+# ============================================
+
+async def _notify_admins_new_order(bot: Bot, order: dict) -> bool:
+    """Отправить админам карточку о новом заказе с кнопками «Принять / Отклонить».
+
+    Возвращает True, если хотя бы один админ получил сообщение — только тогда
+    заказ помечается уведомлённым, чтобы не потерять уведомление навсегда.
+    """
+    order_id = order['id']
+    date_str = format_local_time(order['created_at'])
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Принять", callback_data=f"new_order_accept_{order_id}")
+    builder.button(text="❌ Отклонить", callback_data=f"new_order_reject_{order_id}")
+    builder.adjust(2)
+
+    text = (
+        f"🔔 <b>Новый заказ #{order_id}!</b>\n\n"
+        f"👤 Клиент: {order['user_name']} (ID: <code>{order['user_id']}</code>)\n"
+        f"📅 Дата: {date_str}\n"
+        f"💰 Сумма: <b>{order['total']} ₽</b>\n\n"
+        f"Примите заказ в работу или отклоните:"
+    )
+
+    admin_ids = []
+    message_ids = []
+
+    for admin_id in settings.ADMIN_IDS:
+        try:
+            msg = await bot.send_message(
+                admin_id,
+                text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
+            admin_ids.append(admin_id)
+            message_ids.append(msg.message_id)
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка отправки уведомления админу {admin_id}: {e}")
+
+    if admin_ids:
+        await save_admin_notification_ids(order_id, admin_ids, message_ids)
+        logger.info(f"🔔 Уведомление о новом заказе #{order_id} отправлено {len(admin_ids)} админам")
+    return bool(admin_ids)
+
+
+async def new_orders_notify_loop(bot: Bot):
+    """Фоновая задача: поллер новых заказов.
+
+    Заказы создаются веб-приложением (server.py) в отдельном процессе, поэтому
+    бот опрашивает БД и шлёт админам карточки с кнопками «Принять / Отклонить».
+    """
+    logger.info("🔄 Поллер новых заказов запущен")
+    while True:
+        try:
+            orders = await db.get_unnotified_new_orders()
+            for order in orders:
+                # Заказ могли обработать (принять/отклонить) между тиками поллера
+                current = await db.get_order(order['id'])
+                if not current or current['status'] != 'new':
+                    await db.mark_new_order_notified(order['id'])
+                    continue
+
+                if await _notify_admins_new_order(bot, order):
+                    await db.mark_new_order_notified(order['id'])
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка поллера новых заказов: {e}")
+        await asyncio.sleep(NEW_ORDER_POLL_INTERVAL)
+
+
+@router.callback_query(F.data.startswith("new_order_accept_"))
+async def new_order_accept(callback: CallbackQuery, bot: Bot):
+    """Админ принял новый заказ."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    try:
+        order_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка", show_alert=True)
+        return
+
+    order = await db.get_order_full(order_id)
+    if not order:
+        await callback.answer("❌ Заказ не найден", show_alert=True)
+        return
+
+    if order['status'] != 'new':
+        await callback.answer(
+            f"⚠️ Заказ уже обработан (статус: {order['status']})",
+            show_alert=True
+        )
+        return
+
+    await db.update_order_status(order_id, 'confirmed')
+    await callback.answer("✅ Заказ принят в работу!", show_alert=True)
+
+    # Удаляем дубли уведомления у остальных админов
+    try:
+        await clear_admin_notifications(order_id, bot)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось удалить уведомления для заказа #{order_id}: {e}")
+
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>Заказ #{order_id} принят админом</b>\n\n"
+            f"Дубли уведомлений у остальных админов удалены.",
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        pass  # сообщение могло быть удалено clear_admin_notifications
+
+    # Уведомляем пользователя
+    try:
+        await bot.send_message(
+            order['user_id'],
+            f"✅ <b>Ваш заказ #{order_id} подтверждён!</b>\n\n"
+            f"Мы готовим его к отправке 📦\n"
+            f"Спасибо, что выбрали «Семена Знаний»! 🌿",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось уведомить пользователя {order['user_id']}: {e}")
+
+
+@router.callback_query(F.data.startswith("new_order_reject_"))
+async def new_order_reject(callback: CallbackQuery, bot: Bot):
+    """Админ отклонил новый заказ."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    try:
+        order_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка", show_alert=True)
+        return
+
+    order = await db.get_order_full(order_id)
+    if not order:
+        await callback.answer("❌ Заказ не найден", show_alert=True)
+        return
+
+    if order['status'] != 'new':
+        await callback.answer(
+            f"⚠️ Заказ уже обработан (статус: {order['status']})",
+            show_alert=True
+        )
+        return
+
+    await db.update_order_status(order_id, 'cancelled')
+    await callback.answer("❌ Заказ отклонён!", show_alert=True)
+
+    try:
+        await clear_admin_notifications(order_id, bot)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось удалить уведомления для заказа #{order_id}: {e}")
+
+    try:
+        await callback.message.edit_text(
+            f"❌ <b>Заказ #{order_id} отклонён админом</b>\n\n"
+            f"Пользователь уведомлён.",
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        pass  # сообщение могло быть удалено clear_admin_notifications
+
+    # Уведомляем пользователя
+    try:
+        await bot.send_message(
+            order['user_id'],
+            f"❌ <b>Ваш заказ #{order_id} отклонён.</b>\n\n"
+            f"Если у вас есть вопросы, обратитесь в поддержку 🆘",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось уведомить пользователя {order['user_id']}: {e}")
 
 
 # ============================================
