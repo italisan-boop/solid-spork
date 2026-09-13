@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher
 import db
 from config import settings
 from handlers import user, admin_orders, catalog, categories, payments, admin_books, admin_broadcast, admin_promo
+from handlers.admin_orders import new_orders_notify_loop
 from utils import setup_logger
 
 # Настраиваем логгер
@@ -69,10 +70,14 @@ async def start_polling():
     logger.info("🚀 Бот запущен в режиме polling!")
     logger.info(f"🌐 WebApp URL: {settings.WEBAPP_URL}")
     logger.info(f"👥 Админы: {settings.ADMIN_IDS}")
-    
+
+    # Фоновая задача авто-уведомлений о новых заказах
+    notifier_task = asyncio.create_task(new_orders_notify_loop(bot))
+
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        notifier_task.cancel()
         await on_shutdown()
 
 

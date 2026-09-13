@@ -90,6 +90,36 @@ async def update_order_status(order_id: int, status: str):
     print(f"✅ Статус заказа #{order_id} изменён на '{status}'")
 
 
+async def get_unnotified_new_orders(limit: int = 20) -> list:
+    """Заказы в статусе 'new', о которых админы ещё не уведомлены.
+
+    Поллер авто-уведомлений крутит эту функцию и по результату шлёт
+    админам карточку с кнопками «Принять / Отклонить».
+    """
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT id, user_id, user_name, total, status, created_at
+               FROM orders
+               WHERE status = 'new' AND new_order_notified = 0
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def mark_new_order_notified(order_id: int) -> None:
+    """Отметить, что админы уже получили авто-уведомление о заказе."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "UPDATE orders SET new_order_notified = 1 WHERE id = ?",
+            (order_id,),
+        )
+        await db.commit()
+
+
 async def save_admin_notification_ids(order_id: int, admin_ids: list, message_ids: list):
     """Сохранить ID сообщений уведомлений админам для последующего удаления"""
     import json
