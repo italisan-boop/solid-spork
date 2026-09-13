@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 import requests
 import os
 import sqlite3
@@ -346,6 +346,42 @@ def get_all_unique_users():
 # Статусы, которые считаем состоявшейся продажей (оплачено / принято в работу):
 SALES_STATUSES = "'paid','confirmed','completed'"
 
+# Человекочитаемые названия статусов для CSV-экспорта (бухгалтерия).
+STATUS_LABELS = {
+    'new': 'новый',
+    'awaiting_payment': 'ожидает оплаты',
+    'awaiting_stars_payment': 'ожидает оплаты (Stars)',
+    'payment_pending': 'платёж в обработке',
+    'confirmed': 'подтверждён',
+    'paid': 'оплачен',
+    'completed': 'завершён',
+    'cancelled': 'отменён',
+}
+
+
+def _admin_user_id():
+    """user_id из query args для админ-API (или None, если не передан/не число)."""
+    raw = request.args.get('user_id')
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _csv_response(rows, headers, filename):
+    """CSV-ответ с BOM и разделителем ';' — Excel (ru-RU) открывает сразу."""
+    import csv
+    from io import StringIO
+    buf = StringIO()
+    writer = csv.writer(buf, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    response = Response('\ufeff' + buf.getvalue(), mimetype='text/csv; charset=utf-8')
+    response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
 
 def get_dashboard_stats():
     """Сводка для дашборда админа.
@@ -614,6 +650,118 @@ def api_admin_dashboard():
         return jsonify(get_dashboard_stats())
     except Exception as e:
         print(f"❌ Ошибка /api/admin/dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/export/orders', methods=['GET'])
+def api_export_orders():
+    """API: CSV-выгрузка всех заказов для бухгалтерии.
+
+    Только для админов. Реестр заказов: id, дата, статус, покупатель,
+    состав заказа и сумма — закрытая сделка целиком.
+    """
+    user_id = _admin_user_id()
+    if user_id is None:
+        return jsonify({'error': 'user_id is required'}), 400
+    if user_id not in ADMIN_IDS:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT id, created_at, status, user_id, user_name, total "
+            "FROM orders ORDER BY id ASC"
+        )
+        orders = [dict(r) for r in cursor.fetchall()]
+
+        if orders:
+            placeholders = ','.join(['?'] * len(orders))
+            cursor.execute(
+                f"SELECT order_id, title, COUNT(*) AS qty "
+                f"FROM order_items WHERE order_id IN ({placeholders}) "
+                f"GROUP BY order_id, title ORDER BY order_id ASC, title ASC",
+                [o['id'] for o in orders],
+            )
+        else:
+            cursor.execute(
+                "SELECT order_id, title, COUNT(*) AS qty "
+                "FROM order_items WHERE 0 GROUP BY order_id, title"
+            )
+        items_map = {}
+        for r in cursor.fetchall():
+            items_map.setdefault(r['order_id'], []).append(f"{r['title']} ×{r['qty']}")
+        conn.close()
+
+        headers = ['id', 'дата', 'статус', 'user_id', 'имя', 'товары', 'сумма']
+        rows = [
+            [
+                o['id'],
+                o['created_at'],
+                STATUS_LABELS.get(o['status'], o['status']),
+                o['user_id'],
+                o['user_name'] or '',
+                ', '.join(items_map.get(o['id'], [])),
+                o['total'],
+            ]
+            for o in orders
+        ]
+        return _csv_response(rows, headers, 'orders.csv')
+    except Exception as e:
+        print(f"❌ Ошибка /api/admin/export/orders: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/export/books', methods=['GET'])
+def api_export_books():
+    """API: CSV-выгрузка книг с продажами для бухгалтерии.
+
+    Только для админов. Каталог книг дополнен количеством проданных
+    экземпляров и выручкой по оплаченным заказам.
+    """
+    user_id = _admin_user_id()
+    if user_id is None:
+        return jsonify({'error': 'user_id is required'}), 400
+    if user_id not in ADMIN_IDS:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""SELECT b.id, b.title, b.price,
+                       COALESCE(c.name, b.category) AS category,
+                       CASE WHEN b.is_active = 1 THEN 'да' ELSE 'нет' END AS is_active,
+                       COALESCE(s.qty, 0) AS qty,
+                       COALESCE(s.revenue, 0) AS revenue
+                FROM books b
+                LEFT JOIN categories c ON c.id = b.category_id
+                LEFT JOIN (
+                    SELECT oi.book_id, COUNT(*) AS qty, SUM(oi.price) AS revenue
+                    FROM order_items oi
+                    JOIN orders o ON o.id = oi.order_id
+                    WHERE o.status IN ({SALES_STATUSES})
+                    GROUP BY oi.book_id
+                ) s ON s.book_id = b.id
+                ORDER BY revenue DESC, b.title ASC"""
+        )
+        rows = [
+            [r['id'], r['title'], r['price'], r['category'], r['is_active'], r['qty'], r['revenue']]
+            for r in cursor.fetchall()
+        ]
+        conn.close()
+
+        headers = ['id', 'название', 'цена', 'категория', 'активна', 'продано_шт', 'выручка']
+        return _csv_response(rows, headers, 'books.csv')
+    except Exception as e:
+        print(f"❌ Ошибка /api/admin/export/books: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
