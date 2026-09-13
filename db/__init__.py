@@ -55,7 +55,7 @@ from db.orders import (
     get_order_full,
     get_user_orders,
     update_order_status,
-    get_unnotified_new_orders,
+    get_unnotified_pending_orders,
     mark_new_order_notified,
     get_all_orders,
     get_orders_count,
@@ -119,7 +119,7 @@ async def init_db():
         except Exception:
             pass  # Колонка уже существует
 
-        # Флаг «админы уже получили авто-уведомление о новом заказе». Нужен,
+        # Флаг «админы уже получили авто-уведомление о заказе». Нужен,
         # чтобы поллер не спамил дубликатами при каждом тике.
         try:
             await db.execute("ALTER TABLE orders ADD COLUMN new_order_notified INTEGER NOT NULL DEFAULT 0")
