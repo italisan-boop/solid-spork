@@ -572,6 +572,14 @@
             font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;
         }
         .admin-refresh:active { transform: scale(0.98); }
+        .admin-export { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+        .admin-export button {
+            flex: 1; min-width: 120px; padding: 10px 8px;
+            background: var(--surface-alt); color: var(--text);
+            border: 1px solid var(--border); border-radius: 12px;
+            font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .admin-export button:active { transform: scale(0.98); }
         .admin-periods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
         .admin-card {
             background: var(--bg-cream); border: 1px solid var(--border-sage);
@@ -743,6 +751,10 @@
             <div class="modal-body">
                 <h2 class="modal-title">📊 Дашборд</h2>
                 <button class="admin-refresh" onclick="loadAdminDashboard()">🔄 Обновить</button>
+                <div class="admin-export">
+                    <button onclick="exportCSV('orders')">⬇️ Заказы CSV</button>
+                    <button onclick="exportCSV('books')">⬇️ Книги CSV</button>
+                </div>
                 <div class="admin-periods" id="adminPeriods">
                     <div class="admin-card"><div class="admin-card-label">За день</div><div class="admin-card-value" id="admDayRev">—</div><div class="admin-card-sub" id="admDayOrd"></div></div>
                     <div class="admin-card"><div class="admin-card-label">За неделю</div><div class="admin-card-value" id="admWeekRev">—</div><div class="admin-card-sub" id="admWeekOrd"></div></div>
@@ -1776,6 +1788,30 @@
             adminData = d;
             renderAdminDashboard(d);
             if (button) button.style.display = '';
+        }
+
+        async function exportCSV(kind) {
+            if (!userId) return;
+            try {
+                const response = await fetch(`/api/admin/export/${kind}?user_id=${userId}&t=${Date.now()}`);
+                if (!response.ok) {
+                    console.error('Ошибка экспорта:', response.status);
+                    tg.HapticFeedback.notificationOccurred('error');
+                    return;
+                }
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${kind}_${new Date().toISOString().slice(0, 10)}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                tg.HapticFeedback.notificationOccurred('success');
+            } catch (error) {
+                console.error('Ошибка экспорта:', error);
+            }
         }
 
         function openAdminDashboard() {
