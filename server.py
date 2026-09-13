@@ -3,7 +3,7 @@ import requests
 import os
 import sqlite3
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -340,6 +340,78 @@ def get_all_unique_users():
 
 
 # ============================================
+# ДАШБОРД АДМИНА
+# ============================================
+
+# Статусы, которые считаем состоявшейся продажей (оплачено / принято в работу):
+SALES_STATUSES = "'paid','confirmed','completed'"
+
+
+def get_dashboard_stats():
+    """Сводка для дашборда админа.
+
+    Продажи за день/неделю/месяц (скользящие окна от текущего момента),
+    топ-5 книг по количеству проданных экземпляров и средний чек.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # created_at хранится в UTC (дефолт SQLite CURRENT_TIMESTAMP),
+    # поэтому окна строим от datetime.utcnow().
+    now = datetime.utcnow()
+    windows = {
+        'day': now - timedelta(days=1),
+        'week': now - timedelta(days=7),
+        'month': now - timedelta(days=30),
+    }
+
+    periods = {}
+    for key, cutoff in windows.items():
+        cursor.execute(
+            f"SELECT COALESCE(SUM(total), 0) AS revenue, COUNT(*) AS orders "
+            f"FROM orders "
+            f"WHERE status IN ({SALES_STATUSES}) AND created_at >= ?",
+            (cutoff.strftime('%Y-%m-%d %H:%M:%S'),),
+        )
+        row = cursor.fetchone()
+        periods[key] = {'revenue': row['revenue'], 'orders': row['orders']}
+
+    # Топ-5 книг по продажам. quantity не хранится — каждая позиция
+    # в order_items это одна единица товара, считаем по строкам.
+    cursor.execute(
+        f"""SELECT oi.title, COUNT(*) AS qty, SUM(oi.price) AS revenue
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            WHERE o.status IN ({SALES_STATUSES})
+            GROUP BY oi.book_id, oi.title
+            ORDER BY qty DESC, revenue DESC
+            LIMIT 5"""
+    )
+    top_books = [dict(r) for r in cursor.fetchall()]
+
+    # Итоговая статистика для среднего чека
+    cursor.execute(
+        f"SELECT COUNT(*) AS orders, COALESCE(SUM(total), 0) AS revenue "
+        f"FROM orders WHERE status IN ({SALES_STATUSES})"
+    )
+    totals = cursor.fetchone()
+    conn.close()
+
+    t_orders = totals['orders']
+    t_revenue = totals['revenue']
+    avg_check = round(t_revenue / t_orders) if t_orders else 0
+
+    return {
+        'periods': periods,
+        'top_books': top_books,
+        'avg_check': avg_check,
+        'total_orders': t_orders,
+        'total_revenue': t_revenue,
+    }
+
+
+# ============================================
 # ПРОМОКОДЫ
 # ============================================
 
@@ -516,6 +588,30 @@ def api_categories():
         return jsonify({'categories': cats})
     except Exception as e:
         print(f"❌ Ошибка /api/categories: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/dashboard', methods=['GET'])
+def api_admin_dashboard():
+    """API: статистика дашборда админа.
+
+    Только для админов (user_id из ADMIN_IDS). Возвращает продажи за
+    день/неделю/месяц, топ-5 книг и средний чек.
+    """
+    try:
+        user_id = int(request.args.get('user_id', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'user_id is required'}), 400
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    try:
+        return jsonify(get_dashboard_stats())
+    except Exception as e:
+        print(f"❌ Ошибка /api/admin/dashboard: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
