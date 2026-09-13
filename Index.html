@@ -1729,13 +1729,20 @@
 
         async function fetchAdminDashboard() {
             if (!userId) return null;
+            let response;
             try {
-                const response = await fetch('/api/admin/dashboard?user_id=' + userId + '&t=' + Date.now());
-                if (!response.ok) return null;  // 403 — пользователь не админ
-                return await response.json();
+                response = await fetch('/api/admin/dashboard?user_id=' + userId + '&t=' + Date.now());
             } catch (error) {
                 console.error("Ошибка загрузки дашборда:", error);
-                return null;
+                return { retryable: true };
+            }
+            if (response.status === 403) return null;      // не админ — переспрашивать не нужно
+            if (!response.ok) return { retryable: true };  // 404/500 — сервер мог перезапускаться
+            try {
+                return await response.json();
+            } catch (e) {
+                console.error("Некорректный ответ дашборда:", e);
+                return { retryable: true };
             }
         }
 
@@ -1777,9 +1784,17 @@
             const refreshBtn = overlay.querySelector('.admin-refresh');
             if (refreshBtn) refreshBtn.disabled = true;
 
-            const d = await fetchAdminDashboard();
+            let d = await fetchAdminDashboard();
+            // Если сервер только что перезапускался, первый запрос мог упасть
+            // (404/500 с релоадера или "прогрева"). Ретраим — кнопка не должна
+            // прятаться навсегда из-за мимолётной ошибки.
+            for (let attempt = 0; d && d.retryable && attempt < 4; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, [1500, 3000, 6000, 6000][attempt]));
+                d = await fetchAdminDashboard();
+            }
             if (refreshBtn) refreshBtn.disabled = false;
-            if (!d) {
+
+            if (!d || d.retryable) {
                 if (button) button.style.display = 'none';
                 overlay.classList.remove('active');
                 adminData = null;
