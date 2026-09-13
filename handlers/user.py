@@ -33,6 +33,36 @@ support_claims: dict[int, int] = {}
 HISTORY_LIMIT = 50
 support_history: dict[int, list[dict]] = {}
 
+# === ЭСКАЛАЦИЯ НЕОТВЕЧЕННЫХ ТИКЕТОВ ===
+# Последнее сообщение пользователя запоминаем вместе с меткой времени. Если
+# админ не ответил за ESCALATION_TIMEOUT секунд, фоновый поллер
+# support_escalation_loop() дублирует текст всем админам, чтобы тикет не
+# завис на одном закреплённом админе. Как только админ отвечает — трекинг
+# сбрасывается. Всё живёт в памяти процесса (рядом с support_claims) и
+# обнуляется при рестарте — это нормально: эскалация важна для «здесь и сейчас».
+ESCALATION_TIMEOUT = 60
+ESCALATION_POLL_INTERVAL = 15
+support_last_msg_ts: dict[int, float] = {}
+support_last_msg_text: dict[int, str] = {}
+support_last_msg_name: dict[int, str] = {}
+support_escalated: dict[int, bool] = {}
+
+
+def _track_support_message(user_id: int, name: str, text: str) -> None:
+    """Запомнить последнее сообщение пользователя для эскалации."""
+    support_last_msg_ts[user_id] = time.time()
+    support_last_msg_text[user_id] = text
+    support_last_msg_name[user_id] = name
+    support_escalated[user_id] = False
+
+
+def _clear_support_tracking(user_id: int) -> None:
+    """Сбросить трекинг эскалации (админ ответил / юзер вышел из поддержки)."""
+    support_last_msg_ts.pop(user_id, None)
+    support_last_msg_text.pop(user_id, None)
+    support_last_msg_name.pop(user_id, None)
+    support_escalated.pop(user_id, None)
+
 
 def _append_history(user_id: int, role: str, name: str, text: str) -> None:
     """Дописать сообщение в историю диалога и подрезать до HISTORY_LIMIT.
@@ -82,13 +112,31 @@ async def set_support_mode(user_id: int, active: bool) -> None:
         settings.support_pending_users.add(user_id)
     else:
         settings.support_pending_users.discard(user_id)
-        # Пользователь вышел из диалога — отпускаем тикет, чтобы при
-        # следующем обращении в поддержку его мог взять любой админ.
+        # Пользователь вышел из диалога — отпускаем тикет и сбрасываем
+        # трекинг эскалации, чтобы поллер не долбил по вышедшему юзеру.
         support_claims.pop(user_id, None)
+        _clear_support_tracking(user_id)
     try:
         await db.set_support_active(user_id, active)
     except Exception as e:
         logger.warning(f"Не удалось обновить is_support_active для {user_id}: {e}")
+
+
+async def _is_in_support(user_id: int) -> bool:
+    """Проверка, находится ли пользователь в режиме диалога с поддержкой.
+
+    Сверяется и с in-memory кэшем, и с БД — на случай перезапуска процесса,
+    когда кэш пуст, а флаг в БД ещё активен.
+    """
+    in_support = user_id in settings.support_pending_users
+    if not in_support:
+        try:
+            if await db.is_support_active(user_id):
+                settings.support_pending_users.add(user_id)
+                in_support = True
+        except Exception as e:
+            logger.warning(f"is_support_active({user_id}) упал: {e}")
+    return in_support
 
 
 
@@ -283,6 +331,13 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         _append_history(
             user_id,
             role="user",
+            name=message.from_user.full_name or str(user_id),
+            text=message.text,
+        )
+        # Запоминаем сообщение для эскалации: если админ не ответит в течение
+        # ESCALATION_TIMEOUT — поллер продублирует текст всем админам.
+        _track_support_message(
+            user_id,
             name=message.from_user.full_name or str(user_id),
             text=message.text,
         )
@@ -1129,6 +1184,9 @@ async def admin_reply_to_user(message: Message):
             text=history_text,
         )
         await message.bot.send_message(user_id, user_message, parse_mode="HTML")
+        # Админ ответил — сбрасываем трекинг эскалации, чтобы поллер не
+        # дублировал это сообщение повторно.
+        _clear_support_tracking(user_id)
         # На случай, если пользователь был сброшен из support_pending_users
         # (например, после перезапуска бота) — вернём его в режим диалога,
         # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
@@ -1317,6 +1375,68 @@ async def admin_history(message: Message):
             f"<i>{ts}</i> {role} <b>{safe_name}</b>:\n<code>{safe_text}</code>"
         )
     await message.answer("\n\n".join(lines), parse_mode="HTML")
+
+
+async def support_escalation_loop(bot: Bot):
+    """Фоновая задача: эскалация неотвеченных сообщений поддержки.
+
+    Раз в ESCALATION_POLL_INTERVAL секунд перебирает последние сообщения
+    пользователей поддержки и те, на которые админ не ответил в течение
+    ESCALATION_TIMEOUT, дублирует всем админам — чтобы тикет не завис на
+    одном закреплённом админе. Одно сообщение эскалируется только один раз:
+    после отправки ставится флаг, сбрасывается он новым сообщением юзера
+    или ответом админа.
+    """
+    logger.info("🔁 Поллер эскалации поддержки запущен")
+    while True:
+        try:
+            now = time.time()
+            for user_id, ts in list(support_last_msg_ts.items()):
+                if support_escalated.get(user_id):
+                    continue
+                if now - ts < ESCALATION_TIMEOUT:
+                    continue
+                # Юзер вышел из поддержки, пока тикет висел без ответа —
+                # снимаем трекинг, эскалировать уже нечего.
+                if not await _is_in_support(user_id):
+                    _clear_support_tracking(user_id)
+                    continue
+
+                support_escalated[user_id] = True
+                text = support_last_msg_text.get(user_id, "")
+                name = support_last_msg_name.get(user_id, str(user_id))
+                # Экранируем, чтобы HTML в тексте юзера не ломал карточку.
+                safe_text = text.replace("<", "&lt;").replace(">", "&gt;")
+                safe_name = name.replace("<", "&lt;").replace(">", "&gt;")
+                claimed_by = support_claims.get(user_id)
+                claim_note = (
+                    f"🔒 Тикет закреплён за <code>{claimed_by}</code>, но ответа "
+                    f"нет — берёт любой другой админ."
+                    if claimed_by
+                    else "Тикет никто не закрепил — возьмите в работу."
+                )
+                header = (
+                    f"⏰ <b>Эскалация: пользователь ждёт ответа "
+                    f"больше {ESCALATION_TIMEOUT // 60} минуты</b>\n\n"
+                    f"👤 {safe_name} (ID: {user_id})\n"
+                    f"💬 Текст: {safe_text}\n\n"
+                    f"{claim_note}\n\n"
+                    f"Чтобы ответить:\n<code>/reply_{user_id} ваш_ответ</code>\n"
+                    f"Посмотреть историю диалога: <code>/history_{user_id}</code>\n"
+                    f"Закрепить тикет за собой: <code>/claim_{user_id}</code>"
+                )
+                sent = 0
+                for admin_id in settings.ADMIN_IDS:
+                    try:
+                        await bot.send_message(admin_id, header, parse_mode="HTML")
+                        sent += 1
+                    except Exception as e:
+                        logger.warning(f"Не удалось отправить эскалацию админу {admin_id}: {e}")
+                if sent:
+                    logger.info(f"⏰ Эскалация: сообщение юзера {user_id} продублировано {sent} админам")
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка поллера эскалации: {e}")
+        await asyncio.sleep(ESCALATION_POLL_INTERVAL)
 
 
 @router.message(Command("cancel"))
