@@ -90,21 +90,26 @@ async def update_order_status(order_id: int, status: str):
     print(f"✅ Статус заказа #{order_id} изменён на '{status}'")
 
 
-async def get_unnotified_new_orders(limit: int = 20) -> list:
-    """Заказы в статусе 'new', о которых админы ещё не уведомлены.
+# Статусы заказов, требующих внимания админа (для авто-уведомлений)
+PENDING_STATUSES = ('new', 'awaiting_payment', 'awaiting_stars_payment', 'payment_pending')
+
+
+async def get_unnotified_pending_orders(limit: int = 20) -> list:
+    """Заказы, требующие внимания админа, о которых ещё не уведомлены.
 
     Поллер авто-уведомлений крутит эту функцию и по результату шлёт
     админам карточку с кнопками «Принять / Отклонить».
     """
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" * len(PENDING_STATUSES))
         cursor = await db.execute(
-            """SELECT id, user_id, user_name, total, status, created_at
+            f"""SELECT id, user_id, user_name, total, status, created_at
                FROM orders
-               WHERE status = 'new' AND new_order_notified = 0
+               WHERE status IN ({placeholders}) AND new_order_notified = 0
                ORDER BY created_at ASC
                LIMIT ?""",
-            (limit,),
+            (*PENDING_STATUSES, limit),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
