@@ -151,6 +151,18 @@ async def save_admin_notification_ids(order_id: int, admin_ids: list, message_id
         await db.commit()
 
 
+async def replace_admin_notification_ids(order_id: int, pairs: list):
+    """Полностью заменить хранимые ID уведомлений (текстовый квиток -> фото-чек)."""
+    import json
+    data = json.dumps([{"admin_id": a, "message_id": m} for a, m in pairs if m])
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "UPDATE orders SET admin_notification_ids = ? WHERE id = ?",
+            (data, order_id)
+        )
+        await db.commit()
+
+
 async def clear_admin_notifications(order_id: int, bot):
     """Удалить уведомления у всех админов после подтверждения одним из них"""
     import json
