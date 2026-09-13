@@ -47,6 +47,20 @@ support_last_msg_text: dict[int, str] = {}
 support_last_msg_name: dict[int, str] = {}
 support_escalated: dict[int, bool] = {}
 
+# ID сообщений, которые бот разослал админам по тикету пользователя:
+#  - support_forward_msgs: обычные пересылки сообщения из universal_text_handler;
+#  - support_escalation_msgs: дубли со значком «Эскалация» от поллера.
+# Когда кто-то берёт тикет в работу (/claim_<user_id>) или отвечает —
+# все эти сообщения редактируются в «тикет уже в работе / на него ответили»,
+# чтобы остальные админы не путались и не отвечали параллельно.
+# user_id -> список кортежей (chat_id, message_id).
+support_forward_msgs: dict[int, list[tuple[int, int]]] = {}
+support_escalation_msgs: dict[int, list[tuple[int, int]]] = {}
+
+# Максимум отслеживаемых уведомлений на один тикет — режем, чтобы
+# при долгом молчащемся диалоге список не разрастался.
+MAX_TRACKED_ADMIN_MSGS = 40
+
 
 def _track_support_message(user_id: int, name: str, text: str) -> None:
     """Запомнить последнее сообщение пользователя для эскалации."""
@@ -62,6 +76,37 @@ def _clear_support_tracking(user_id: int) -> None:
     support_last_msg_text.pop(user_id, None)
     support_last_msg_name.pop(user_id, None)
     support_escalated.pop(user_id, None)
+    support_forward_msgs.pop(user_id, None)
+    support_escalation_msgs.pop(user_id, None)
+
+
+def _track_admin_msg(user_id: int, chat_id: int, message_id: int,
+                     bucket: dict[int, list[tuple[int, int]]]) -> None:
+    """Запомнить ID разосланного админу уведомления, чтобы потом его переписать."""
+    msgs = bucket.setdefault(user_id, [])
+    msgs.append((chat_id, message_id))
+    if len(msgs) > MAX_TRACKED_ADMIN_MSGS:
+        bucket[user_id] = msgs[-MAX_TRACKED_ADMIN_MSGS:]
+
+
+async def _rewrite_ticket_notices(user_id: int, bot: Bot, status_text: str) -> None:
+    """Переписать все уведомления админов по тикету (пересылки + эскалации).
+
+    Вызывается, когда тикет берут в работу (/claim_<user_id>) или на него уже
+    ответили: вместо «ждите / возьмите в работу» админы видят актуальный статус,
+    чтобы не отвечали параллельно.
+    """
+    buckets = (support_forward_msgs.pop(user_id, []),
+               support_escalation_msgs.pop(user_id, []))
+    for chat_id, message_id in sum(buckets, []):
+        try:
+            await bot.edit_message_text(chat_id, message_id, status_text,
+                                        parse_mode="HTML")
+        except Exception as e:
+            logger.warning(
+                f"Не удалось обновить уведомление по тикету {user_id} "
+                f"({chat_id}/{message_id}): {e}"
+            )
 
 
 def _append_history(user_id: int, role: str, name: str, text: str) -> None:
@@ -357,7 +402,7 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         )
         for admin_id in recipients:
             try:
-                await bot.send_message(
+                sent = await bot.send_message(
                     admin_id,
                     f"🆘 <b>Сообщение от пользователя</b>\n\n"
                     f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
@@ -370,6 +415,8 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
                     f"{claim_note}",
                     parse_mode="HTML"
                 )
+                _track_admin_msg(user_id, admin_id, sent.message_id,
+                                 support_forward_msgs)
             except Exception as e:
                 logger.warning(f"Не удалось отправить сообщение админу {admin_id}: {e}")
         # Не убираем пользователя из support_pending_users — пусть продолжает
@@ -1187,6 +1234,15 @@ async def admin_reply_to_user(message: Message):
         # Админ ответил — сбрасываем трекинг эскалации, чтобы поллер не
         # дублировал это сообщение повторно.
         _clear_support_tracking(user_id)
+        # Уведомления админам (пересылки и эскалации) переписываем в
+        # «на вопрос уже ответили», чтобы остальные не дублировали ответ.
+        await _rewrite_ticket_notices(
+            user_id,
+            message.bot,
+            f"✅ <b>На это сообщение уже ответили</b>\n\n"
+            f"👤 Пользователь ID <code>{user_id}</code> получил ответ "
+            f"от {message.from_user.full_name} (ID: <code>{message.from_user.id}</code>).",
+        )
         # На случай, если пользователь был сброшен из support_pending_users
         # (например, после перезапуска бота) — вернём его в режим диалога,
         # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
@@ -1290,6 +1346,18 @@ async def admin_claim_ticket(message: Message):
         return
 
     support_claims[user_id] = message.from_user.id
+    # Все разосланные по этому тикету уведомления (пересылки и дубли
+    # эскалации) переписываем в «тикет уже в работе» — остальные админы
+    # видят, что вопрос ведёт конкретный человек, и не отвечают параллельно.
+    await _rewrite_ticket_notices(
+        user_id,
+        message.bot,
+        f"🔒 <b>Тикет уже в работе</b>\n\n"
+        f"👤 Пользователь ID <code>{user_id}</code>\n"
+        f"👮 Взял в работу: {message.from_user.full_name} "
+        f"(ID: <code>{message.from_user.id}</code>)\n\n"
+        f"Отвечает он, параллельные ответы коллег не нужны.",
+    )
     await message.answer(
         f"🔒 Тикет пользователя <code>{user_id}</code> закреплён за вами. "
         f"Следующие сообщения от него придут только вам.\n"
@@ -1428,7 +1496,9 @@ async def support_escalation_loop(bot: Bot):
                 sent = 0
                 for admin_id in settings.ADMIN_IDS:
                     try:
-                        await bot.send_message(admin_id, header, parse_mode="HTML")
+                        esc_msg = await bot.send_message(admin_id, header, parse_mode="HTML")
+                        _track_admin_msg(user_id, admin_id, esc_msg.message_id,
+                                         support_escalation_msgs)
                         sent += 1
                     except Exception as e:
                         logger.warning(f"Не удалось отправить эскалацию админу {admin_id}: {e}")
