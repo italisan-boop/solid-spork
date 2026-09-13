@@ -563,6 +563,46 @@
                 height: 380px;  /* Больше на высоких экранах */
             }
         }
+
+        /* === Дашборд админа === */
+        .admin-refresh {
+            width: 100%; padding: 12px; margin-bottom: 16px;
+            background: var(--surface-alt); color: var(--text);
+            border: 1px solid var(--border); border-radius: 12px;
+            font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .admin-refresh:active { transform: scale(0.98); }
+        .admin-periods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+        .admin-card {
+            background: var(--bg-cream); border: 1px solid var(--border-sage);
+            border-radius: 12px; padding: 14px 10px; text-align: center;
+        }
+        .admin-card-label { font-size: 12px; color: var(--text-light); margin-bottom: 6px; }
+        .admin-card-value { font-size: 18px; font-weight: 700; color: var(--primary-green); }
+        .admin-card-sub { font-size: 11px; color: var(--text-light); margin-top: 4px; }
+        .admin-block {
+            background: var(--bg-cream); border-radius: 12px;
+            padding: 14px 16px; margin-bottom: 12px;
+        }
+        .admin-block-title { font-size: 13px; font-weight: 700; color: var(--text-dark); margin-bottom: 10px; }
+        .admin-avg { font-size: 26px; font-weight: 700; color: var(--primary-green); }
+        .admin-avg-sub { font-size: 12px; color: var(--text-light); margin-top: 2px; }
+        .admin-top-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 0; border-bottom: 1px solid var(--border-sage);
+        }
+        .admin-top-item:last-child { border-bottom: none; }
+        .admin-top-rank {
+            min-width: 24px; height: 24px; border-radius: 50%;
+            background: var(--accent); color: var(--tg-button-text);
+            font-size: 12px; font-weight: 700;
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+        }
+        .admin-top-title { flex: 1; font-size: 13px; color: var(--text-dark); }
+        .admin-top-meta { text-align: right; flex-shrink: 0; }
+        .admin-top-qty { font-size: 13px; font-weight: 700; color: var(--text-dark); }
+        .admin-top-rev { font-size: 11px; color: var(--text-light); }
+        .admin-empty { font-size: 13px; color: var(--text-light); padding: 8px 0; }
     </style>
 </head>
 <body>
@@ -572,6 +612,9 @@
     </div>
 
     <div class="header-buttons">
+        <button class="header-btn" id="adminBtn" onclick="openAdminDashboard()" title="Дашборд админа" style="display: none;">
+            📊
+        </button>
         <button class="header-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Сменить тему">
             <span id="themeIcon">🌙</span>
         </button>
@@ -689,6 +732,30 @@
                         <button class="promo-apply-btn" id="cartPromoApplyBtn">Применить</button>
                     </div>
                     <div class="promo-message" id="cartPromoMessage"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="adminOverlay">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeAdminDashboard()">&times;</button>
+            <div class="modal-body">
+                <h2 class="modal-title">📊 Дашборд</h2>
+                <button class="admin-refresh" onclick="loadAdminDashboard()">🔄 Обновить</button>
+                <div class="admin-periods" id="adminPeriods">
+                    <div class="admin-card"><div class="admin-card-label">За день</div><div class="admin-card-value" id="admDayRev">—</div><div class="admin-card-sub" id="admDayOrd"></div></div>
+                    <div class="admin-card"><div class="admin-card-label">За неделю</div><div class="admin-card-value" id="admWeekRev">—</div><div class="admin-card-sub" id="admWeekOrd"></div></div>
+                    <div class="admin-card"><div class="admin-card-label">За месяц</div><div class="admin-card-value" id="admMonthRev">—</div><div class="admin-card-sub" id="admMonthOrd"></div></div>
+                </div>
+                <div class="admin-block">
+                    <div class="admin-block-title">💳 Средний чек (все продажи)</div>
+                    <div class="admin-avg" id="adminAvgCheck">—</div>
+                    <div class="admin-avg-sub" id="adminTotals">—</div>
+                </div>
+                <div class="admin-block">
+                    <div class="admin-block-title">🏆 Топ-5 книг</div>
+                    <div id="adminTopBooks"><div class="admin-empty">Загрузка...</div></div>
                 </div>
             </div>
         </div>
@@ -1639,11 +1706,100 @@
             if (e.target === document.getElementById('paymentOverlay')) closePaymentModal();
         });
 
+        // === ДАШБОРД АДМИНА ===
+        let adminData = null;
+
+        function fmtRub(n) { return (n || 0).toLocaleString('ru-RU') + ' ₽'; }
+
+        function escapeHtml(s) {
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        async function fetchAdminDashboard() {
+            if (!userId) return null;
+            try {
+                const response = await fetch('/api/admin/dashboard?user_id=' + userId + '&t=' + Date.now());
+                if (!response.ok) return null;  // 403 — пользователь не админ
+                return await response.json();
+            } catch (error) {
+                console.error("Ошибка загрузки дашборда:", error);
+                return null;
+            }
+        }
+
+        function renderAdminDashboard(d) {
+            const p = d.periods || {};
+            const setCard = (revEl, ordEl, key) => {
+                const period = p[key] || { revenue: 0, orders: 0 };
+                document.getElementById(revEl).textContent = fmtRub(period.revenue);
+                document.getElementById(ordEl).textContent = `заказов: ${period.orders}`;
+            };
+            setCard('admDayRev', 'admDayOrd', 'day');
+            setCard('admWeekRev', 'admWeekOrd', 'week');
+            setCard('admMonthRev', 'admMonthOrd', 'month');
+
+            document.getElementById('adminAvgCheck').textContent = fmtRub(d.avg_check);
+            document.getElementById('adminTotals').textContent =
+                `Всего заказов: ${d.total_orders} · Выручка: ${fmtRub(d.total_revenue)}`;
+
+            const topEl = document.getElementById('adminTopBooks');
+            if (!d.top_books || d.top_books.length === 0) {
+                topEl.innerHTML = '<div class="admin-empty">Продаж пока нет 😴</div>';
+                return;
+            }
+            topEl.innerHTML = d.top_books.map((b, i) => `
+                <div class="admin-top-item">
+                    <div class="admin-top-rank">${i + 1}</div>
+                    <div class="admin-top-title">${escapeHtml(b.title)}</div>
+                    <div class="admin-top-meta">
+                        <div class="admin-top-qty">${b.qty} шт</div>
+                        <div class="admin-top-rev">${fmtRub(b.revenue)}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadAdminDashboard() {
+            const overlay = document.getElementById('adminOverlay');
+            const button = document.getElementById('adminBtn');
+            const refreshBtn = overlay.querySelector('.admin-refresh');
+            if (refreshBtn) refreshBtn.disabled = true;
+
+            const d = await fetchAdminDashboard();
+            if (refreshBtn) refreshBtn.disabled = false;
+            if (!d) {
+                if (button) button.style.display = 'none';
+                overlay.classList.remove('active');
+                adminData = null;
+                return;
+            }
+            adminData = d;
+            renderAdminDashboard(d);
+            if (button) button.style.display = '';
+        }
+
+        function openAdminDashboard() {
+            document.getElementById('adminOverlay').classList.add('active');
+            tg.HapticFeedback.impactOccurred('medium');
+            if (adminData) renderAdminDashboard(adminData);
+            else loadAdminDashboard();
+        }
+
+        function closeAdminDashboard() {
+            document.getElementById('adminOverlay').classList.remove('active');
+        }
+
+        document.getElementById('adminOverlay').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('adminOverlay')) closeAdminDashboard();
+        });
+
         async function init() {
             await loadCategories();
             await loadBooks();
             updateUI();
             updateWishlistBadge();
+            // Если пользователь админ — показываем кнопку дашборда
+            await loadAdminDashboard();
         }
         init();
     </script>
