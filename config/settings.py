@@ -39,6 +39,10 @@ class Settings:
         # Глобальные состояния для админки
         self.broadcast_pending_users = set()
         self.support_pending_users = set()
+        # Карта закреплённых тикетов: user_id -> admin_id.
+        # Если пользователь в поддержке И закреплён — его сообщения летят
+        # только этому админу, чтобы двое не отвечали одновременно.
+        self.support_claims: dict[int, int] = {}
 
 
 # Глобальный экземпляр настроек

@@ -273,7 +273,9 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
                     f"🆘 <b>Сообщение от пользователя</b>\n\n"
                     f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
                     f"💬 Текст: {message.text}\n\n"
-                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>"
+                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>\n"
+                    f"Быстрые шаблоны: <code>/reply_{message.from_user.id} +greeting</code> и др. — "
+                    f"список: /templates"
                     f"{claim_note}",
                     parse_mode="HTML"
                 )
@@ -1187,7 +1189,10 @@ async def admin_claim_ticket(message: Message):
     await message.answer(
         f"🔒 Тикет пользователя <code>{user_id}</code> закреплён за вами. "
         f"Следующие сообщения от него придут только вам.\n"
-        f"Когда закончите — отпустите командой <code>/release_{user_id}</code>.",
+        f"Когда закончите — отпустите командой <code>/release_{user_id}</code>.\n\n"
+        f"💡 Для быстрых ответов есть шаблоны: <code>/reply_{user_id} +greeting</code> "
+        f"(приветствие), <code>+wait</code>, <code>+resolved</code> и др. "
+        f"Полный список — /templates.",
         parse_mode="HTML",
     )
 
