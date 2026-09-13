@@ -425,7 +425,7 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMCont
     skip_builder.button(text="⏭ Без фото", callback_data=f"payment_skip_photo_{order_id}")
     await bot.send_message(
         order['user_id'],
-        f"📸 <b>Пришлите фото чека или скриншот перевода</b> — "
+        f"📸 Пришлите фото чека или скриншот перевода — "
         f"так администратор подтвердит оплату значительно быстрее.\n\n"
         f"Просто отправьте фото в этот чат. Если не получилось — нажмите «Без фото».",
         reply_markup=skip_builder.as_markup()
@@ -517,7 +517,7 @@ async def payment_receipt_photo(message: Message, bot: Bot, state: FSMContext):
 
     if new_pairs:
         await message.answer(
-            f"✅ <b>Фото чека отправлено администратору!</b>\n\n"
+            f"✅ Фото чека отправлено администратору!\n\n"
             f"Заказ #{order_id} будет подтверждён после проверки. "
             f"Обычно это занимает 5-15 минут 🕐"
         )
@@ -541,7 +541,7 @@ async def payment_receipt_reminder(message: Message, state: FSMContext):
             )
             return
     await message.answer(
-        "📸 Пришлите, пожалуйста, <b>фото чека</b> (скриншот перевода) "
+        "📸 Пришлите, пожалуйста, фото чека (скриншот перевода) "
         "или нажмите кнопку «⏭ Без фото», чтобы перейти дальше."
     )
 
@@ -602,26 +602,30 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
         return
 
+    # Обновляем сообщение СНАЧАЛА: clear_admin_notifications ниже удалит его,
+    # иначе edit упрётся в "message to edit not found". Для фото-чека — caption.
+    confirmed_text = (
+        f"✅ <b>Оплата заказа #{order_id} подтверждена!</b>\n\n"
+        f"👤 Клиент: {order['user_name']} (ID: {order['user_id']})\n"
+        f"💰 Сумма: {order['total']} ₽\n\n"
+        f"Пользователь уведомлён."
+    )
+    try:
+        if getattr(callback.message, 'photo', None):
+            await callback.message.edit_caption(confirmed_text, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(confirmed_text, parse_mode="HTML")
+        logger.info(f"Сообщение обновлено")
+    except Exception as e:
+        logger.warning(f"Не удалось обновить сообщение: {e}")
+        # Продолжаем, даже если не удалось обновить сообщение
+
     # Удаляем уведомления у всех админов
     try:
         await clear_admin_notifications(order_id, bot)
         logger.info(f"Уведомления админам для заказа #{order_id} удалены")
     except Exception as e:
         logger.warning(f"Не удалось удалить уведомления: {e}")
-
-    # Обновляем сообщение
-    try:
-        await callback.message.edit_text(
-            f"✅ <b>Оплата заказа #{order_id} подтверждена!</b>\n\n"
-            f"👤 Клиент: {order['user_name']} (ID: {order['user_id']})\n"
-            f"💰 Сумма: {order['total']} ₽\n\n"
-            f"Пользователь уведомлён.",
-            parse_mode="HTML"
-        )
-        logger.info(f"Сообщение обновлено")
-    except Exception as e:
-        logger.warning(f"Не удалось обновить сообщение: {e}")
-        # Продолжаем, даже если не удалось обновить сообщение
 
     await callback.answer("✅ Оплата подтверждена!", show_alert=True)
 
