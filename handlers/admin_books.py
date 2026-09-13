@@ -162,7 +162,7 @@ async def process_author(message: Message, state: FSMContext, bot: Bot):
         builder.button(text="✅ Всё равно добавить", callback_data="admin_book_duplicate_continue")
         builder.button(text="✏️ Изменить название/автора", callback_data="admin_book_back_title")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
-        builder.adjust(1)
+        builder.adjust(2, 1)
         await message.answer(
             f"⚠️ <b>Такая книга уже есть в каталоге.</b>\n\n"
             f"📖 <b>{duplicate['title']}</b>\n"
@@ -1093,7 +1093,18 @@ async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int)
 
     builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
-    builder.adjust(1)
+    # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
+    # пара на поиск/сброс, пары на сортировку (последний вариант — один), пара снизу.
+    row_sizes: list[int] = [1] * len(books)
+    nav_count = (1 if page > 0 else 0) + (1 if page < total_pages - 1 else 0)
+    if nav_count == 2:
+        row_sizes.append(2)
+    elif nav_count == 1:
+        row_sizes.append(1)
+    row_sizes.append(2 if search_query else 1)
+    row_sizes.extend([2, 2, 1])
+    row_sizes.append(2)
+    builder.adjust(*row_sizes)
 
     try:
         await callback.bot.edit_message_text(
@@ -1241,7 +1252,18 @@ async def render_books_list_for_message(message: Message, state: FSMContext):
         )
     builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
-    builder.adjust(1)
+    # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
+    # пара на поиск/сброс, пары на сортировку (последний вариант — один), пара снизу.
+    row_sizes: list[int] = [1] * len(books)
+    nav_count = (1 if page > 0 else 0) + (1 if page < total_pages - 1 else 0)
+    if nav_count == 2:
+        row_sizes.append(2)
+    elif nav_count == 1:
+        row_sizes.append(1)
+    row_sizes.append(2 if search_query else 1)
+    row_sizes.extend([2, 2, 1])
+    row_sizes.append(2)
+    builder.adjust(*row_sizes)
 
     await message.answer(
         text,
@@ -1278,7 +1300,7 @@ async def edit_book_menu(callback: CallbackQuery, state: FSMContext):
     builder.button(text="✏️ Изменить данные", callback_data=f"admin_book_change_{book_id}")
     builder.button(text="🗑️ Удалить книгу", callback_data=f"admin_book_delete_{book_id}")
     builder.button(text="🔙 Назад к списку", callback_data="admin_books_menu")
-    builder.adjust(1)
+    builder.adjust(2, 1)
     
     try:
         await callback.bot.edit_message_text(
@@ -1518,15 +1540,16 @@ async def start_change_book(callback: CallbackQuery, state: FSMContext):
     await state.update_data(edit_book_id=book_id)
     
     builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ Изменить название", callback_data=f"admin_book_edit_title_{book_id}")
-    builder.button(text="✏️ Изменить автора", callback_data=f"admin_book_edit_author_{book_id}")
-    builder.button(text="✏️ Изменить описание", callback_data=f"admin_book_edit_desc_{book_id}")
-    builder.button(text="✏️ Изменить цену", callback_data=f"admin_book_edit_price_{book_id}")
-    builder.button(text="🖼️ Изменить обложку", callback_data=f"admin_book_edit_cover_{book_id}")
-    builder.button(text="📄 Изменить фото страниц", callback_data=f"admin_book_edit_pages_{book_id}")
-    builder.button(text="📂 Изменить категорию", callback_data=f"admin_book_change_category_{book_id}")
+    # Текстовые поля — парами; медиа — парой; категория и «Назад» отдельно.
+    builder.button(text="✏️ Название", callback_data=f"admin_book_edit_title_{book_id}")
+    builder.button(text="✏️ Автор", callback_data=f"admin_book_edit_author_{book_id}")
+    builder.button(text="✏️ Описание", callback_data=f"admin_book_edit_desc_{book_id}")
+    builder.button(text="✏️ Цена", callback_data=f"admin_book_edit_price_{book_id}")
+    builder.button(text="🖼 Обложка", callback_data=f"admin_book_edit_cover_{book_id}")
+    builder.button(text="📄 Страницы", callback_data=f"admin_book_edit_pages_{book_id}")
+    builder.button(text="📂 Категория", callback_data=f"admin_book_change_category_{book_id}")
     builder.button(text="🔙 Назад к списку", callback_data="admin_books_menu")
-    builder.adjust(1)
+    builder.adjust(2, 2, 2, 1, 1)
     
     try:
         await callback.bot.edit_message_text(
@@ -1888,7 +1911,12 @@ async def edit_book_pages(callback: CallbackQuery, state: FSMContext):
     if images:
         builder.button(text="🧹 Очистить все", callback_data=f"admin_book_pages_clear_{book_id}")
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    builder.adjust(1)
+    # По одной кнопке на фото (чтобы было понятно, какое удаляешь),
+    # затем пара «Добавить/Очистить», затем «Назад» отдельно.
+    row_sizes: list[int] = [1] * len(images)
+    row_sizes.append(2 if images else 1)
+    row_sizes.append(1)
+    builder.adjust(*row_sizes)
 
     try:
         await callback.message.delete()
@@ -1944,7 +1972,7 @@ async def process_new_page_photo(message: Message, state: FSMContext, bot: Bot):
     builder.button(text="➕ Ещё фото", callback_data=f"admin_book_page_add_{book_id}")
     builder.button(text="📄 К списку фото", callback_data=f"admin_book_edit_pages_{book_id}")
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    builder.adjust(1)
+    builder.adjust(2, 1)
     await message.answer(
         f"✅ Фото #{len(current_images)} добавлено. Всего: {len(current_images)}.",
         reply_markup=builder.as_markup(),
@@ -1978,7 +2006,7 @@ async def process_new_page_url(message: Message, state: FSMContext):
     builder.button(text="➕ Ещё фото", callback_data=f"admin_book_page_add_{book_id}")
     builder.button(text="📄 К списку фото", callback_data=f"admin_book_edit_pages_{book_id}")
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    builder.adjust(1)
+    builder.adjust(2, 1)
     await message.answer(
         f"✅ Фото #{len(current_images)} добавлено. Всего: {len(current_images)}.",
         reply_markup=builder.as_markup(),
@@ -2025,7 +2053,12 @@ async def delete_book_page(callback: CallbackQuery, state: FSMContext):
     if images:
         builder.button(text="🧹 Очистить все", callback_data=f"admin_book_pages_clear_{book_id}")
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    builder.adjust(1)
+    # По одной кнопке на фото (чтобы было понятно, какое удаляешь),
+    # затем пара «Добавить/Очистить», затем «Назад» отдельно.
+    row_sizes: list[int] = [1] * len(images)
+    row_sizes.append(2 if images else 1)
+    row_sizes.append(1)
+    builder.adjust(*row_sizes)
 
     try:
         await callback.message.edit_text("\n".join(text_lines), reply_markup=builder.as_markup(), parse_mode="HTML")
@@ -2071,7 +2104,7 @@ async def confirm_delete_book(callback: CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.button(text="🗑️ Да, удалить", callback_data=f"admin_book_delete_confirm_{book_id}")
     builder.button(text="❌ Нет, отмена", callback_data=f"admin_book_edit_{book_id}")
-    builder.adjust(1)
+    builder.adjust(2)
     
     try:
         await callback.bot.edit_message_text(
