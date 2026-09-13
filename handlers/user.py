@@ -34,16 +34,44 @@ support_claims: dict[int, int] = {}
 HISTORY_LIMIT = 50
 support_history: dict[int, list[dict]] = {}
 
-# === РЕЙТ-ЛИМИТ НА ОТВЕТЫ ПОДДЕРЖКИ (/reply_) ===
-# Защита пользователей от спама: нельзя слать ответы чаще, чем раз в
-# REPLY_MIN_GAP секунд одному пользователю, и не больше REPLY_BURST_LIMIT
-# ответов за скользящее окно REPLY_WINDOW на одного админа. Живёт в памяти
-# процесса (как support_claims) — при рестарте обнуляется, это нормально.
-REPLY_MIN_GAP = 3.0        # сек между ответами одному и тому же пользователю
-REPLY_BURST_LIMIT = 8      # макс. ответов админа в скользящем окне
+# === РЕЙТ-ЛИМИТ НА СООБЩЕНИЯ ПОДДЕРЖКИ ===
+# Защита от спама в обе стороны:
+#  - админ → пользователь (/reply_): пауза REPLY_MIN_GAP сек между двумя
+#    ответами одному пользователю + не больше REPLY_BURST_LIMIT ответов в
+#    скользящем окне REPLY_WINDOW на одного админа;
+#  - пользователь → поддержка: те же правила на одного пользователя.
+# Всё живёт в памяти процесса (как support_claims) — при рестарте
+# обнуляется, это нормально.
+REPLY_MIN_GAP = 3.0        # сек между сообщениями одному получателю
+REPLY_BURST_LIMIT = 8      # макс. сообщений в скользящем окне
 REPLY_WINDOW = 60.0        # длина окна, сек
 reply_last_user_ts: dict[tuple[int, int], float] = {}
 reply_admin_log: dict[int, deque] = {}
+user_msg_last_ts: dict[int, float] = {}
+user_msg_log: dict[int, deque] = {}
+
+
+def _rate_limited(gap_log: dict, burst_log: dict, gap_key, burst_key,
+                  gap_s: float = REPLY_MIN_GAP,
+                  burst: int = REPLY_BURST_LIMIT,
+                  window: float = REPLY_WINDOW):
+    """Проверка рейт-лимита на отправку сообщения. Возвращает текст ошибки
+    (лимит превышен) или None, если можно отправлять. Успех фиксируется
+    в словарях gap_log/burst_log — их ключи должны быть раздельными.
+    """
+    now = time.monotonic()
+    last = gap_log.get(gap_key, 0.0)
+    if now - last < gap_s:
+        wait = int(gap_s - (now - last)) + 1
+        return f"⏳ Слишком часто: подождите {wait} сек."
+    log = burst_log.setdefault(burst_key, deque())
+    while log and now - log[0] > window:
+        log.popleft()
+    if len(log) >= burst:
+        return f"⏳ Превышен лимит: не больше {burst} сообщений за минуту."
+    log.append(now)
+    gap_log[gap_key] = now
+    return None
 
 # === ЭСКАЛАЦИЯ НЕОТВЕЧЕННЫХ ТИКЕТОВ ===
 # Последнее сообщение пользователя запоминаем вместе с меткой времени. Если
@@ -387,6 +415,14 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             logger.warning(f"is_support_active({user_id}) упал: {e}")
 
     if in_support:
+        # Рейт-лимит на сообщения пользователя: спам не уходит админам,
+        # не пишется в историю и не триггерит эскалацию.
+        err = _rate_limited(
+            user_msg_last_ts, user_msg_log, user_id, user_id,
+        )
+        if err:
+            await message.answer(err)
+            return
         # Пишем в историю ДО отправки админам — даже если рассылка упадёт,
         # сообщение пользователя в логе останется.
         _append_history(
@@ -1210,27 +1246,13 @@ async def admin_reply_to_user(message: Message):
         body = parts[1].strip() if len(parts) > 1 else ""
 
         # Рейт-лимит: пауза между ответами одному пользователю + лимит админа.
-        now = time.monotonic()
-        key = (message.from_user.id, user_id)
-        last_ts = reply_last_user_ts.get(key, 0.0)
-        if now - last_ts < REPLY_MIN_GAP:
-            await message.answer(
-                f"⏳ Слишком часто: одному пользователю можно отвечать "
-                f"не чаще раза в {int(REPLY_MIN_GAP)} сек."
-            )
+        err = _rate_limited(
+            reply_last_user_ts, reply_admin_log,
+            (message.from_user.id, user_id), message.from_user.id,
+        )
+        if err:
+            await message.answer(err)
             return
-
-        log = reply_admin_log.setdefault(message.from_user.id, deque())
-        while log and now - log[0] > REPLY_WINDOW:
-            log.popleft()
-        if len(log) >= REPLY_BURST_LIMIT:
-            await message.answer(
-                f"⏳ Превышен лимит ответов: не больше {REPLY_BURST_LIMIT} "
-                f"в минуту. Подождите немного."
-            )
-            return
-        log.append(now)
-        reply_last_user_ts[key] = now
 
         # Шаблон быстрого ответа: /reply_<id> +<имя> → подставляем текст.
         # Шаблон отправляется пользователю как есть, без обёртки «Ответ от
