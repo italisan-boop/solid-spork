@@ -57,7 +57,7 @@ async def find_book_by_title_author(title: str, author: str) -> dict | None:
         cursor = await db.execute(
             """SELECT id, title, author, category
                FROM books
-               WHERE is_active = 1
+               WHERE is_active = 1 AND COALESCE(is_archived, 0) = 0
                  AND LOWER(TRIM(title)) = LOWER(TRIM(?))
                  AND LOWER(TRIM(COALESCE(author, ''))) = LOWER(TRIM(COALESCE(?, '')))
                LIMIT 1""",
@@ -76,7 +76,7 @@ async def get_all_books() -> list:
                       c.emoji as category_emoji
                FROM books b
                LEFT JOIN categories c ON b.category_id = c.id
-               WHERE b.is_active = 1
+               WHERE b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
                ORDER BY b.sort_order ASC, b.id ASC"""
         )
         rows = await cursor.fetchall()
@@ -102,7 +102,7 @@ async def get_book(book_id: int) -> dict:
                       c.emoji as category_emoji
                FROM books b
                LEFT JOIN categories c ON b.category_id = c.id
-               WHERE b.id = ? AND b.is_active = 1""",
+               WHERE b.id = ? AND b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0""",
             (book_id,)
         )
         row = await cursor.fetchone()
@@ -110,14 +110,51 @@ async def get_book(book_id: int) -> dict:
 
 
 async def delete_book(book_id: int):
-    """Мягко удалить книгу"""
+    """Мягко удалить (архивировать) книгу.
+
+    Строка остаётся в БД с is_archived=1: заказы, в которых книга
+    участвовала, не теряют ссылку на неё (order_items.book_id и
+    выгрузки для бухгалтерии продолжают видеть книгу). Архивный флаг
+    скрывает книгу из каталога Mini App и админского списка; строку
+    можно вернуть через restore_book().
+    """
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute(
-            "UPDATE books SET is_active = 0 WHERE id = ?",
+            "UPDATE books SET is_archived = 1, is_active = 0 WHERE id = ?",
             (book_id,)
         )
         await db.commit()
-    print(f"✅ Книга #{book_id} удалена из каталога")
+    print(f"✅ Книга #{book_id} перенесена в архив")
+
+
+async def restore_book(book_id: int) -> bool:
+    """Вернуть книгу из архива в каталог (is_archived=0, is_active=1)."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "UPDATE books SET is_archived = 0, is_active = 1 WHERE id = ? AND is_archived = 1",
+            (book_id,)
+        )
+        await db.commit()
+    restored = cursor.rowcount > 0
+    if restored:
+        print(f"✅ Книга #{book_id} восстановлена из архива")
+    return restored
+
+
+async def get_archived_books() -> list:
+    """Получить все книги в архиве (is_archived=1) для админского восстановления."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT b.id, b.title, b.price, b.category, b.emoji, b.category_id,
+                      c.emoji as category_emoji
+               FROM books b
+               LEFT JOIN categories c ON b.category_id = c.id
+               WHERE b.is_archived = 1
+               ORDER BY b.created_at DESC, b.id DESC"""
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
 
 
 async def update_book(book_id: int, **kwargs) -> bool:
@@ -174,12 +211,12 @@ async def get_books_count(is_active: bool = True, search_query: str = "") -> int
         if search_query:
             like = f"%{search_query}%"
             cursor = await db.execute(
-                "SELECT COUNT(*) FROM books WHERE is_active = ? AND LOWER(title) LIKE LOWER(?)",
+                "SELECT COUNT(*) FROM books WHERE is_active = ? AND COALESCE(is_archived, 0) = 0 AND LOWER(title) LIKE LOWER(?)",
                 (1 if is_active else 0, like),
             )
         else:
             cursor = await db.execute(
-                "SELECT COUNT(*) FROM books WHERE is_active = ?",
+                "SELECT COUNT(*) FROM books WHERE is_active = ? AND COALESCE(is_archived, 0) = 0",
                 (1 if is_active else 0,),
             )
         result = await cursor.fetchone()
@@ -221,7 +258,7 @@ async def get_all_books_paginated(
                            c.emoji as category_emoji
                     FROM books b
                     LEFT JOIN categories c ON b.category_id = c.id
-                    WHERE b.is_active = 1 AND LOWER(b.title) LIKE LOWER(?)
+                    WHERE b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0 AND LOWER(b.title) LIKE LOWER(?)
                     ORDER BY {order_clause}
                     LIMIT ? OFFSET ?""",
                 (like, limit, offset),
@@ -233,7 +270,7 @@ async def get_all_books_paginated(
                            c.emoji as category_emoji
                     FROM books b
                 LEFT JOIN categories c ON b.category_id = c.id
-                    WHERE b.is_active = 1
+                    WHERE b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
                     ORDER BY {order_clause}
                     LIMIT ? OFFSET ?""",
                 (limit, offset),
