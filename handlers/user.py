@@ -100,8 +100,12 @@ async def _rewrite_ticket_notices(user_id: int, bot: Bot, status_text: str) -> N
                support_escalation_msgs.pop(user_id, []))
     for chat_id, message_id in sum(buckets, []):
         try:
-            await bot.edit_message_text(chat_id, message_id, status_text,
-                                        parse_mode="HTML")
+            await bot.edit_message_text(
+                text=status_text,
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="HTML",
+            )
         except Exception as e:
             logger.warning(
                 f"Не удалось обновить уведомление по тикету {user_id} "
