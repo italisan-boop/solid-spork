@@ -15,6 +15,13 @@ from utils import format_local_time, parseBookImages, setup_logger
 router = Router()
 logger = setup_logger(__name__)
 
+# Карта закреплённых тикетов поддержки: user_id -> admin_id.
+# Если пользователь в диалоге и его тикет закреплён — сообщения летят
+# только этому админу, чтобы коллеги не отвечали параллельно.
+# Живёт в памяти процесса (рядом с support_pending_users), при рестарте
+# обнуляется — это сознательно: никто не окажется «вечно залоченным».
+support_claims: dict[int, int] = {}
+
 
 def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
@@ -30,6 +37,9 @@ async def set_support_mode(user_id: int, active: bool) -> None:
         settings.support_pending_users.add(user_id)
     else:
         settings.support_pending_users.discard(user_id)
+        # Пользователь вышел из диалога — отпускаем тикет, чтобы при
+        # следующем обращении в поддержку его мог взять любой админ.
+        support_claims.pop(user_id, None)
     try:
         await db.set_support_active(user_id, active)
     except Exception as e:
@@ -223,14 +233,27 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             logger.warning(f"is_support_active({user_id}) упал: {e}")
 
     if in_support:
-        for admin_id in settings.ADMIN_IDS:
+        claimed_by = support_claims.get(user_id)
+        # Если тикет закреплён за конкретным админом — шлём только ему,
+        # чтобы второй админ не отвечал параллельно.
+        recipients = (
+            [claimed_by] if claimed_by in settings.ADMIN_IDS
+            else settings.ADMIN_IDS
+        )
+        claim_note = (
+            f"\n🔒 <i>Тикет закреплён за вами. Чтобы отпустить: "
+            f"<code>/release_{user_id}</code></i>"
+            if claimed_by else ""
+        )
+        for admin_id in recipients:
             try:
                 await bot.send_message(
                     admin_id,
                     f"🆘 <b>Сообщение от пользователя</b>\n\n"
                     f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
                     f"💬 Текст: {message.text}\n\n"
-                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>",
+                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>"
+                    f"{claim_note}",
                     parse_mode="HTML"
                 )
             except Exception as e:
@@ -1034,6 +1057,94 @@ async def admin_reply_to_user(message: Message):
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
+
+
+@router.message(F.text.startswith("/claim_"))
+async def admin_claim_ticket(message: Message):
+    """Админ берёт тикет пользователя в работу: `/claim_<user_id>`.
+
+    После этого сообщения пользователя из поддержки идут только этому
+    админу, чтобы коллеги не отвечали параллельно.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        user_id = int(message.text.split()[0].replace("/claim_", ""))
+    except (ValueError, IndexError):
+        await message.answer("❌ Неверный формат: `/claim_ID`", parse_mode="HTML")
+        return
+
+    in_support = user_id in settings.support_pending_users
+    if not in_support:
+        try:
+            if await db.is_support_active(user_id):
+                settings.support_pending_users.add(user_id)
+                in_support = True
+        except Exception as e:
+            logger.warning(f"is_support_active({user_id}) упал: {e}")
+
+    if not in_support:
+        await message.answer(
+            f"ℹ️ Пользователь ID <code>{user_id}</code> сейчас не в диалоге с поддержкой — "
+            f"закреплять нечего.",
+            parse_mode="HTML",
+        )
+        return
+
+    claimed_by = support_claims.get(user_id)
+    if claimed_by == message.from_user.id:
+        await message.answer(
+            f"✅ Тикет пользователя <code>{user_id}</code> уже закреплён за вами.",
+            parse_mode="HTML",
+        )
+        return
+    if claimed_by is not None:
+        await message.answer(
+            f"🚫 Тикет пользователя <code>{user_id}</code> уже ведёт другой админ "
+            f"(ID <code>{claimed_by}</code>). Попросите коллегу отпустить: "
+            f"<code>/release_{user_id}</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    support_claims[user_id] = message.from_user.id
+    await message.answer(
+        f"🔒 Тикет пользователя <code>{user_id}</code> закреплён за вами. "
+        f"Следующие сообщения от него придут только вам.\n"
+        f"Когда закончите — отпустите командой <code>/release_{user_id}</code>.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(F.text.startswith("/release_"))
+async def admin_release_ticket(message: Message):
+    """Админ отпускает тикет пользователя: `/release_<user_id>`.
+
+    После этого сообщения снова идут всем админам. Снимать может любой
+    админ — это страховка от «зависших» тикетов.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        user_id = int(message.text.split()[0].replace("/release_", ""))
+    except (ValueError, IndexError):
+        await message.answer("❌ Неверный формат: `/release_ID`", parse_mode="HTML")
+        return
+
+    claimed_by = support_claims.get(user_id)
+    if claimed_by is None:
+        await message.answer(
+            f"ℹ️ Тикет пользователя <code>{user_id}</code> не был закреплён.",
+            parse_mode="HTML",
+        )
+        return
+
+    support_claims.pop(user_id, None)
+    await message.answer(
+        f"🔓 Тикет пользователя <code>{user_id}</code> отпущен. "
+        f"Сообщения снова приходят всем админам.",
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("cancel"))
