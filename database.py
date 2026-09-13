@@ -858,14 +858,15 @@ async def get_book(book_id: int) -> dict:
 
 
 async def delete_book(book_id: int):
-    """Мягко удалить книгу"""
+    """Мягко удалить (архивировать) книгу — строка остаётся в БД,
+    заказы не теряют ссылку на неё."""
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute(
-            "UPDATE books SET is_active = 0 WHERE id = ?",
+            "UPDATE books SET is_archived = 1, is_active = 0 WHERE id = ?",
             (book_id,)
         )
         await db.commit()
-    print(f"✅ Книга #{book_id} удалена из каталога")
+    print(f"✅ Книга #{book_id} перенесена в архив")
 
 
 async def update_book(book_id: int, **kwargs) -> bool:
