@@ -717,21 +717,10 @@ def receive_order():
             )
 
         # === УВЕДОМЛЕНИЕ АДМИНАМ ===
-        admin_message = f"🔔 <b>Новый заказ #{order_id}!</b>\n\n👤 Клиент: {user_name} (ID: {user_id})\n"
-        if applied_promo:
-            admin_message += f"🎟️ Промокод: {applied_promo}\n"
-        if applied_bonus:
-            admin_message += f"🎁 Бонус: {applied_bonus}\n"
-        if discount > 0:
-            admin_message += f"💰 Скидка: {discount} ₽\n"
-        admin_message += f"💳 Сумма: {final_total} ₽\n📦 Товаров: {len(cart)}\n💳 Метод: {payment_method}\n\nДетали: <code>/order_{order_id}</code>"
-
-        for admin_id in ADMIN_IDS:
-            result = send_telegram_message(admin_id, admin_message)
-            if result.get('ok'):
-                print(f"   ✅ Уведомление админу {admin_id}")
-            else:
-                print(f"   ❌ Ошибка админу {admin_id}: {result}")
+        # Карточку с кнопками «Принять / Отклонить» отправляет сам бот:
+        # фоновый поллер в handlers/admin_orders.py подхватывает заказ из БД
+        # (статусы из PENDING_STATUSES) и шлёт уведомление автоматически.
+        # Здесь шлём только подтверждение пользователю.
 
         return jsonify(response_data)
 
