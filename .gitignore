@@ -160,6 +160,8 @@ local.properties
 
 # Database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 

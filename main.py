@@ -6,7 +6,6 @@ import secrets
 from urllib.parse import urlparse
 
 from aiohttp import web
-from aiohttp_wsgi import WSGIHandler
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.types import CallbackQuery, Update
 
@@ -160,6 +159,14 @@ async def webhook_shutdown(app: web.Application):
 
 
 def create_webhook_app() -> web.Application:
+    try:
+        from aiohttp_wsgi import WSGIHandler
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "RUN_MODE=webhook requires aiohttp-wsgi; install dependencies with "
+            "python -m pip install -r requirements.txt"
+        ) from exc
+
     from server import app as flask_app
 
     wsgi_handler = WSGIHandler(flask_app)

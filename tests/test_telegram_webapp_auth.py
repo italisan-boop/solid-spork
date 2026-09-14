@@ -123,6 +123,11 @@ class TelegramProtectedRoutesTests(unittest.TestCase):
         response = self.client.get("/api/books")
         self.assertEqual(200, response.status_code)
 
+    def test_favicon_is_not_reported_as_missing(self):
+        response = self.client.get("/favicon.ico")
+        self.assertEqual(204, response.status_code)
+        self.assertEqual("public, max-age=86400", response.headers["Cache-Control"])
+
 
 if __name__ == "__main__":
     unittest.main()

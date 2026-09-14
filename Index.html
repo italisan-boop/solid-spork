@@ -389,11 +389,21 @@
         .cart-qty { font-size: 14px; font-weight: 600; min-width: 20px; text-align: center; }
         .cart-remove-btn {
             width: 28px; height: 28px; border: none; border-radius: 50%;
-            background: var(--heart-color); color: white;
-            font-size: 16px; cursor: pointer;
+            background: var(--accent); color: var(--accent-text);
+            font-size: 20px; line-height: 1; font-weight: 600; cursor: pointer;
             display: flex; align-items: center; justify-content: center;
         }
         .cart-remove-btn:active { transform: scale(0.9); }
+        .payment-method-select {
+            width: 100%; margin: 8px 0 16px; padding: 10px;
+            border: 1px solid var(--border-sage); border-radius: 8px;
+            background: var(--surface-alt); color: var(--text);
+            font: inherit;
+        }
+        .payment-method-select:disabled { color: var(--text-muted); opacity: 1; }
+        .payment-method-select option { background: var(--surface); color: var(--text); }
+        [data-theme="dark"] .payment-method-select { color-scheme: dark; }
+        [data-theme="light"] .payment-method-select { color-scheme: light; }
 
         .cart-summary-box {
             background: var(--bg-cream); border-radius: 12px;
@@ -718,7 +728,7 @@
                 <div class="cart-items" id="cartItems"></div>
                 <div class="cart-summary-box">
                     <label class="cart-total-label" for="paymentMethodSelect">Способ оплаты</label>
-                    <select id="paymentMethodSelect" style="width: 100%; margin: 8px 0 16px; padding: 10px; border: 1px solid var(--border-sage); border-radius: 8px; background: var(--cream);">
+                    <select id="paymentMethodSelect" class="payment-method-select">
                         <option value="">Загрузка способов оплаты…</option>
                     </select>
                     <div class="cart-total-row">

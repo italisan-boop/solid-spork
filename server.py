@@ -831,6 +831,11 @@ def index():
     return send_from_directory('.', page)
 
 
+@app.route('/favicon.ico', methods=['GET'])
+def favicon():
+    return Response(status=204, headers={'Cache-Control': 'public, max-age=86400'})
+
+
 @app.route('/api/books', methods=['GET'])
 def api_books():
     """API: список книг с поддержкой сортировки"""
