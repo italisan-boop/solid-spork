@@ -98,6 +98,12 @@ support_escalated: dict[int, bool] = {}
 support_forward_msgs: dict[int, list[tuple[int, int]]] = {}
 support_escalation_msgs: dict[int, list[tuple[int, int]]] = {}
 
+# Обратная карта для нативного «Ответить» в Telegram: (chat_id, message_id) -> user_id.
+# Заполняется для каждого сообщения, которое бот разослал админам по тикету
+# (пересылки, эскалации) и для каждого ответа админа. По этой карте бот по
+# reply_to_message находит, к пользователю какого тикета относится ответ.
+support_msg_owner: dict[tuple[int, int], int] = {}
+
 # Максимум отслеживаемых уведомлений на один тикет — режем, чтобы
 # при долгом молчащемся диалоге список не разрастался.
 MAX_TRACKED_ADMIN_MSGS = 40
@@ -128,6 +134,7 @@ def _track_admin_msg(user_id: int, chat_id: int, message_id: int,
     msgs.append((chat_id, message_id))
     if len(msgs) > MAX_TRACKED_ADMIN_MSGS:
         bucket[user_id] = msgs[-MAX_TRACKED_ADMIN_MSGS:]
+    support_msg_owner[(chat_id, message_id)] = user_id
 
 
 async def _rewrite_ticket_notices(user_id: int, bot: Bot, status_text: str) -> None:
@@ -186,6 +193,24 @@ SUPPORT_TEMPLATES: dict[str, str] = {
     ),
     "resolved": "Ваш вопрос решён ✅. Если появятся ещё вопросы — пишите, мы на связи.",
 }
+
+
+def _ticket_action_markup(user_id: int):
+    """Инлайн-кнопки для уведомления о тикете.
+
+    Нужны для нативного «Ответить» в Telegram и для навигации по тикету
+    без набора команд. Каждая кнопка несёт в callback_data идентификатор
+    тикета, чтобы админу не приходилось копировать user_id.
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⚡ Ответить", callback_data=f"support_reply:{user_id}")
+    builder.button(text="📜 История", callback_data=f"support_history:{user_id}")
+    if support_claims.get(user_id):
+        builder.button(text="🔓 Отпустить", callback_data=f"support_release:{user_id}")
+    else:
+        builder.button(text="🔒 Взять в работу", callback_data=f"support_claim:{user_id}")
+    builder.adjust(2)
+    return builder.as_markup()
 
 
 def is_admin(user_id: int) -> bool:
@@ -453,20 +478,24 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             else f"\nЧтобы взять тикет в работу и не отвечать параллельно с коллегами: "
                  f"<code>/claim_{user_id}</code>"
         )
+        header = (
+            f"🆘 <b>Сообщение от пользователя</b>\n\n"
+            f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
+            f"💬 Текст: {message.text}\n\n"
+            f"Как ответить:\n"
+            f"• просто нажмите «Ответить» на это сообщение (лучший вариант)\n"
+            f"• или кнопки ниже\n"
+            f"• или командой <code>/reply_{message.from_user.id} текст</code>\n"
+            f"Посмотреть диалог: <code>/history_{message.from_user.id}</code>"
+            f"{claim_note}"
+        )
         for admin_id in recipients:
             try:
                 sent = await bot.send_message(
                     admin_id,
-                    f"🆘 <b>Сообщение от пользователя</b>\n\n"
-                    f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
-                    f"💬 Текст: {message.text}\n\n"
-                    f"Чтобы ответить:\n<code>/reply_{message.from_user.id} ваш_ответ</code>\n"
-                    f"Быстрые шаблоны: <code>/reply_{message.from_user.id} +greeting</code> и др. — "
-                    f"список: /templates\n"
-                    f"Посмотреть последние 20 сообщений: "
-                    f"<code>/history_{message.from_user.id}</code>"
-                    f"{claim_note}",
-                    parse_mode="HTML"
+                    header,
+                    reply_markup=_ticket_action_markup(user_id),
+                    parse_mode="HTML",
                 )
                 _track_admin_msg(user_id, admin_id, sent.message_id,
                                  support_forward_msgs)
@@ -1237,6 +1266,127 @@ async def handle_photo(message: Message, state: FSMContext):
         await message.answer("❌ Сейчас не ожидаю фото. Используйте /cancel для отмены.")
 
 
+async def _send_admin_reply(message: Message, user_id: int, body: str):
+    """Единая отправка ответа пользователю поддержки.
+
+    Используется из трёх точек входа:
+      - команда /reply_<user_id> текст;
+      - нативный reply на уведомление/ответ в чате админа (в reply-хендлере
+        admin_support);
+      - кнопка «⚡ Ответить» (через FSM SupportReplyState).
+
+    Возвращает кортеж (ok: bool, status_text: str) — текст для показа админу.
+    Рейт-лимит применяется в любом случае, чтобы нельзя было обойти его
+    разными точками входа.
+    """
+    # Рейт-лимит: пауза между ответами одному пользователю + лимит админа.
+    err = _rate_limited(
+        reply_last_user_ts, reply_admin_log,
+        (message.from_user.id, user_id), message.from_user.id,
+    )
+    if err:
+        return False, err
+
+    # Шаблон быстрого ответа: <текст вместо команды> +<имя> → подставляем текст.
+    # С префиксом «ответа»-реплая шаблон работает так же, как в /reply_<id> +<имя>.
+    is_template = body.startswith("+")
+    if is_template:
+        template_name = body[1:].split()[0] if body[1:].strip() else ""
+        reply_text = SUPPORT_TEMPLATES.get(template_name)
+        if reply_text is None:
+            names = ", ".join(f"<code>+{n}</code>" for n in SUPPORT_TEMPLATES)
+            return False, (
+                f"❌ Шаблон <code>+{template_name}</code> не найден.\n\n"
+                f"Доступные шаблоны: {names}\n"
+                f"Полный список с текстами — /templates"
+            )
+        user_message = f"{reply_text}\n\nМожете ответить прямо здесь — сообщение придёт администратору."
+    else:
+        # Обычный ответ: оборачиваем в шапку «Ответ от поддержки».
+        if not body:
+            body = "Без текста"
+        user_message = (
+            f"💬 <b>Ответ от поддержки «Семена Знаний»:</b>\n\n"
+            f"{body}\n\n"
+            f"Можете ответить прямо здесь — сообщение придёт администратору."
+        )
+
+    # В историю пишем «чистый» текст ответа (без обёртки «Ответ от
+    # поддержки…» и трейлера «Можете ответить прямо здесь…»), чтобы
+    # админу в /history_<id> было удобно читать.
+    history_text = reply_text if is_template else (body or "Без текста")
+    _append_history(
+        user_id,
+        role="admin",
+        name=message.from_user.full_name or str(message.from_user.id),
+        text=history_text,
+    )
+    try:
+        await message.bot.send_message(user_id, user_message, parse_mode="HTML")
+    except TelegramForbiddenError:
+        # Пользователь заблокировал бота — переключаем его из режима диалога,
+        # чтобы дальнейшие попытки не сыпались в пустоту.
+        await set_support_mode(user_id, False)
+        logger.warning(f"Не удалось отправить ответ пользователю {user_id}: бот заблокирован")
+        return False, (
+            f"🚫 Пользователь ID <code>{user_id}</code> заблокировал бота — "
+            f"доставить ответ нельзя. Диалог с поддержкой для него закрыт."
+        )
+    except Exception as e:
+        return False, f"❌ Ошибка: {e}"
+
+    # Админ ответил — сбрасываем трекинг эскалации, чтобы поллер не
+    # дублировал это сообщение повторно.
+    _clear_support_tracking(user_id)
+    # Уведомления админам (пересылки и эскалации) переписываем в
+    # «на вопрос уже ответили», чтобы остальные не дублировали ответ.
+    await _rewrite_ticket_notices(
+        user_id,
+        message.bot,
+        f"✅ <b>На это сообщение уже ответили</b>\n\n"
+        f"👤 Пользователь ID <code>{user_id}</code> получил ответ "
+        f"от {message.from_user.full_name} (ID: <code>{message.from_user.id}</code>).",
+    )
+    # На случай, если пользователь был сброшен из support_pending_users
+    # (например, после перезапуска бота) — вернём его в режим диалога,
+    # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
+    await set_support_mode(user_id, True)
+
+    # Запоминаем сообщение-ответ админа в обратной карте: если админ потом
+    # нажмёт «Ответить» на своё же сообщение (цепочка), мы поймём, кому оно.
+    _remember_admin_chain_message(message, user_id)
+
+    claim_hint = (
+        f"\n\n💡 <i>Чтобы коллеги не отвечали параллельно — "
+        f"закрепите тикет за собой:</i> <code>/claim_{user_id}</code>\n"
+        f"<i>Когда закончите — отпустите:</i> <code>/release_{user_id}</code>"
+        if support_claims.get(user_id) != message.from_user.id
+        else f"\n\n🔒 <i>Тикет уже закреплён за вами. "
+             f"Отпустить:</i> <code>/release_{user_id}</code>"
+    )
+    used_note = (
+        f" (шаблон <code>+{template_name}</code>)" if is_template else ""
+    )
+    return True, f"✅ Ответ отправлен пользователю ID {user_id}!{used_note}{claim_hint}"
+
+
+def _remember_admin_chain_message(message: Message, user_id: int) -> None:
+    """Записать сообщение админа в обратную карту для «ответа на ответ».
+
+    Админ может нажать Telegram-«Ответить» на уведомление бота или на
+    предыдущее сообщение в цепочке. Чтобы во всех случаях найти тикет,
+    запоминаем и ID сообщения-уведомления (это делает _track_admin_msg),
+    и ID «чистого» сообщения админа.
+    """
+    if message.from_user:
+        support_msg_owner[(message.chat.id, message.message_id)] = user_id
+        # Сообщение, на которое админ ответил (если это было уведомление бота
+        # или ответ коллеги) — тоже перепривязываем на текущего юзера.
+        r = message.reply_to_message
+        if r:
+            support_msg_owner[(r.chat.id, r.message_id)] = user_id
+
+
 @router.message(F.text.startswith("/reply_"))
 async def admin_reply_to_user(message: Message):
     if not is_admin(message.from_user.id):
@@ -1245,99 +1395,10 @@ async def admin_reply_to_user(message: Message):
         parts = message.text.split(maxsplit=1)
         user_id = int(parts[0].replace("/reply_", ""))
         body = parts[1].strip() if len(parts) > 1 else ""
-
-        # Рейт-лимит: пауза между ответами одному пользователю + лимит админа.
-        err = _rate_limited(
-            reply_last_user_ts, reply_admin_log,
-            (message.from_user.id, user_id), message.from_user.id,
-        )
-        if err:
-            await message.answer(err)
-            return
-
-        # Шаблон быстрого ответа: /reply_<id> +<имя> → подставляем текст.
-        # Шаблон отправляется пользователю как есть, без обёртки «Ответ от
-        # поддержки», чтобы не дублировать приветствие из самого шаблона.
-        is_template = body.startswith("+")
-        if is_template:
-            template_name = body[1:].split()[0] if body[1:].strip() else ""
-            reply_text = SUPPORT_TEMPLATES.get(template_name)
-            if reply_text is None:
-                names = ", ".join(f"<code>+{n}</code>" for n in SUPPORT_TEMPLATES)
-                await message.answer(
-                    f"❌ Шаблон <code>+{template_name}</code> не найден.\n\n"
-                    f"Доступные шаблоны: {names}\n"
-                    f"Полный список с текстами — /templates",
-                    parse_mode="HTML",
-                )
-                return
-            user_message = f"{reply_text}\n\nМожете ответить прямо здесь — сообщение придёт администратору."
-        else:
-            # Обычный ответ: оборачиваем в шапку «Ответ от поддержки».
-            if not body:
-                body = "Без текста"
-            user_message = (
-                f"💬 <b>Ответ от поддержки «Семена Знаний»:</b>\n\n"
-                f"{body}\n\n"
-                f"Можете ответить прямо здесь — сообщение придёт администратору."
-            )
-
-        # В историю пишем «чистый» текст ответа (без обёртки «Ответ от
-        # поддержки…» и трейлера «Можете ответить прямо здесь…»), чтобы
-        # админу в /history_<id> было удобно читать.
-        history_text = reply_text if is_template else (body or "Без текста")
-        _append_history(
-            user_id,
-            role="admin",
-            name=message.from_user.full_name or str(message.from_user.id),
-            text=history_text,
-        )
-        await message.bot.send_message(user_id, user_message, parse_mode="HTML")
-        # Админ ответил — сбрасываем трекинг эскалации, чтобы поллер не
-        # дублировал это сообщение повторно.
-        _clear_support_tracking(user_id)
-        # Уведомления админам (пересылки и эскалации) переписываем в
-        # «на вопрос уже ответили», чтобы остальные не дублировали ответ.
-        await _rewrite_ticket_notices(
-            user_id,
-            message.bot,
-            f"✅ <b>На это сообщение уже ответили</b>\n\n"
-            f"👤 Пользователь ID <code>{user_id}</code> получил ответ "
-            f"от {message.from_user.full_name} (ID: <code>{message.from_user.id}</code>).",
-        )
-        # На случай, если пользователь был сброшен из support_pending_users
-        # (например, после перезапуска бота) — вернём его в режим диалога,
-        # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
-        await set_support_mode(user_id, True)
-        claim_hint = (
-            f"\n\n💡 <i>Чтобы коллеги не отвечали параллельно — "
-            f"закрепите тикет за собой:</i> <code>/claim_{user_id}</code>\n"
-            f"<i>Когда закончите — отпустите:</i> <code>/release_{user_id}</code>"
-            if support_claims.get(user_id) != message.from_user.id
-            else f"\n\n🔒 <i>Тикет уже закреплён за вами. "
-                 f"Отпустить:</i> <code>/release_{user_id}</code>"
-        )
-        used_note = (
-            f" (шаблон <code>+{template_name}</code>)" if is_template else ""
-        )
-        await message.answer(
-            f"✅ Ответ отправлен пользователю ID {user_id}!{used_note}{claim_hint}",
-            parse_mode="HTML",
-        )
+        ok, status_text = await _send_admin_reply(message, user_id, body)
+        await message.answer(status_text, parse_mode="HTML")
     except (ValueError, IndexError):
         await message.answer("❌ Неверный формат: `/reply_ID текст`", parse_mode="HTML")
-    except TelegramForbiddenError:
-        # Пользователь заблокировал бота — переключаем его из режима диалога,
-        # чтобы дальнейшие попытки не сыпались в пустоту.
-        await set_support_mode(user_id, False)
-        logger.warning(f"Не удалось отправить ответ пользователю {user_id}: бот заблокирован")
-        await message.answer(
-            f"🚫 Пользователь ID <code>{user_id}</code> заблокировал бота — "
-            f"доставить ответ нельзя. Диалог с поддержкой для него закрыт.",
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
 
 
 @router.message(Command("templates"))
@@ -1359,21 +1420,11 @@ async def admin_list_templates(message: Message):
     await message.answer("\n\n".join(lines), parse_mode="HTML")
 
 
-@router.message(F.text.startswith("/claim_"))
-async def admin_claim_ticket(message: Message):
-    """Админ берёт тикет пользователя в работу: `/claim_<user_id>`.
+async def _claim_ticket(user_id: int, admin_id: int, admin_name: str, bot: Bot) -> str:
+    """Закрепить тикет за админом (общая логика для команды и кнопки).
 
-    После этого сообщения пользователя из поддержки идут только этому
-    админу, чтобы коллеги не отвечали параллельно.
+    Возвращает текст-статус для админа.
     """
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        user_id = int(message.text.split()[0].replace("/claim_", ""))
-    except (ValueError, IndexError):
-        await message.answer("❌ Неверный формат: `/claim_ID`", parse_mode="HTML")
-        return
-
     in_support = user_id in settings.support_pending_users
     if not in_support:
         try:
@@ -1384,108 +1435,68 @@ async def admin_claim_ticket(message: Message):
             logger.warning(f"is_support_active({user_id}) упал: {e}")
 
     if not in_support:
-        await message.answer(
+        return (
             f"ℹ️ Пользователь ID <code>{user_id}</code> сейчас не в диалоге с поддержкой — "
-            f"закреплять нечего.",
-            parse_mode="HTML",
+            f"закреплять нечего."
         )
-        return
 
     claimed_by = support_claims.get(user_id)
-    if claimed_by == message.from_user.id:
-        await message.answer(
-            f"✅ Тикет пользователя <code>{user_id}</code> уже закреплён за вами.",
-            parse_mode="HTML",
-        )
-        return
+    if claimed_by == admin_id:
+        return f"✅ Тикет пользователя <code>{user_id}</code> уже закреплён за вами."
     if claimed_by is not None:
-        await message.answer(
+        return (
             f"🚫 Тикет пользователя <code>{user_id}</code> уже ведёт другой админ "
             f"(ID <code>{claimed_by}</code>). Попросите коллегу отпустить: "
-            f"<code>/release_{user_id}</code>.",
-            parse_mode="HTML",
+            f"<code>/release_{user_id}</code>."
         )
-        return
 
-    support_claims[user_id] = message.from_user.id
+    support_claims[user_id] = admin_id
     # Все разосланные по этому тикету уведомления (пересылки и дубли
     # эскалации) переписываем в «тикет уже в работе» — остальные админы
     # видят, что вопрос ведёт конкретный человек, и не отвечают параллельно.
     await _rewrite_ticket_notices(
         user_id,
-        message.bot,
+        bot,
         f"🔒 <b>Тикет уже в работе</b>\n\n"
         f"👤 Пользователь ID <code>{user_id}</code>\n"
-        f"👮 Взял в работу: {message.from_user.full_name} "
-        f"(ID: <code>{message.from_user.id}</code>)\n\n"
+        f"👮 Взял в работу: {admin_name} "
+        f"(ID: <code>{admin_id}</code>)\n\n"
         f"Отвечает он, параллельные ответы коллег не нужны.",
     )
-    await message.answer(
+    return (
         f"🔒 Тикет пользователя <code>{user_id}</code> закреплён за вами. "
         f"Следующие сообщения от него придут только вам.\n"
         f"Когда закончите — отпустите командой <code>/release_{user_id}</code>.\n\n"
         f"💡 Для быстрых ответов есть шаблоны: <code>/reply_{user_id} +greeting</code> "
         f"(приветствие), <code>+wait</code>, <code>+resolved</code> и др. "
-        f"Полный список — /templates.",
-        parse_mode="HTML",
+        f"Полный список — /templates."
     )
 
 
-@router.message(F.text.startswith("/release_"))
-async def admin_release_ticket(message: Message):
-    """Админ отпускает тикет пользователя: `/release_<user_id>`.
+def _release_ticket(user_id: int) -> str:
+    """Отпустить тикет (общая логика для команды и кнопки).
 
-    После этого сообщения снова идут всем админам. Снимать может любой
-    админ — это страховка от «зависших» тикетов.
+    Снимать может любой админ — это страховка от «зависших» тикетов.
     """
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        user_id = int(message.text.split()[0].replace("/release_", ""))
-    except (ValueError, IndexError):
-        await message.answer("❌ Неверный формат: `/release_ID`", parse_mode="HTML")
-        return
-
     claimed_by = support_claims.get(user_id)
     if claimed_by is None:
-        await message.answer(
-            f"ℹ️ Тикет пользователя <code>{user_id}</code> не был закреплён.",
-            parse_mode="HTML",
-        )
-        return
+        return f"ℹ️ Тикет пользователя <code>{user_id}</code> не был закреплён."
 
     support_claims.pop(user_id, None)
-    await message.answer(
+    return (
         f"🔓 Тикет пользователя <code>{user_id}</code> отпущен. "
-        f"Сообщения снова приходят всем админам.",
-        parse_mode="HTML",
+        f"Сообщения снова приходят всем админам."
     )
 
 
-@router.message(F.text.startswith("/history_"))
-async def admin_history(message: Message):
-    """История диалога с пользователем: `/history_<user_id>`.
-
-    Показывает последние 20 сообщений (от пользователя и от поддержки)
-    из in-memory лога, который пишется в `universal_text_handler` и
-    `admin_reply_to_user`. При рестарте процесса лог обнуляется.
-    """
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        user_id = int(message.text.split()[0].replace("/history_", ""))
-    except (ValueError, IndexError):
-        await message.answer("❌ Неверный формат: `/history_ID`", parse_mode="HTML")
-        return
-
+def _build_history_text(user_id: int) -> str:
+    """Сформировать текст истории диалога (общая логика для команды и кнопки)."""
     entries = support_history.get(user_id) or []
     if not entries:
-        await message.answer(
+        return (
             f"ℹ️ История диалога с <code>{user_id}</code> пуста "
-            f"(либо диалога ещё не было, либо процесс был перезапущен).",
-            parse_mode="HTML",
+            f"(либо диалога ещё не было, либо процесс был перезапущен)."
         )
-        return
 
     last = entries[-20:]
     header = (
@@ -1504,7 +1515,68 @@ async def admin_history(message: Message):
         lines.append(
             f"<i>{ts}</i> {role} <b>{safe_name}</b>:\n<code>{safe_text}</code>"
         )
-    await message.answer("\n\n".join(lines), parse_mode="HTML")
+    return "\n\n".join(lines)
+
+
+@router.message(F.text.startswith("/claim_"))
+async def admin_claim_ticket(message: Message):
+    """Админ берёт тикет пользователя в работу: `/claim_<user_id>`.
+
+    После этого сообщения пользователя из поддержки идут только этому
+    админу, чтобы коллеги не отвечали параллельно.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        user_id = int(message.text.split()[0].replace("/claim_", ""))
+    except (ValueError, IndexError):
+        await message.answer("❌ Неверный формат: `/claim_ID`", parse_mode="HTML")
+        return
+
+    status_text = await _claim_ticket(
+        user_id,
+        message.from_user.id,
+        message.from_user.full_name,
+        message.bot,
+    )
+    await message.answer(status_text, parse_mode="HTML")
+
+
+@router.message(F.text.startswith("/release_"))
+async def admin_release_ticket(message: Message):
+    """Админ отпускает тикет пользователя: `/release_<user_id>`.
+
+    После этого сообщения снова идут всем админам. Снимать может любой
+    админ — это страховка от «зависших» тикетов.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        user_id = int(message.text.split()[0].replace("/release_", ""))
+    except (ValueError, IndexError):
+        await message.answer("❌ Неверный формат: `/release_ID`", parse_mode="HTML")
+        return
+
+    await message.answer(_release_ticket(user_id), parse_mode="HTML")
+
+
+@router.message(F.text.startswith("/history_"))
+async def admin_history(message: Message):
+    """История диалога с пользователем: `/history_<user_id>`.
+
+    Показывает последние 20 сообщений (от пользователя и от поддержки)
+    из in-memory лога, который пишется в `universal_text_handler`,
+    `_send_admin_reply` и кнопках. При рестарте процесса лог обнуляется.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        user_id = int(message.text.split()[0].replace("/history_", ""))
+    except (ValueError, IndexError):
+        await message.answer("❌ Неверный формат: `/history_ID`", parse_mode="HTML")
+        return
+
+    await message.answer(_build_history_text(user_id), parse_mode="HTML")
 
 
 async def support_escalation_loop(bot: Bot):
@@ -1551,14 +1623,21 @@ async def support_escalation_loop(bot: Bot):
                     f"👤 {safe_name} (ID: {user_id})\n"
                     f"💬 Текст: {safe_text}\n\n"
                     f"{claim_note}\n\n"
-                    f"Чтобы ответить:\n<code>/reply_{user_id} ваш_ответ</code>\n"
-                    f"Посмотреть историю диалога: <code>/history_{user_id}</code>\n"
-                    f"Закрепить тикет за собой: <code>/claim_{user_id}</code>"
+                    f"Как ответить:\n"
+                    f"• нажмите «Ответить» на это сообщение\n"
+                    f"• или кнопки ниже\n"
+                    f"• или <code>/reply_{user_id} текст</code>\n"
+                    f"Посмотреть диалог: <code>/history_{user_id}</code>"
                 )
                 sent = 0
                 for admin_id in settings.ADMIN_IDS:
                     try:
-                        esc_msg = await bot.send_message(admin_id, header, parse_mode="HTML")
+                        esc_msg = await bot.send_message(
+                            admin_id,
+                            header,
+                            reply_markup=_ticket_action_markup(user_id),
+                            parse_mode="HTML",
+                        )
                         _track_admin_msg(user_id, admin_id, esc_msg.message_id,
                                          support_escalation_msgs)
                         sent += 1

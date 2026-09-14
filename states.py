@@ -72,3 +72,8 @@ class PaymentSettingsState(StatesGroup):
 class CriticalActionState(StatesGroup):
     """Ожидание одноразового кода подтверждения критичного действия."""
     waiting_for_code = State()
+
+
+class SupportReplyState(StatesGroup):
+    """Админ нажал «⚡ Ответить» на тикет — ждём текст ответа."""
+    waiting_for_text = State()

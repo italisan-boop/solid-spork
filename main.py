@@ -8,6 +8,7 @@ from config import settings
 from handlers import user, admin_orders, catalog, categories, payments, admin_books, admin_broadcast, admin_promo, admin_commands
 from handlers.admin_orders import new_orders_notify_loop
 from handlers.user import support_escalation_loop
+from handlers.admin_support import router as admin_support_router
 from storage import SQLiteStorage
 from utils import setup_logger
 
@@ -48,6 +49,7 @@ dp.include_router(admin_promo.router)
 dp.include_router(catalog.router)
 dp.include_router(categories.router)
 dp.include_router(admin_commands.router)  # /drop_cache, /mass_broadcast — до user.router
+dp.include_router(admin_support_router)  # нативный reply / кнопки поддержки — до user.router
 dp.include_router(user.router)  # user.router должен быть ПОСЛЕДНИМ, т.к. он перехватывает всё
 
 async def on_startup():
