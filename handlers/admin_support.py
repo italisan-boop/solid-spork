@@ -8,6 +8,7 @@
     как ответ поддержки.
 """
 import logging
+import re
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -31,6 +32,16 @@ from states import SupportReplyState
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+def _short_alert(status: str, limit: int = 140) -> str:
+    """Алерт кнопки ограничен 200 символами и не поддерживает HTML:
+    оставляем первую строку статуса без тегов и укорачиваем."""
+    first = status.replace("</code>", "").replace("<code>", "")
+    first = re.sub(r"<[^>]+>", "", first).strip()
+    if len(first) > limit:
+        first = first[: limit - 1] + "…"
+    return first
 
 
 # ============================================================
@@ -131,7 +142,7 @@ async def cb_support_claim(callback: CallbackQuery):
         return
     user_id = int(callback.data.split(":")[1])
     status = await _claim_ticket(user_id, callback.from_user.id, callback.from_user.full_name, callback.bot)
-    await callback.answer(status, show_alert=True)
+    await callback.answer(_short_alert(status), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("support_release:"))
@@ -141,7 +152,7 @@ async def cb_support_release(callback: CallbackQuery):
         return
     user_id = int(callback.data.split(":")[1])
     status = _release_ticket(user_id)
-    await callback.answer(status, show_alert=True)
+    await callback.answer(_short_alert(status), show_alert=True)
 
 
 # ============================================================
