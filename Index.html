@@ -860,6 +860,10 @@
         let books = [];
         let categories = [];
         let cart = [];
+        let cartRevision = 0;
+        let cartHydrated = false;
+        let cartSyncConflict = false;
+        let cartSaveChain = Promise.resolve(true);
         let wishlist = JSON.parse(localStorage.getItem('semena_wishlist') || '[]');
 
         let activeCategory = 'all';
@@ -945,6 +949,80 @@
                 console.error("Ошибка загрузки:", error);
                 document.getElementById('booksGrid').innerHTML = '<div class="empty-state"><div class="emoji">⚠️</div><div class="text">Ошибка загрузки</div></div>';
             }
+        }
+
+        function cartSnapshot() {
+            return cart.map(({ id, quantity }) => ({ id, quantity: quantity || 1 }));
+        }
+
+        function cartFromSnapshot(snapshot) {
+            const catalog = new Map(books.map(book => [book.id, book]));
+            return snapshot.flatMap(item => {
+                const book = catalog.get(item.id);
+                return book ? [{ ...book, quantity: item.quantity }] : [];
+            });
+        }
+
+        function ensureCartHydrated() {
+            if (cartHydrated) return true;
+            tg.showAlert('Корзина загружается. Попробуйте через секунду.');
+            return false;
+        }
+
+        async function loadCart() {
+            if (!initData) {
+                cartHydrated = true;
+                return;
+            }
+            try {
+                const response = await fetch('/api/cart', {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                if (!response.ok) throw new Error(`Cart request failed: ${response.status}`);
+                const saved = await response.json();
+                const savedCart = Array.isArray(saved.cart) ? saved.cart : [];
+                cart = cartFromSnapshot(savedCart);
+                cartRevision = saved.revision;
+                cartHydrated = true;
+                if (cart.length !== savedCart.length) persistCart();
+            } catch (error) {
+                console.error('Ошибка загрузки корзины:', error);
+                cartHydrated = true;
+            }
+        }
+
+        function persistCart() {
+            if (!initData || !cartHydrated) return Promise.resolve(true);
+            cartSyncConflict = false;
+            const snapshot = cartSnapshot();
+            cartSaveChain = cartSaveChain.then(async () => {
+                if (cartSyncConflict) return false;
+                const response = await fetch('/api/cart', {
+                    method: 'PUT',
+                    headers: telegramAuthHeaders({ 'Content-Type': 'application/json' }),
+                    cache: 'no-store',
+                    body: JSON.stringify({ cart: snapshot, revision: cartRevision })
+                });
+                const result = await response.json();
+                if (response.status === 409) {
+                    cart = cartFromSnapshot(result.cart || []);
+                    cartRevision = result.revision;
+                    cartSyncConflict = true;
+                    updateUI();
+                    renderCartItems();
+                    applyFiltersAndRender();
+                    tg.showAlert('Корзина была изменена в другой сессии. Показана актуальная версия.');
+                    return false;
+                }
+                if (!response.ok) throw new Error(result.error || `Cart save failed: ${response.status}`);
+                cartRevision = result.revision;
+                return true;
+            }).catch(error => {
+                console.error('Ошибка сохранения корзины:', error);
+                return false;
+            });
+            return cartSaveChain;
         }
 
         function getUniqueCategories() {
@@ -1318,6 +1396,7 @@
         });
 
         function toggleCart(bookId) {
+            if (!ensureCartHydrated()) return;
             const bookIndex = cart.findIndex(b => b.id === bookId);
             if (bookIndex > -1) {
                 cart.splice(bookIndex, 1);
@@ -1334,9 +1413,11 @@
             }
             updateUI();
             renderCartItems();
+            void persistCart();
         }
 
         function removeFromCart(bookId) {
+            if (!ensureCartHydrated()) return;
             const bookIndex = cart.findIndex(b => b.id === bookId);
             if (bookIndex > -1) {
                 cart.splice(bookIndex, 1);
@@ -1344,12 +1425,14 @@
                 updateUI();
                 renderCartItems();
                 applyFiltersAndRender();
+                void persistCart();
             } else {
                 console.warn('Книга не найдена в корзине:', bookId);
             }
         }
 
         function changeQuantity(bookId, delta) {
+            if (!ensureCartHydrated()) return;
             const book = cart.find(b => b.id === bookId);
             if (!book) {
                 console.warn('Книга не найдена в корзине:', bookId);
@@ -1361,12 +1444,13 @@
             } else {
                 updateUI();
                 renderCartItems();
+                void persistCart();
                 tg.HapticFeedback.impactOccurred('light');
             }
         }
 
         function clearCart() {
-            if (cart.length === 0) return;
+            if (!ensureCartHydrated() || cart.length === 0) return;
 
             tg.showConfirm('Очистить корзину?', (confirmed) => {
                 if (confirmed) {
@@ -1379,6 +1463,7 @@
                     updateUI();
                     renderCartItems();
                     applyFiltersAndRender();
+                    void persistCart();
                     tg.HapticFeedback.impactOccurred('medium');
                 }
             }, 'cancel'); // Второй аргумент для кнопки отмены
@@ -1590,12 +1675,18 @@
         });
 
         document.getElementById('mainButton').addEventListener('click', async () => {
-            if (cart.length === 0) { tg.showAlert('Добавьте книги в корзину 🌱'); return; }
+            if (!ensureCartHydrated() || cart.length === 0) { tg.showAlert('Добавьте книги в корзину 🌱'); return; }
             if (!initData) { tg.showAlert('Откройте магазин из Telegram, чтобы оформить заказ.'); return; }
+            const cartSynced = await cartSaveChain;
+            if (!cartSynced || cartSyncConflict) {
+                tg.showAlert('Не удалось синхронизировать корзину. Проверьте её и попробуйте снова.');
+                return;
+            }
 
             const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
             const payload = {
                 cart: cart.map(b => ({ id: b.id, quantity: b.quantity || 1 })),
+                cart_revision: cartRevision,
                 promo_code: promoCode
             };
 
@@ -1622,12 +1713,14 @@
                     }
 
                     cart = [];
+                    cartRevision = result.cart_revision;
                     discount = 0;
                     promoCode = '';
                     promoInput.value = '';
                     promoMessage.textContent = '';
                     promoDiscount.style.display = 'none';
                     updateUI();
+                    renderCartItems();
                     applyFiltersAndRender();
                     closeModal();
                     closeCartModal();
@@ -1853,7 +1946,10 @@
         async function init() {
             await loadCategories();
             await loadBooks();
+            await loadCart();
             updateUI();
+            renderCartItems();
+            applyFiltersAndRender();
             updateWishlistBadge();
             // Если пользователь админ — показываем кнопку дашборда
             await loadAdminDashboard();

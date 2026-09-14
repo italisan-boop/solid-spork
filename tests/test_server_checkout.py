@@ -84,13 +84,14 @@ class CheckoutApiTests(unittest.TestCase):
     def _order(self, **overrides):
         payload = {
             "cart": [{"id": 1, "title": "Подмена", "price": 1, "quantity": 2}],
+            "cart_revision": 0,
             "promo_code": "",
         }
         payload.update(overrides)
         return self.client.post("/order", json=payload, headers=signed_headers())
 
     def test_rejects_invalid_checkout_payload_without_creating_order(self):
-        response = self.client.post("/order", json={"cart": []}, headers=signed_headers())
+        response = self.client.post("/order", json={"cart": [], "cart_revision": 0}, headers=signed_headers())
         self.assertEqual(400, response.status_code)
         self.assertEqual(0, self._scalar("SELECT COUNT(*) FROM orders"))
 
@@ -149,7 +150,10 @@ class CheckoutApiTests(unittest.TestCase):
 
         self._execute("UPDATE books SET price = 1201 WHERE id = 1")
         self._settings(card=True, stars=True, rate=2)
-        stars_result = self._order(cart=[{"id": 1, "quantity": 1}]).get_json()
+        stars_result = self._order(
+            cart=[{"id": 1, "quantity": 1}],
+            cart_revision=card_result["cart_revision"],
+        ).get_json()
         self.assertEqual("stars", stars_result["payment_method"])
         self.assertFalse(stars_result["payment_required"])
         self.assertEqual(601, stars_result["stars_amount"])

@@ -8,7 +8,7 @@ from config import settings
 from content_defaults import TEMPLATES
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _CONNECTION_TIMEOUT_SECONDS = 10
 _INITIALIZATION_LOCK = threading.Lock()
 
@@ -149,6 +149,12 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             fsm_key TEXT PRIMARY KEY,
             state TEXT,
             data TEXT
+        );
+        CREATE TABLE IF NOT EXISTS mini_app_carts (
+            user_id INTEGER PRIMARY KEY,
+            cart_json TEXT NOT NULL DEFAULT '[]',
+            revision INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """
     )

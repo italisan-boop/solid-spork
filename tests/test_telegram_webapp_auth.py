@@ -81,7 +81,7 @@ class TelegramProtectedRoutesTests(unittest.TestCase):
         return {"X-Telegram-Init-Data": raw}
 
     def test_protected_routes_require_init_data(self):
-        for path in ("/order", "/api/admin/dashboard", "/api/admin/export/orders", "/api/admin/export/books"):
+        for path in ("/order", "/api/cart", "/api/admin/dashboard", "/api/admin/export/orders", "/api/admin/export/books"):
             method = self.client.post if path == "/order" else self.client.get
             response = method(path, json={"cart": []} if path == "/order" else None)
             self.assertEqual(401, response.status_code, path)
@@ -105,6 +105,7 @@ class TelegramProtectedRoutesTests(unittest.TestCase):
                 "user_id": 999,
                 "user_name": "Forged User",
                 "cart": [{"id": 1, "quantity": 1}],
+                "cart_revision": 0,
                 "promo_code": "",
             },
         )

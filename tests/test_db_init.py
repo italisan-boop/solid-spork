@@ -62,6 +62,7 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "stars_settings",
                 "message_templates",
                 "fsm_records",
+                "mini_app_carts",
             }.issubset(self._table_names())
         )
         self.assertEqual(schema.SCHEMA_VERSION, self._query_one("PRAGMA user_version"))

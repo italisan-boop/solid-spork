@@ -182,6 +182,112 @@ def resolve_checkout_cart(cart):
         connection.close()
 
 
+_MAX_CART_ITEMS = 50
+_MAX_CART_QUANTITY = 99
+
+
+def _cart_response(cart: list[dict], revision: int, status: int = 200, **extra):
+    response = jsonify({"cart": cart, "revision": revision, **extra})
+    response.status_code = status
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _read_cart(connection: sqlite3.Connection, user_id: int) -> tuple[list[dict], int]:
+    row = connection.execute(
+        "SELECT cart_json, revision FROM mini_app_carts WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        return [], 0
+    try:
+        cart = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Stored cart is invalid") from exc
+    if not isinstance(cart, list):
+        raise RuntimeError("Stored cart is invalid")
+    return cart, int(row[1])
+
+
+def _validate_cart_snapshot(cart: object, connection: sqlite3.Connection) -> list[dict]:
+    if not isinstance(cart, list):
+        raise ValueError("cart must be a list")
+    if len(cart) > _MAX_CART_ITEMS:
+        raise ValueError(f"cart must contain at most {_MAX_CART_ITEMS} items")
+
+    normalized = []
+    book_ids = set()
+    for item in cart:
+        if not isinstance(item, dict) or set(item) != {"id", "quantity"}:
+            raise ValueError("cart items must contain only id and quantity")
+        book_id = _positive_integer(item["id"], "book id")
+        quantity = _positive_integer(item["quantity"], "quantity")
+        if quantity > _MAX_CART_QUANTITY:
+            raise ValueError(f"quantity must not exceed {_MAX_CART_QUANTITY}")
+        if book_id in book_ids:
+            raise ValueError("cart must not contain duplicate books")
+        book_ids.add(book_id)
+        normalized.append({"id": book_id, "quantity": quantity})
+
+    if not normalized:
+        return normalized
+
+    placeholders = ",".join("?" for _ in normalized)
+    active_ids = {
+        row[0]
+        for row in connection.execute(
+            f"""
+            SELECT id FROM books
+            WHERE id IN ({placeholders})
+              AND is_active = 1
+              AND COALESCE(is_archived, 0) = 0
+            """,
+            [item["id"] for item in normalized],
+        )
+    }
+    if len(active_ids) != len(normalized):
+        raise ValueError("cart contains an unavailable book")
+    return normalized
+
+
+def _save_cart_snapshot(
+    connection: sqlite3.Connection,
+    user_id: int,
+    cart: list[dict],
+    expected_revision: int,
+) -> tuple[list[dict], int, bool]:
+    stored_cart, stored_revision = _read_cart(connection, user_id)
+    if stored_revision != expected_revision:
+        return stored_cart, stored_revision, False
+
+    next_revision = stored_revision + 1
+    payload = json.dumps(cart, separators=(",", ":"))
+    if stored_revision:
+        connection.execute(
+            """
+            UPDATE mini_app_carts
+            SET cart_json = ?, revision = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND revision = ?
+            """,
+            (payload, next_revision, user_id, stored_revision),
+        )
+    else:
+        connection.execute(
+            """
+            INSERT INTO mini_app_carts (user_id, cart_json, revision)
+            VALUES (?, ?, ?)
+            """,
+            (user_id, payload, next_revision),
+        )
+    return cart, next_revision, True
+
+
+def _clear_cart(connection: sqlite3.Connection, user_id: int) -> int:
+    _, revision = _read_cart(connection, user_id)
+    _, next_revision, _ = _save_cart_snapshot(connection, user_id, [], revision)
+    return next_revision
+
+
 def get_all_unique_users():
     """Получить всех уникальных пользователей"""
     conn = connect()
@@ -609,7 +715,58 @@ def api_export_books():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/validate-promo', methods=['POST'])
+@app.route('/api/cart', methods=['GET'])
+@require_telegram_user
+def api_cart():
+    connection = connect()
+    try:
+        cart, revision = _read_cart(connection, g.telegram_user.id)
+        return _cart_response(cart, revision)
+    except RuntimeError:
+        return jsonify({'error': 'Cart is unavailable'}), 503
+    finally:
+        connection.close()
+
+
+@app.route('/api/cart', methods=['PUT'])
+@require_telegram_user
+def save_cart():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {'cart', 'revision'}:
+        return jsonify({'error': 'Expected cart and revision'}), 400
+    revision = data.get('revision')
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        return jsonify({'error': 'revision must be a non-negative integer'}), 400
+
+    connection = connect()
+    try:
+        connection.execute('BEGIN IMMEDIATE')
+        cart = _validate_cart_snapshot(data['cart'], connection)
+        saved_cart, saved_revision, saved = _save_cart_snapshot(
+            connection,
+            g.telegram_user.id,
+            cart,
+            revision,
+        )
+        if not saved:
+            connection.rollback()
+            return _cart_response(
+                saved_cart,
+                saved_revision,
+                409,
+                error='Cart has changed in another session',
+            )
+        connection.commit()
+        return _cart_response(saved_cart, saved_revision)
+    except ValueError as exc:
+        connection.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except sqlite3.Error:
+        connection.rollback()
+        return jsonify({'error': 'Cart is unavailable'}), 503
+    finally:
+        connection.close()
+
 def api_validate_promo():
     """API: проверка промокода"""
     try:
@@ -641,6 +798,13 @@ def receive_order():
         user_id = g.telegram_user.id
         user_name = g.telegram_user.name
         promo_code = str(data.get('promo_code') or '').strip()
+        cart_revision = data.get('cart_revision')
+        if (
+            isinstance(cart_revision, bool)
+            or not isinstance(cart_revision, int)
+            or cart_revision < 0
+        ):
+            return jsonify({'error': 'cart_revision must be a non-negative integer'}), 400
 
         total = sum(item['price'] * item['quantity'] for item in cart)
 
@@ -662,6 +826,17 @@ def receive_order():
         conn = connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        conn.execute('BEGIN IMMEDIATE')
+        stored_cart, stored_revision = _read_cart(conn, user_id)
+        if stored_revision != cart_revision:
+            conn.rollback()
+            conn.close()
+            return _cart_response(
+                stored_cart,
+                stored_revision,
+                409,
+                error='Cart has changed in another session',
+            )
 
         cursor.execute(
             "SELECT * FROM user_bonuses WHERE user_id = ? AND is_used = 0 ORDER BY created_at DESC LIMIT 1",
@@ -703,6 +878,7 @@ def receive_order():
         stars_amount = (final_total + rubles_per_star - 1) // rubles_per_star if rubles_per_star > 0 else 0
 
         if stars_enabled and rubles_per_star <= 0:
+            conn.rollback()
             conn.close()
             return jsonify({'error': 'Invalid Stars rate'}), 503
 
@@ -732,6 +908,7 @@ def receive_order():
                 return jsonify({'error': 'Промокод больше не действует'}), 409
 
         order_id = create_order(user_id, user_name, cart, final_total, status, connection=conn)
+        cart_revision = _clear_cart(conn, user_id)
         conn.commit()
         conn.close()
         print(f"✅ Заказ #{order_id} от {user_name} | {final_total}₽ | Метод: {payment_method} | Статус: {status}")
@@ -745,7 +922,8 @@ def receive_order():
             'payment_method': payment_method,
             'payment_required': payment_method == 'card',
             'applied_promo': applied_promo,
-            'applied_bonus': applied_bonus
+            'applied_bonus': applied_bonus,
+            'cart_revision': cart_revision
         }
 
         # Добавляем информацию о Stars
