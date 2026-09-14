@@ -8,6 +8,7 @@ from config import settings
 from handlers import user, admin_orders, catalog, categories, payments, admin_books, admin_broadcast, admin_promo
 from handlers.admin_orders import new_orders_notify_loop
 from handlers.user import support_escalation_loop
+from storage import SQLiteStorage
 from utils import setup_logger
 
 # Настраиваем логгер
@@ -16,7 +17,9 @@ logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
 # Инициализация бота
 bot = Bot(token=settings.BOT_TOKEN)
-dp = Dispatcher()
+# FSM-состояния храним в SQLite, чтобы они переживали рестарт бота
+storage = SQLiteStorage()
+dp = Dispatcher(storage=storage)
 from aiogram import BaseMiddleware
 
 
@@ -61,6 +64,7 @@ async def on_startup():
 
 async def on_shutdown():
     """Очистка при остановке бота."""
+    await storage.close()
     await bot.session.close()
     logger.info("Бот остановлен")
 
