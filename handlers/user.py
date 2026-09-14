@@ -13,6 +13,7 @@ import db
 from config import settings
 from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
 from utils import format_local_time, parseBookImages, setup_logger
+from utils.otp_confirm import revoke_otp
 
 router = Router()
 logger = setup_logger(__name__)
@@ -1573,12 +1574,15 @@ async def support_escalation_loop(bot: Bot):
 @router.message(Command("cancel"))
 async def cancel_action(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    cancelled = []  # список человекочитаемых строк: что именно отменили
+    cancelled = []
 
     current_state = await state.get_state()
     if current_state:
         await state.clear()
         cancelled.append(f"текущий шаг (<code>{current_state}</code>)")
+
+    # Аннулируем одноразовые коды подтверждения критичных действий
+    revoke_otp(user_id)
 
     if user_id in settings.support_pending_users or await db.is_support_active(user_id):
         await set_support_mode(user_id, False)
