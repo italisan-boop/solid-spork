@@ -1,6 +1,7 @@
 import json
 import asyncio
 import time
+from collections import deque
 from aiogram import Bot, Router, F
 from aiogram.types import Message, WebAppInfo, CallbackQuery, LabeledPrice
 from aiogram.filters import CommandStart, Command
@@ -12,6 +13,7 @@ import db
 from config import settings
 from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
 from utils import format_local_time, parseBookImages, setup_logger
+from utils.otp_confirm import revoke_otp
 
 router = Router()
 logger = setup_logger(__name__)
@@ -32,6 +34,45 @@ support_claims: dict[int, int] = {}
 # диалогов — это уже отдельная фича.
 HISTORY_LIMIT = 50
 support_history: dict[int, list[dict]] = {}
+
+# === РЕЙТ-ЛИМИТ НА СООБЩЕНИЯ ПОДДЕРЖКИ ===
+# Защита от спама в обе стороны:
+#  - админ → пользователь (/reply_): пауза REPLY_MIN_GAP сек между двумя
+#    ответами одному пользователю + не больше REPLY_BURST_LIMIT ответов в
+#    скользящем окне REPLY_WINDOW на одного админа;
+#  - пользователь → поддержка: те же правила на одного пользователя.
+# Всё живёт в памяти процесса (как support_claims) — при рестарте
+# обнуляется, это нормально.
+REPLY_MIN_GAP = 3.0        # сек между сообщениями одному получателю
+REPLY_BURST_LIMIT = 8      # макс. сообщений в скользящем окне
+REPLY_WINDOW = 60.0        # длина окна, сек
+reply_last_user_ts: dict[tuple[int, int], float] = {}
+reply_admin_log: dict[int, deque] = {}
+user_msg_last_ts: dict[int, float] = {}
+user_msg_log: dict[int, deque] = {}
+
+
+def _rate_limited(gap_log: dict, burst_log: dict, gap_key, burst_key,
+                  gap_s: float = REPLY_MIN_GAP,
+                  burst: int = REPLY_BURST_LIMIT,
+                  window: float = REPLY_WINDOW):
+    """Проверка рейт-лимита на отправку сообщения. Возвращает текст ошибки
+    (лимит превышен) или None, если можно отправлять. Успех фиксируется
+    в словарях gap_log/burst_log — их ключи должны быть раздельными.
+    """
+    now = time.monotonic()
+    last = gap_log.get(gap_key, 0.0)
+    if now - last < gap_s:
+        wait = int(gap_s - (now - last)) + 1
+        return f"⏳ Слишком часто: подождите {wait} сек."
+    log = burst_log.setdefault(burst_key, deque())
+    while log and now - log[0] > window:
+        log.popleft()
+    if len(log) >= burst:
+        return f"⏳ Превышен лимит: не больше {burst} сообщений за минуту."
+    log.append(now)
+    gap_log[gap_key] = now
+    return None
 
 # === ЭСКАЛАЦИЯ НЕОТВЕЧЕННЫХ ТИКЕТОВ ===
 # Последнее сообщение пользователя запоминаем вместе с меткой времени. Если
@@ -375,6 +416,14 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             logger.warning(f"is_support_active({user_id}) упал: {e}")
 
     if in_support:
+        # Рейт-лимит на сообщения пользователя: спам не уходит админам,
+        # не пишется в историю и не триггерит эскалацию.
+        err = _rate_limited(
+            user_msg_last_ts, user_msg_log, user_id, user_id,
+        )
+        if err:
+            await message.answer(err)
+            return
         # Пишем в историю ДО отправки админам — даже если рассылка упадёт,
         # сообщение пользователя в логе останется.
         _append_history(
@@ -1197,6 +1246,15 @@ async def admin_reply_to_user(message: Message):
         user_id = int(parts[0].replace("/reply_", ""))
         body = parts[1].strip() if len(parts) > 1 else ""
 
+        # Рейт-лимит: пауза между ответами одному пользователю + лимит админа.
+        err = _rate_limited(
+            reply_last_user_ts, reply_admin_log,
+            (message.from_user.id, user_id), message.from_user.id,
+        )
+        if err:
+            await message.answer(err)
+            return
+
         # Шаблон быстрого ответа: /reply_<id> +<имя> → подставляем текст.
         # Шаблон отправляется пользователю как есть, без обёртки «Ответ от
         # поддержки», чтобы не дублировать приветствие из самого шаблона.
@@ -1516,12 +1574,15 @@ async def support_escalation_loop(bot: Bot):
 @router.message(Command("cancel"))
 async def cancel_action(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    cancelled = []  # список человекочитаемых строк: что именно отменили
+    cancelled = []
 
     current_state = await state.get_state()
     if current_state:
         await state.clear()
         cancelled.append(f"текущий шаг (<code>{current_state}</code>)")
+
+    # Аннулируем одноразовые коды подтверждения критичных действий
+    revoke_otp(user_id)
 
     if user_id in settings.support_pending_users or await db.is_support_active(user_id):
         await set_support_mode(user_id, False)

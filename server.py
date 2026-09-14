@@ -3,7 +3,7 @@ import requests
 import os
 import sqlite3
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -384,6 +384,26 @@ def _csv_response(rows, headers, filename):
     return response
 
 
+def _export_ts(utc_str):
+    """created_at из БД (UTC) → местное время сервера 'YYYY-MM-DD HH:MM'.
+
+    В CSV-выгрузку для бухгалтерии пишем локальное время, а не сырое UTC,
+    иначе время в импортированном файле расходится с реальным на офсет
+    часового пояса.
+    """
+    if not utc_str:
+        return ''
+    try:
+        return (
+            datetime.fromisoformat(str(utc_str))
+            .replace(tzinfo=timezone.utc)
+            .astimezone()
+            .strftime('%Y-%m-%d %H:%M')
+        )
+    except Exception:
+        return str(utc_str)
+
+
 def get_dashboard_stats():
     """Сводка для дашборда админа.
 
@@ -702,7 +722,7 @@ def api_export_orders():
         rows = [
             [
                 o['id'],
-                o['created_at'],
+                _export_ts(o['created_at']),
                 STATUS_LABELS.get(o['status'], o['status']),
                 o['user_id'],
                 o['user_name'] or '',
