@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
 import db
+from db import init_db, add_user
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -24,12 +25,7 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     # Сохраняем пользователя в БД
-    async with aiosqlite.connect(DB_NAME) as database:
-        await database.execute(
-            "INSERT OR IGNORE INTO users (user_id, user_name) VALUES (?, ?)",
-            (message.from_user.id, message.from_user.username or message.from_user.first_name)
-        )
-        await database.commit()
+    await add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
     
     builder = InlineKeyboardBuilder()
     builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=WEBAPP_URL))
@@ -49,6 +45,7 @@ async def handle_webapp(message: Message):
 
 
 async def on_startup(app):
+    await init_db()
     await bot.set_webhook(WEBHOOK_URL)
     print(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
