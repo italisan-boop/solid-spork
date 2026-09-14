@@ -1,36 +1,13 @@
 """Модуль для работы с категориями книг"""
 import aiosqlite
-from db import DB_NAME
+from db.connection import connection
 
 
-async def init_categories():
-    """Создание таблицы категорий и добавление дефолтных"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM categories")
-        row = await cursor.fetchone()
-        count = row[0] if row else 0
-
-        if count == 0:
-            default_categories = [
-                ("Ботаника", "🌿", 1),
-                ("Природа", "🌳", 2),
-                ("Искусство", "🎨", 3),
-                ("Садоводство", "🌱", 4),
-                ("Травник", "🌾", 5),
-                ("Флористика", "🌸", 6)
-            ]
-            await db.executemany(
-                "INSERT INTO categories (name, emoji, sort_order) VALUES (?, ?, ?)",
-                default_categories
-            )
-            print("✅ Добавлены категории по умолчанию")
-
-        await db.commit()
 
 
 async def get_all_categories() -> list:
     """Получить все активные категории"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT id, name, emoji, sort_order FROM categories WHERE is_active = 1 ORDER BY sort_order ASC, name ASC"
@@ -41,7 +18,7 @@ async def get_all_categories() -> list:
 
 async def add_category(name: str, emoji: str = "", sort_order: int = 0) -> int:
     """Добавить новую категорию"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             "INSERT INTO categories (name, emoji, sort_order) VALUES (?, ?, ?)",
             (name, emoji, sort_order)
@@ -60,7 +37,7 @@ async def update_category(category_id: int, **kwargs) -> bool:
     корректный emoji). Поэтому при изменении имени каскадим апдейт в
     books.category — держим денормализацию согласованной.
     """
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         updates = []
         params = []
         for key, value in kwargs.items():
@@ -87,7 +64,7 @@ async def update_category(category_id: int, **kwargs) -> bool:
 
 async def delete_category(category_id: int) -> dict:
     """Удалить категорию"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             "SELECT COUNT(*) as cnt FROM books WHERE category_id = ? AND is_active = 1",
             (category_id,)
@@ -108,7 +85,7 @@ async def delete_category(category_id: int) -> dict:
 
 async def get_category_books_count(category_id: int) -> int:
     """Получить количество книг в категории"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             "SELECT COUNT(*) as cnt FROM books WHERE category_id = ? AND is_active = 1",
             (category_id,)
@@ -125,7 +102,7 @@ async def get_category_by_id(category_id: int) -> dict | None:
     """Получить категорию по id, или None если её нет/она скрыта."""
     if not category_id:
         return None
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT id, name, emoji FROM categories WHERE id = ? AND is_active = 1",

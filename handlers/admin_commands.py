@@ -23,14 +23,14 @@ def is_admin(user_id: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# /drop_cache — сброс кэша поддержки (тикеты + активные диалоги)
+# Сброс кэша поддержки
 # ---------------------------------------------------------------------------
 
 _CODE_TEXT = (
     "🔐 <b>Подтверждение критичного действия</b>\n\n"
     "Одноразовый код: <code>{code}</code>\n\n"
     "Для подтверждения отправьте этот код следующим сообщением.\n"
-    "Код действителен {ttl} сек. Если передумали — /cancel"
+    "Код действителен {ttl} сек. Если передумали — нажмите кнопку «Назад» в меню администратора."
 )
 
 
@@ -51,8 +51,9 @@ async def _start_drop_cache_flow(admin_id: int, state: FSMContext) -> str:
 @router.message(Command("drop_cache"))
 async def cmd_drop_cache(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
         return
-
     await message.answer(
         await _start_drop_cache_flow(message.from_user.id, state),
         parse_mode="HTML",
@@ -61,7 +62,7 @@ async def cmd_drop_cache(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_drop_cache")
 async def cb_drop_cache(callback: CallbackQuery, state: FSMContext):
-    """Кнопка «Сброс кэша» в админ-панели — тот же поток, что /drop_cache."""
+    """Кнопка «Сброс кэша» в админ-панели."""
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
@@ -76,6 +77,8 @@ async def cb_drop_cache(callback: CallbackQuery, state: FSMContext):
 @router.message(CriticalActionState.waiting_for_code, ~F.text.startswith("/"))
 async def submit_drop_cache_code(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
         return
 
     data = await state.get_data()
@@ -92,7 +95,7 @@ async def submit_drop_cache_code(message: Message, state: FSMContext):
     if not consume_otp(message.from_user.id, ACTION_DROP_CACHE, code):
         await message.answer(
             "✖ <b>Неверный или истёкший код.</b>\n"
-            "Запустите /drop_cache заново.",
+            "Запустите сброс кэша через кнопку в меню администратора.",
             parse_mode="HTML",
         )
         await state.clear()
@@ -103,9 +106,6 @@ async def submit_drop_cache_code(message: Message, state: FSMContext):
     from handlers.user import support_claims
 
     support_claims.clear()
-    # settings.support_claims — привязан к словарю в settings, тоже обнуляем
-    if hasattr(settings, "support_claims"):
-        settings.support_claims.clear()
     settings.support_pending_users.clear()
 
     await state.clear()
@@ -125,6 +125,8 @@ async def submit_drop_cache_code(message: Message, state: FSMContext):
 @router.message(Command("mass_broadcast"))
 async def cmd_mass_broadcast(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
         return
 
     from handlers.admin_broadcast import broadcast_start_ui

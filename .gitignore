@@ -151,7 +151,6 @@ zig*/
 .yarn/
 
 # Configuration and state
-config/
 state/
 
 # Local configuration overrides

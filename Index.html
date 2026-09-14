@@ -827,8 +827,12 @@
         tg.ready();
         tg.expand();
 
-        const userId = tg.initDataUnsafe?.user?.id;
-        const userName = tg.initDataUnsafe?.user?.first_name || 'Неизвестно';
+        const initData = tg.initData || '';
+        const presentationUserId = tg.initDataUnsafe?.user?.id;
+
+        function telegramAuthHeaders(headers = {}) {
+            return initData ? { ...headers, 'X-Telegram-Init-Data': initData } : headers;
+        }
 
         // ⚠️ ВАЖНО: замени на username твоего бота (без @)
         const BOT_USERNAME = 'bookseed_bot';
@@ -1144,7 +1148,7 @@
                 return;
             }
 
-            const refCode = `ref_${userId}`;
+            const refCode = `ref_${presentationUserId}`;
             const bookLink = `https://t.me/${BOT_USERNAME}?start=${refCode}`;
 
             const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
@@ -1587,13 +1591,11 @@
 
         document.getElementById('mainButton').addEventListener('click', async () => {
             if (cart.length === 0) { tg.showAlert('Добавьте книги в корзину 🌱'); return; }
-            if (!userId) { tg.showAlert('Не удалось получить User ID'); return; }
+            if (!initData) { tg.showAlert('Откройте магазин из Telegram, чтобы оформить заказ.'); return; }
 
             const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
             const payload = {
-                user_id: userId,
-                user_name: userName,
-                cart: cart.map(b => ({ id: b.id, title: b.title, price: b.price, quantity: b.quantity || 1 })),
+                cart: cart.map(b => ({ id: b.id, quantity: b.quantity || 1 })),
                 promo_code: promoCode
             };
 
@@ -1601,7 +1603,7 @@
             try {
                 const response = await fetch('/order', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: telegramAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(payload)
                 });
                 const result = await response.json();
@@ -1728,16 +1730,18 @@
         }
 
         async function fetchAdminDashboard() {
-            if (!userId) return null;
+            if (!initData) return null;
             let response;
             try {
-                response = await fetch('/api/admin/dashboard?user_id=' + userId + '&t=' + Date.now());
+                response = await fetch('/api/admin/dashboard?t=' + Date.now(), {
+                    headers: telegramAuthHeaders()
+                });
             } catch (error) {
                 console.error("Ошибка загрузки дашборда:", error);
                 return { retryable: true };
             }
-            if (response.status === 403) return null;      // не админ — переспрашивать не нужно
-            if (!response.ok) return { retryable: true };  // 404/500 — сервер мог перезапускаться
+            if (response.status === 401 || response.status === 403) return null;
+            if (!response.ok) return { retryable: true };
             try {
                 return await response.json();
             } catch (e) {
@@ -1806,9 +1810,11 @@
         }
 
         async function exportCSV(kind) {
-            if (!userId) return;
+            if (!initData) return;
             try {
-                const response = await fetch(`/api/admin/export/${kind}?user_id=${userId}&t=${Date.now()}`);
+                const response = await fetch(`/api/admin/export/${kind}?t=${Date.now()}`, {
+                    headers: telegramAuthHeaders()
+                });
                 if (!response.ok) {
                     console.error('Ошибка экспорта:', response.status);
                     tg.HapticFeedback.notificationOccurred('error');

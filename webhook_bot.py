@@ -7,10 +7,10 @@ from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
+load_dotenv()
+
 import db
 from db import init_db, add_user
-
-load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://example.com")
 WEBHOOK_URL = f"{WEBAPP_URL}/webhook"  # URL для webhook

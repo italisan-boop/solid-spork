@@ -1,256 +1,63 @@
-from flask import Flask, request, jsonify, send_from_directory, Response
+from flask import Flask, Response, g, jsonify, make_response, request, send_from_directory
+from functools import wraps
 import requests
 import os
 import sqlite3
 import json
 from datetime import datetime, timedelta, timezone
+
+from db.schema import DB_PATH, connect, initialize_database
 from dotenv import load_dotenv
+
+from content_defaults import TEMPLATES
+from telegram_auth import TelegramInitDataError, validate_telegram_init_data
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DB_NAME = "semena_znaniy.db"
 
 # Читаем ID админов
 ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip()]
 
 app = Flask(__name__, static_folder='.')
+initialize_database()
 
 
-# ============================================
-# ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ
-# ============================================
+def _authentication_error(error: TelegramInitDataError):
+    if error.kind == "unavailable":
+        return jsonify({"error": "Telegram authentication is unavailable"}), 503
+    if error.kind == "expired":
+        return jsonify({"error": "Telegram init data has expired"}), 401
+    if error.kind == "missing":
+        return jsonify({"error": "Telegram init data is required"}), 401
+    return jsonify({"error": "Invalid Telegram init data"}), 401
 
-def init_db():
-    """Создание таблиц и миграция схемы"""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
 
-    # Таблица заказов
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            user_name TEXT,
-            total INTEGER NOT NULL,
-            status TEXT DEFAULT 'new',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+def require_telegram_user(handler):
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        try:
+            g.telegram_user = validate_telegram_init_data(
+                request.headers.get("X-Telegram-Init-Data", ""), BOT_TOKEN or ""
+            )
+        except TelegramInitDataError as error:
+            return _authentication_error(error)
+        return handler(*args, **kwargs)
 
-    # Таблица позиций заказа
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS order_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER NOT NULL,
-            book_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            FOREIGN KEY (order_id) REFERENCES orders (id)
-        )
-    ''')
+    return wrapped
 
-    # Таблица книг
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS books (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            category TEXT NOT NULL,
-            emoji TEXT DEFAULT '',
-            description TEXT DEFAULT '',
-            images TEXT DEFAULT '[]',
-            category_id INTEGER,
-            is_active INTEGER DEFAULT 1,
-            is_archived INTEGER DEFAULT 0
-        )
-    ''')
 
-    # Таблица категорий
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            emoji TEXT DEFAULT '',
-            is_active INTEGER DEFAULT 1,
-            sort_order INTEGER DEFAULT 0
-        )
-    ''')
+def require_telegram_admin(handler):
+    @require_telegram_user
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        if g.telegram_user.id not in ADMIN_IDS:
+            return jsonify({"error": "Forbidden"}), 403
+        response = make_response(handler(*args, **kwargs))
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
 
-    # Таблица промокодов
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS promo_codes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            code TEXT NOT NULL UNIQUE,
-            discount_percent INTEGER NOT NULL DEFAULT 0,
-            discount_fixed INTEGER DEFAULT 0,
-            min_order INTEGER DEFAULT 0,
-            max_uses INTEGER DEFAULT 0,
-            current_uses INTEGER DEFAULT 0,
-            is_active INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TEXT
-        )
-    ''')
-
-    # Таблица рефералов
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS referrals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            referrer_id INTEGER NOT NULL,
-            referred_id INTEGER NOT NULL UNIQUE,
-            bonus_given INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Таблица бонусов пользователей
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_bonuses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            bonus_type TEXT NOT NULL,
-            amount INTEGER NOT NULL,
-            is_used INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Таблица настроек оплаты
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS payment_settings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            setting_key TEXT NOT NULL UNIQUE,
-            setting_value TEXT NOT NULL
-        )
-    ''')
-
-    # Таблица настроек Stars
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS stars_settings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            setting_key TEXT NOT NULL UNIQUE,
-            setting_value TEXT NOT NULL
-        )
-    ''')
-
-    conn.commit()
-
-    # === МИГРАЦИЯ: категории по умолчанию ===
-    cursor.execute("SELECT COUNT(*) FROM categories")
-    count = cursor.fetchone()[0]
-
-    if count == 0:
-        default_categories = [
-            ("Ботаника", "🌿", 1),
-            ("Природа", "🌳", 2),
-            ("Искусство", "🎨", 3),
-            ("Садоводство", "🌱", 4),
-            ("Травник", "🌾", 5),
-            ("Флористика", "🌸", 6)
-        ]
-        cursor.executemany(
-            "INSERT INTO categories (name, emoji, sort_order) VALUES (?, ?, ?)",
-            default_categories
-        )
-        print("✅ Добавлены категории по умолчанию")
-        conn.commit()
-
-    # === МИГРАЦИЯ: связываем книги с категориями ===
-    cursor.execute("PRAGMA table_info(books)")
-    columns = [col[1] for col in cursor.fetchall()]
-
-    if 'category_id' in columns:
-        cursor.execute("SELECT COUNT(*) FROM books WHERE category_id IS NULL")
-        null_count = cursor.fetchone()[0]
-
-        if null_count > 0:
-            cursor.execute("""
-                UPDATE books SET category_id = (
-                    SELECT id FROM categories 
-                    WHERE categories.name = books.category 
-                    LIMIT 1
-                ) WHERE category_id IS NULL
-            """)
-            print(f"✅ Связано {null_count} книг с категориями")
-            conn.commit()
-
-    # === Книги по умолчанию ===
-    cursor.execute("SELECT COUNT(*) FROM books")
-    book_count = cursor.fetchone()[0]
-
-    if book_count == 0:
-        cursor.execute("SELECT id, name FROM categories")
-        cat_rows = cursor.fetchall()
-        cat_map = {name: cat_id for cat_id, name in cat_rows}
-
-        default_books = [
-            ("Атлас лекарственных растений", 1200, "Ботаника", "",
-             "Подробный атлас с описанием более 500 лекарственных растений.",
-             '["https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=400"]',
-             cat_map.get("Ботаника")),
-            ("Тайная жизнь деревьев", 850, "Природа", "🌳",
-             "Увлекательное исследование лесных экосистем.",
-             '["https://images.unsplash.com/photo-1448375240586-882707db888b?w=400"]',
-             cat_map.get("Природа")),
-            ("Ботанические иллюстрации", 2500, "Искусство", "🎨",
-             "Роскошный альбом с акварельными иллюстрациями.",
-             '["https://images.unsplash.com/photo-1490750967868-88aa4486c946?w=400"]',
-             cat_map.get("Искусство")),
-            ("Сад на подоконнике", 650, "Садоводство", "",
-             "Практическое руководство по выращиванию растений.",
-             '["https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=400"]',
-             cat_map.get("Садоводство")),
-            ("Энциклопедия трав", 1800, "Травник", "🌾",
-             "Полная энциклопедия лекарственных трав.",
-             '["https://images.unsplash.com/photo-1466692476868-aef1dfb1e735?w=400"]',
-             cat_map.get("Травник")),
-            ("Цветы мира", 1500, "Флористика", "🌸",
-             "Красочный путеводитель по цветам.",
-             '["https://images.unsplash.com/photo-1490750967868-88aa4486c946?w=400"]',
-             cat_map.get("Флористика"))
-        ]
-        cursor.executemany(
-            "INSERT INTO books (title, price, category, emoji, description, images, category_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            default_books
-        )
-        print("✅ Добавлены книги по умолчанию")
-        conn.commit()
-
-    # === Настройки оплаты по умолчанию ===
-    cursor.execute("SELECT COUNT(*) FROM payment_settings")
-    if cursor.fetchone()[0] == 0:
-        default_payment_settings = [
-            ('payment_enabled', '1'),
-            ('card_number', ''),
-            ('sbp_phone', ''),
-            ('sbp_bank', ''),
-            ('recipient_name', ''),
-            ('payment_instructions', 'После перевода укажите номер заказа в комментарии')
-        ]
-        cursor.executemany(
-            "INSERT INTO payment_settings (setting_key, setting_value) VALUES (?, ?)",
-            default_payment_settings
-        )
-        print("✅ Добавлены настройки оплаты по умолчанию")
-        conn.commit()
-
-    # === Настройки Stars по умолчанию ===
-    cursor.execute("SELECT COUNT(*) FROM stars_settings")
-    if cursor.fetchone()[0] == 0:
-        default_stars_settings = [
-            ('stars_enabled', '0'),  # По умолчанию Stars отключены
-            ('rubles_per_star', '2')
-        ]
-        cursor.executemany(
-            "INSERT INTO stars_settings (setting_key, setting_value) VALUES (?, ?)",
-            default_stars_settings
-        )
-        print("✅ Добавлены настройки Stars по умолчанию")
-        conn.commit()
-
-    conn.close()
-    print(f"✅ База данных инициализирована: {DB_NAME}")
+    return wrapped
 
 
 # ============================================
@@ -259,7 +66,7 @@ def init_db():
 
 def get_books_sync(sort_by='default'):
     """Получить все активные книги с поддержкой сортировки"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = connect()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -288,7 +95,7 @@ def get_books_sync(sort_by='default'):
 
 def get_categories_sync():
     """Получить все активные категории"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = connect()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
@@ -305,9 +112,10 @@ def get_categories_sync():
     return [dict(c) for c in cats]
 
 
-def create_order(user_id, user_name, cart, total, status='new'):
-    """Создать заказ"""
-    conn = sqlite3.connect(DB_NAME)
+def create_order(user_id, user_name, cart, total, status='new', connection=None):
+    """Создать заказ в переданной или новой транзакции."""
+    owns_connection = connection is None
+    conn = connection or connect()
     cursor = conn.cursor()
 
     cursor.execute(
@@ -317,21 +125,66 @@ def create_order(user_id, user_name, cart, total, status='new'):
     order_id = cursor.lastrowid
 
     for item in cart:
-        qty = item.get('quantity', 1)
-        for _ in range(qty):
+        for _ in range(item['quantity']):
             cursor.execute(
                 "INSERT INTO order_items (order_id, book_id, title, price) VALUES (?, ?, ?, ?)",
                 (order_id, item['id'], item['title'], item['price'])
             )
 
-    conn.commit()
-    conn.close()
+    if owns_connection:
+        conn.commit()
+        conn.close()
     return order_id
+
+
+def _positive_integer(value, field):
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a positive integer")
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a positive integer") from exc
+    if number <= 0 or str(number) != str(value).strip():
+        raise ValueError(f"{field} must be a positive integer")
+    return number
+
+
+def resolve_checkout_cart(cart):
+    if not isinstance(cart, list) or not cart:
+        raise ValueError("cart must be a non-empty list")
+
+    connection = connect()
+    connection.row_factory = sqlite3.Row
+    try:
+        normalized = []
+        for item in cart:
+            if not isinstance(item, dict):
+                raise ValueError("cart item must be an object")
+            book_id = _positive_integer(item.get('id'), "book id")
+            quantity = _positive_integer(item.get('quantity', 1), "quantity")
+            book = connection.execute(
+                """
+                SELECT id, title, price FROM books
+                WHERE id = ? AND is_active = 1 AND COALESCE(is_archived, 0) = 0
+                """,
+                (book_id,),
+            ).fetchone()
+            if not book:
+                raise ValueError("book is unavailable")
+            normalized.append({
+                "id": book['id'],
+                "title": book['title'],
+                "price": book['price'],
+                "quantity": quantity,
+            })
+        return normalized
+    finally:
+        connection.close()
 
 
 def get_all_unique_users():
     """Получить всех уникальных пользователей"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = connect()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT user_id FROM orders")
@@ -358,17 +211,6 @@ STATUS_LABELS = {
     'completed': 'завершён',
     'cancelled': 'отменён',
 }
-
-
-def _admin_user_id():
-    """user_id из query args для админ-API (или None, если не передан/не число)."""
-    raw = request.args.get('user_id')
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
 
 
 def _csv_response(rows, headers, filename):
@@ -410,7 +252,7 @@ def get_dashboard_stats():
     Продажи за день/неделю/месяц (скользящие окна от текущего момента),
     топ-5 книг по количеству проданных экземпляров и средний чек.
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = connect()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -474,7 +316,7 @@ def get_dashboard_stats():
 
 def validate_promo_code_sync(code: str, order_total: int) -> dict:
     """Проверить промокод"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = connect()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
@@ -532,7 +374,7 @@ def validate_promo_code_sync(code: str, order_total: int) -> dict:
 
 def increment_promo_usage_sync(code: str):
     """Увеличить счётчик использований промокода"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = connect()
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code = ?",
@@ -653,20 +495,9 @@ def api_categories():
 
 
 @app.route('/api/admin/dashboard', methods=['GET'])
+@require_telegram_admin
 def api_admin_dashboard():
-    """API: статистика дашборда админа.
-
-    Только для админов (user_id из ADMIN_IDS). Возвращает продажи за
-    день/неделю/месяц, топ-5 книг и средний чек.
-    """
-    try:
-        user_id = int(request.args.get('user_id', 0))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'user_id is required'}), 400
-
-    if user_id not in ADMIN_IDS:
-        return jsonify({'error': 'Forbidden'}), 403
-
+    """API: статистика дашборда админа."""
     try:
         return jsonify(get_dashboard_stats())
     except Exception as e:
@@ -677,20 +508,15 @@ def api_admin_dashboard():
 
 
 @app.route('/api/admin/export/orders', methods=['GET'])
+@require_telegram_admin
 def api_export_orders():
     """API: CSV-выгрузка всех заказов для бухгалтерии.
 
     Только для админов. Реестр заказов: id, дата, статус, покупатель,
     состав заказа и сумма — закрытая сделка целиком.
     """
-    user_id = _admin_user_id()
-    if user_id is None:
-        return jsonify({'error': 'user_id is required'}), 400
-    if user_id not in ADMIN_IDS:
-        return jsonify({'error': 'Forbidden'}), 403
-
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -740,20 +566,15 @@ def api_export_orders():
 
 
 @app.route('/api/admin/export/books', methods=['GET'])
+@require_telegram_admin
 def api_export_books():
     """API: CSV-выгрузка книг с продажами для бухгалтерии.
 
     Только для админов. Каталог книг дополнен количеством проданных
     экземпляров и выручкой по оплаченным заказам.
     """
-    user_id = _admin_user_id()
-    if user_id is None:
-        return jsonify({'error': 'user_id is required'}), 400
-    if user_id not in ADMIN_IDS:
-        return jsonify({'error': 'Forbidden'}), 403
-
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
@@ -806,24 +627,27 @@ def api_validate_promo():
 
 
 @app.route('/order', methods=['POST'])
+@require_telegram_user
 def receive_order():
     """API: приём заказа от Mini App"""
     try:
-        data = request.json
-        user_id = data.get('user_id')
-        user_name = data.get('user_name', 'Неизвестно')
-        cart = data.get('cart', [])
-        promo_code = data.get('promo_code', '')
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Invalid JSON body'}), 400
+        try:
+            cart = resolve_checkout_cart(data.get('cart'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        user_id = g.telegram_user.id
+        user_name = g.telegram_user.name
+        promo_code = str(data.get('promo_code') or '').strip()
 
-        if not user_id or not cart:
-            return jsonify({'error': 'Missing data'}), 400
-
-        # Считаем сумму с учётом количества
-        total = sum(item['price'] * item.get('quantity', 1) for item in cart)
+        total = sum(item['price'] * item['quantity'] for item in cart)
 
         discount = 0
         final_total = total
         applied_promo = None
+        promo_code_to_consume = None
 
         # 1. Применяем промокод
         if promo_code:
@@ -832,10 +656,10 @@ def receive_order():
                 discount = promo_result['discount']
                 final_total = total - discount
                 applied_promo = promo_result['promo_code']
-                increment_promo_usage_sync(promo_code)
+                promo_code_to_consume = promo_result['promo_code']
 
         # 2. Применяем бонусы пользователя
-        conn = sqlite3.connect(DB_NAME)
+        conn = connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -860,7 +684,6 @@ def receive_order():
             applied_bonus = f"{bonus['amount']}{'%' if bonus['bonus_type'] == 'percent' else '₽'}"
 
             cursor.execute("UPDATE user_bonuses SET is_used = 1 WHERE id = ?", (bonus['id'],))
-            conn.commit()
 
         # 3. Получаем настройки оплаты
         cursor.execute("SELECT setting_key, setting_value FROM payment_settings")
@@ -870,7 +693,6 @@ def receive_order():
         cursor.execute("SELECT setting_key, setting_value FROM stars_settings")
         stars_settings = {row['setting_key']: row['setting_value'] for row in cursor.fetchall()}
 
-        conn.close()
 
         # Определяем метод оплаты
         stars_enabled = stars_settings.get('stars_enabled', '0') == '1'
@@ -878,7 +700,11 @@ def receive_order():
         rubles_per_star = int(stars_settings.get('rubles_per_star', '2'))
 
         # Конвертируем в Stars
-        stars_amount = max(1, final_total // rubles_per_star) if rubles_per_star > 0 else 0
+        stars_amount = (final_total + rubles_per_star - 1) // rubles_per_star if rubles_per_star > 0 else 0
+
+        if stars_enabled and rubles_per_star <= 0:
+            conn.close()
+            return jsonify({'error': 'Invalid Stars rate'}), 503
 
         # Определяем статус заказа
         if stars_enabled:
@@ -891,8 +717,23 @@ def receive_order():
             status = 'new'
             payment_method = 'none'
 
-        # Создаём заказ
-        order_id = create_order(user_id, user_name, cart, final_total, status)
+        if promo_code_to_consume:
+            updated = cursor.execute(
+                """
+                UPDATE promo_codes
+                SET current_uses = current_uses + 1
+                WHERE code = ? AND (max_uses = 0 OR current_uses < max_uses)
+                """,
+                (promo_code_to_consume,),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                conn.close()
+                return jsonify({'error': 'Промокод больше не действует'}), 409
+
+        order_id = create_order(user_id, user_name, cart, final_total, status, connection=conn)
+        conn.commit()
+        conn.close()
         print(f"✅ Заказ #{order_id} от {user_name} | {final_total}₽ | Метод: {payment_method} | Статус: {status}")
 
         # Формируем ответ
@@ -902,6 +743,7 @@ def receive_order():
             'discount': discount,
             'final_total': final_total,
             'payment_method': payment_method,
+            'payment_required': payment_method == 'card',
             'applied_promo': applied_promo,
             'applied_bonus': applied_bonus
         }
@@ -1011,7 +853,6 @@ def health():
 # ============================================
 
 if __name__ == '__main__':
-    init_db()
     print(f"🚀 Сервер запущен на порту 8080")
     print(f"📱 Mini App: http://localhost:8080")
     print(f"📚 API книг: http://localhost:8080/api/books")

@@ -45,7 +45,7 @@ async def broadcast_start_ui(target, state: FSMContext):
     user_count = len(users) if users else 0
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Отмена", callback_data="admin_menu")
+    builder.button(text="❌ Отмена", callback_data="admin_broadcast_cancel")
     builder.adjust(1)
 
     text = (
@@ -94,6 +94,11 @@ async def start_broadcast(callback: CallbackQuery, state: FSMContext):
 
 @router.message(BroadcastState.waiting_for_message, ~F.text.startswith("/"))
 async def process_message(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
+        return
+
     if not message.text or not message.text.strip():
         await message.answer("❌ Сообщение не может быть пустым. Попробуйте еще раз:")
         return
@@ -112,7 +117,7 @@ async def process_message(message: Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить рассылку", callback_data="admin_broadcast_confirm")
     builder.button(text="✏️ Изменить текст", callback_data="admin_broadcast_edit")
-    builder.button(text="❌ Отмена", callback_data="admin_menu")
+    builder.button(text="❌ Отмена", callback_data="admin_broadcast_cancel")
     builder.adjust(1)
 
     preview_text = text[:500] + "..." if len(text) > 500 else text
@@ -142,7 +147,7 @@ async def edit_broadcast_message(callback: CallbackQuery, state: FSMContext):
     revoke_otp(callback.from_user.id, ACTION_MASS_BROADCAST)
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Отмена", callback_data="admin_menu")
+    builder.button(text="❌ Отмена", callback_data="admin_broadcast_cancel")
     builder.adjust(1)
 
     await callback.bot.edit_message_text(
@@ -202,7 +207,7 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BroadcastState.waiting_for_code)
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Отмена", callback_data="admin_menu")
+    builder.button(text="❌ Отмена", callback_data="admin_broadcast_cancel")
     builder.adjust(1)
 
     await callback.bot.edit_message_text(
@@ -229,6 +234,8 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
 @router.message(BroadcastState.waiting_for_code, ~F.text.startswith("/"))
 async def process_broadcast_code(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
         return
 
     if not message.text or not message.text.strip():
@@ -294,7 +301,7 @@ async def process_broadcast_code(message: Message, state: FSMContext):
                 pass
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔙 В меню админа", callback_data="admin_menu")
+    builder.button(text="🔙 В меню админа", callback_data="admin_broadcast_cancel")
     builder.adjust(1)
 
     await status_msg.edit_text(
@@ -331,7 +338,7 @@ async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     revoke_otp(callback.from_user.id, ACTION_MASS_BROADCAST)
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔙 В меню админа", callback_data="admin_menu")
+    builder.button(text="🔙 В меню админа", callback_data="admin_broadcast_cancel")
     builder.adjust(1)
 
     await callback.bot.edit_message_text(

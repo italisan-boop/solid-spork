@@ -1,4 +1,27 @@
-from . import user, admin_orders, catalog, categories, admin_books, admin_broadcast, admin_commands
-from .admin_support import router as admin_support_router
+from . import (
+    user,
+    admin_orders,
+    catalog,
+    categories,
+    payments,
+    admin_books,
+    admin_broadcast,
+    admin_promo,
+    admin_commands,
+    admin_texts,
+    admin_support,
+)
 
-__all__ = ['user', 'admin_orders', 'catalog', 'categories', 'admin_books', 'admin_broadcast', 'admin_commands']
+__all__ = [
+    "user",
+    "admin_orders",
+    "catalog",
+    "categories",
+    "payments",
+    "admin_books",
+    "admin_broadcast",
+    "admin_promo",
+    "admin_commands",
+    "admin_texts",
+    "admin_support",
+]

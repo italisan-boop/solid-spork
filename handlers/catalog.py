@@ -484,7 +484,8 @@ async def add_image_photo_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "📸 <b>Загрузка фото</b>\n\n"
         f"Отправьте фотографию (как фото):\n\n"
-        f"Или /cancel для отмены"
+        f"Или /cancel для отмены",
+        parse_mode="HTML",
     )
     await callback.answer()
 

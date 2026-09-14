@@ -1,15 +1,17 @@
 import json
 import asyncio
 import time
+import html
 from collections import deque
 from aiogram import Bot, Router, F
 from aiogram.types import Message, WebAppInfo, CallbackQuery, LabeledPrice
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 import db
+from content_defaults import QUICK_TEMPLATE_KEYS
 from config import settings
 from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
 from utils import format_local_time, parseBookImages, setup_logger
@@ -27,9 +29,8 @@ support_claims: dict[int, int] = {}
 
 # История переписки с пользователями поддержки: user_id → список сообщений
 # (по одному на каждое сообщение пользователя и на каждый ответ админа).
-# Хранит до HISTORY_LIMIT последних сообщений, чтобы админ по
-# /history_<id> мог быстро вспомнить контекст диалога. Живёт в памяти
-# процесса (как support_claims) — при рестарте обнуляется; в БД не
+# Хранит до HISTORY_LIMIT последних сообщений, чтобы админ мог открыть контекст.
+# Живёт в памяти процесса (как support_claims) — при рестарте обнуляется; в БД не
 # пишем намеренно: история не нужна после рестарта, а постоянный лог
 # диалогов — это уже отдельная фича.
 HISTORY_LIMIT = 50
@@ -37,7 +38,7 @@ support_history: dict[int, list[dict]] = {}
 
 # === РЕЙТ-ЛИМИТ НА СООБЩЕНИЯ ПОДДЕРЖКИ ===
 # Защита от спама в обе стороны:
-#  - админ → пользователь (/reply_): пауза REPLY_MIN_GAP сек между двумя
+#  - админ → пользователь: пауза REPLY_MIN_GAP сек между двумя
 #    ответами одному пользователю + не больше REPLY_BURST_LIMIT ответов в
 #    скользящем окне REPLY_WINDOW на одного админа;
 #  - пользователь → поддержка: те же правила на одного пользователя.
@@ -91,7 +92,7 @@ support_escalated: dict[int, bool] = {}
 # ID сообщений, которые бот разослал админам по тикету пользователя:
 #  - support_forward_msgs: обычные пересылки сообщения из universal_text_handler;
 #  - support_escalation_msgs: дубли со значком «Эскалация» от поллера.
-# Когда кто-то берёт тикет в работу (/claim_<user_id>) или отвечает —
+# Когда кто-то берёт тикет в работу кнопкой или отвечает —
 # все эти сообщения редактируются в «тикет уже в работе / на него ответили»,
 # чтобы остальные админы не путались и не отвечали параллельно.
 # user_id -> список кортежей (chat_id, message_id).
@@ -140,7 +141,7 @@ def _track_admin_msg(user_id: int, chat_id: int, message_id: int,
 async def _rewrite_ticket_notices(user_id: int, bot: Bot, status_text: str) -> None:
     """Переписать все уведомления админов по тикету (пересылки + эскалации).
 
-    Вызывается, когда тикет берут в работу (/claim_<user_id>) или на него уже
+    Вызывается, когда тикет берут в работу кнопкой или на него уже
     ответили: вместо «ждите / возьмите в работу» админы видят актуальный статус,
     чтобы не отвечали параллельно.
     """
@@ -152,6 +153,7 @@ async def _rewrite_ticket_notices(user_id: int, bot: Bot, status_text: str) -> N
                 text=status_text,
                 chat_id=chat_id,
                 message_id=message_id,
+                reply_markup=_ticket_action_markup(user_id),
                 parse_mode="HTML",
             )
         except Exception as e:
@@ -175,33 +177,8 @@ def _append_history(user_id: int, role: str, name: str, text: str) -> None:
     if len(support_history[user_id]) > HISTORY_LIMIT:
         support_history[user_id] = support_history[user_id][-HISTORY_LIMIT:]
 
-# Шаблоны быстрых ответов поддержки. Использование:
-#   /reply_<user_id> +<имя>  →  бот подставит текст из этого словаря.
-# Текст шаблона уходит пользователю как есть, без префикса «Ответ от поддержки».
-SUPPORT_TEMPLATES: dict[str, str] = {
-    "greeting": "Здравствуйте! 👋 Чем можем помочь?",
-    "wait": "Спасибо за обращение! 🙏 Мы разберёмся и скоро вернёмся с ответом.",
-    "ask_details": (
-        "Подскажите, пожалуйста, подробнее:\n"
-        "• номер заказа или название книги\n"
-        "• что именно произошло\n"
-        "Так мы сможем помочь быстрее."
-    ),
-    "payment": (
-        "Оплата доступна прямо в Mini App через раздел «Корзина».\n"
-        "Если что-то не получается — опишите, что видите на экране, поможем."
-    ),
-    "resolved": "Ваш вопрос решён ✅. Если появятся ещё вопросы — пишите, мы на связи.",
-}
-
-
 def _ticket_action_markup(user_id: int):
-    """Инлайн-кнопки для уведомления о тикете.
-
-    Нужны для нативного «Ответить» в Telegram и для навигации по тикету
-    без набора команд. Каждая кнопка несёт в callback_data идентификатор
-    тикета, чтобы админу не приходилось копировать user_id.
-    """
+    """Инлайн-кнопки для уведомления о тикете."""
     builder = InlineKeyboardBuilder()
     builder.button(text="⚡ Ответить", callback_data=f"support_reply:{user_id}")
     builder.button(text="📜 История", callback_data=f"support_history:{user_id}")
@@ -210,6 +187,12 @@ def _ticket_action_markup(user_id: int):
     else:
         builder.button(text="🔒 Взять в работу", callback_data=f"support_claim:{user_id}")
     builder.adjust(2)
+    return builder.as_markup()
+
+
+def _support_exit_markup():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Выйти из поддержки", callback_data="support_exit")
     return builder.as_markup()
 
 
@@ -263,7 +246,6 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
     # /start означает начало новой сессии — выходим из активного диалога с поддержкой
     await set_support_mode(message.from_user.id, False)
-    settings.broadcast_pending_users.discard(message.from_user.id)
 
     ref_code = message.text.split()[1] if len(message.text.split()) > 1 else ""
     referrer_id = await db.parse_referral_code(ref_code)
@@ -299,7 +281,6 @@ async def cmd_start(message: Message):
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
     # /start означает начало новой сессии — выходим из активного диалога с поддержкой
     await set_support_mode(message.from_user.id, False)
-    settings.broadcast_pending_users.discard(message.from_user.id)
     await _send_start_menu(message)
 
 
@@ -371,37 +352,29 @@ async def support_callback(callback: CallbackQuery, state: FSMContext):
         "🆘 <b>Служба поддержки</b>\n\n"
         "Напишите ваш вопрос, и администратор ответит!\n\n"
         "💬 Вы можете отправлять несколько сообщений подряд — все они уйдут "
-        "в поддержку, отвечать на них можно прямо здесь.\n\n"
-        "/cancel — выйти из диалога с поддержкой.",
+        "в поддержку, отвечать на них можно прямо здесь.",
+        reply_markup=_support_exit_markup(),
         parse_mode="HTML"
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("confirm_"))
-async def confirm_order(callback: CallbackQuery):
-    order_id = int(callback.data.split("_")[1])
-    order = await db.get_order_full(order_id)
-    if not order:
-        await callback.answer("❌ Заказ не найден", show_alert=True)
-        return
-    await db.update_order_status(order_id, 'confirmed')
-    books_list = "\n".join([f"  • {item['title']}" for item in order['items']])
-    await callback.message.answer(
-        f"✅ <b>Заказ #{order_id} подтверждён!</b>\n\n{books_list}\n\n"
-        f"💰 Сумма: <b>{order['total']} ₽</b>\n\n"
-        f"Мы свяжемся с вами для уточнения доставки.",
-        parse_mode="HTML"
-    )
+@router.callback_query(F.data == "support_exit")
+async def support_exit_callback(callback: CallbackQuery, state: FSMContext):
+    was_active = await _is_in_support(callback.from_user.id)
+    await state.clear()
+    if was_active:
+        await set_support_mode(callback.from_user.id, False)
     await callback.answer()
-
-
-@router.callback_query(F.data.startswith("cancel_"))
-async def cancel_order(callback: CallbackQuery):
-    order_id = int(callback.data.split("_")[1])
-    await db.update_order_status(order_id, 'cancelled')
-    await callback.message.answer(f"❌ Заказ #{order_id} отменён.\n\nВозвращайтесь, когда будете готовы! 🌱")
-    await callback.answer()
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+    if was_active:
+        await _send_start_menu(callback.message)
 
 
 @router.callback_query(F.data == "main_menu")
@@ -472,21 +445,19 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
             else settings.ADMIN_IDS
         )
         claim_note = (
-            f"\n🔒 <i>Тикет закреплён за вами. Чтобы отпустить: "
-            f"<code>/release_{user_id}</code></i>"
+            "\n🔒 <i>Тикет закреплён за вами.</i>"
             if claimed_by
-            else f"\nЧтобы взять тикет в работу и не отвечать параллельно с коллегами: "
-                 f"<code>/claim_{user_id}</code>"
+            else "\nТикет свободен — возьмите его в работу кнопкой ниже."
         )
+        safe_name = html.escape(message.from_user.full_name or str(user_id), quote=False)
+        safe_text = html.escape(message.text, quote=False)
         header = (
             f"🆘 <b>Сообщение от пользователя</b>\n\n"
-            f"👤 {message.from_user.full_name} (ID: {message.from_user.id})\n"
-            f"💬 Текст: {message.text}\n\n"
+            f"👤 {safe_name} (ID: {message.from_user.id})\n"
+            f"💬 Текст: {safe_text}\n\n"
             f"Как ответить:\n"
-            f"• просто нажмите «Ответить» на это сообщение (лучший вариант)\n"
-            f"• или кнопки ниже\n"
-            f"• или командой <code>/reply_{message.from_user.id} текст</code>\n"
-            f"Посмотреть диалог: <code>/history_{message.from_user.id}</code>"
+            f"• просто нажмите «Ответить» на это сообщение\n"
+            f"• или используйте кнопки ниже"
             f"{claim_note}"
         )
         for admin_id in recipients:
@@ -505,9 +476,53 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         # диалог, не нажимая каждый раз кнопку «Поддержка».
         await message.answer(
             "✅ <b>Сообщение отправлено в поддержку!</b>\n\n"
-            "Можете продолжать писать здесь — администратор ответит в этом же чате.\n"
-            "Чтобы выйти из диалога, отправьте /cancel."
+            "Можете продолжать писать здесь — администратор ответит в этом же чате.",
+            reply_markup=_support_exit_markup(),
+            parse_mode="HTML",
         )
+        return
+
+    admin_only_states = {
+        AddBookState.waiting_for_title.state,
+        AddBookState.waiting_for_author.state,
+        AddBookState.waiting_for_description.state,
+        AddBookState.waiting_for_price.state,
+        AddBookState.waiting_for_category.state,
+        AddBookState.waiting_for_emoji.state,
+        AddBookState.waiting_for_inner_images.state,
+        AddBookState.waiting_for_cover_photo.state,
+        AddBookState.waiting_for_page_photos.state,
+        AddBookState.confirming.state,
+        EditBookState.waiting_for_field.state,
+        EditBookState.waiting_for_value.state,
+        EditBookState.waiting_for_description.state,
+        EditBookState.waiting_for_image_url.state,
+        EditBookState.waiting_for_image_photo.state,
+        EditBookState.waiting_for_new_category.state,
+        EditBookState.waiting_for_new_title.state,
+        EditBookState.waiting_for_new_author.state,
+        EditBookState.waiting_for_new_price.state,
+        EditBookState.waiting_for_new_description.state,
+        EditBookState.waiting_for_new_cover.state,
+        EditBookState.waiting_for_new_page.state,
+        EditBookState.waiting_for_new_category_admin.state,
+        CategoryState.waiting_for_name.state,
+        CategoryState.waiting_for_emoji.state,
+        CategoryState.editing_name.state,
+        CategoryState.editing_emoji.state,
+        PromoCodeState.waiting_for_code.state,
+        PromoCodeState.waiting_for_discount.state,
+        PromoCodeState.waiting_for_min_order.state,
+        PromoCodeState.waiting_for_max_uses.state,
+        PromoCodeState.waiting_for_expires.state,
+        PromoCodeState.editing_discount.state,
+        PromoCodeState.editing_min_order.state,
+        PromoCodeState.editing_max_uses.state,
+        PromoCodeState.editing_expires.state,
+    }
+    if current_state in admin_only_states and not is_admin(user_id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
         return
 
     # 🔧 ВАЖНО: пропускаем сообщения, если пользователь в состоянии настройки оплаты
@@ -537,7 +552,7 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
     # === FSM: ДОБАВЛЕНИЕ КНИГ ===
     if current_state == AddBookState.waiting_for_title.state:
         await state.update_data(title=message.text)
-        await message.answer("💰 Теперь отправьте <b>цену</b> (только цифры):")
+        await message.answer("💰 Теперь отправьте <b>цену</b> (только цифры):", parse_mode="HTML")
         await state.set_state(AddBookState.waiting_for_price)
         return
 
@@ -566,7 +581,7 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
                     parse_mode="HTML"
                 )
             else:
-                await message.answer("📂 Отправьте <b>категорию</b>:")
+                await message.answer("📂 Отправьте <b>категорию</b>:", parse_mode="HTML")
                 await state.set_state(AddBookState.waiting_for_category)
         except ValueError:
             await message.answer("❌ Некорректная цена. Отправьте целое число больше 0.")
@@ -769,7 +784,8 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         await message.answer(
             f"✅ <b>Изображение добавлено в галерею!</b>\n\n"
             f"Всего фото: {len(current_images)}\n\n"
-            f"Отправьте ещё URL или нажмите /cancel"
+            f"Отправьте ещё URL или нажмите /cancel",
+            parse_mode="HTML",
         )
         return
 
@@ -1196,38 +1212,6 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
-    # === РАССЫЛКА ===
-    # === РАССЫЛКА ===
-    if is_admin(user_id) and user_id in settings.broadcast_pending_users:
-        settings.broadcast_pending_users.discard(user_id)
-        user_ids = await db.get_all_unique_users()
-
-        if not user_ids:
-            await message.answer("📭 Нет пользователей для рассылки.")
-            return
-
-        await message.answer(
-            f"📢 Начинаю рассылку <b>{len(user_ids)}</b> пользователям... Это может занять некоторое время.",
-            parse_mode="HTML")
-
-        success, failed = 0, 0
-        for uid in user_ids:
-            try:
-                await bot.send_message(uid, message.text, parse_mode="HTML")
-                success += 1
-            except Exception:
-                # Ошибка обычно означает, что пользователь заблокировал бота или удалил аккаунт
-                failed += 1
-            await asyncio.sleep(0.05)  # Небольшая задержка, чтобы не получить бан от Telegram API
-
-        await message.answer(
-            f"✅ <b>Рассылка завершена!</b>\n\n"
-            f"📤 Успешно отправлено: <b>{success}</b>\n"
-            f"⚠️ Ошибок (заблокировали бота): <b>{failed}</b>",
-            parse_mode="HTML"
-        )
-        return
-
     # Поддержка обрабатывается в начале функции, чтобы ни одно FSM-состояние
     # не перехватывало сообщение раньше.
 
@@ -1236,6 +1220,11 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
 async def handle_photo(message: Message, state: FSMContext):
     """Обработка загруженных фото"""
     current_state = await state.get_state()
+
+    if current_state == EditBookState.waiting_for_image_photo.state and not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
+        return
 
     if current_state == EditBookState.waiting_for_image_photo.state:
         data = await state.get_data()
@@ -1260,65 +1249,75 @@ async def handle_photo(message: Message, state: FSMContext):
         await message.answer(
             f"✅ <b>Фото добавлено в галерею!</b>\n\n"
             f"Всего фото: {len(current_images)}\n\n"
-            f"Отправьте ещё фото или нажмите /cancel"
+            f"Отправьте ещё фото или нажмите /cancel",
+            parse_mode="HTML",
         )
     else:
         await message.answer("❌ Сейчас не ожидаю фото. Используйте /cancel для отмены.")
 
 
-async def _send_admin_reply(message: Message, user_id: int, body: str):
+async def _send_admin_reply(
+    message: Message,
+    user_id: int,
+    body: str,
+    *,
+    admin_id: int | None = None,
+    admin_name: str | None = None,
+):
     """Единая отправка ответа пользователю поддержки.
 
-    Используется из трёх точек входа:
-      - команда /reply_<user_id> текст;
-      - нативный reply на уведомление/ответ в чате админа (в reply-хендлере
-        admin_support);
+    Используется из двух точек входа:
+      - нативный reply на уведомление/ответ в чате админа;
       - кнопка «⚡ Ответить» (через FSM SupportReplyState).
 
     Возвращает кортеж (ok: bool, status_text: str) — текст для показа админу.
     Рейт-лимит применяется в любом случае, чтобы нельзя было обойти его
     разными точками входа.
     """
+    admin_id = admin_id if admin_id is not None else message.from_user.id
+    admin_name = admin_name or message.from_user.full_name or str(admin_id)
+    if not is_admin(admin_id):
+        return False, "❌ Нет прав администратора."
+    claimed_by = support_claims.get(user_id)
+    if claimed_by is not None and claimed_by != admin_id:
+        return False, (
+            f"🚫 Тикет пользователя <code>{user_id}</code> ведёт другой админ "
+            f"(ID <code>{claimed_by}</code>)."
+        )
+
     # Рейт-лимит: пауза между ответами одному пользователю + лимит админа.
     err = _rate_limited(
         reply_last_user_ts, reply_admin_log,
-        (message.from_user.id, user_id), message.from_user.id,
+        (admin_id, user_id), admin_id,
     )
     if err:
         return False, err
 
-    # Шаблон быстрого ответа: <текст вместо команды> +<имя> → подставляем текст.
-    # С префиксом «ответа»-реплая шаблон работает так же, как в /reply_<id> +<имя>.
     is_template = body.startswith("+")
     if is_template:
         template_name = body[1:].split()[0] if body[1:].strip() else ""
-        reply_text = SUPPORT_TEMPLATES.get(template_name)
-        if reply_text is None:
-            names = ", ".join(f"<code>+{n}</code>" for n in SUPPORT_TEMPLATES)
-            return False, (
-                f"❌ Шаблон <code>+{template_name}</code> не найден.\n\n"
-                f"Доступные шаблоны: {names}\n"
-                f"Полный список с текстами — /templates"
-            )
-        user_message = f"{reply_text}\n\nМожете ответить прямо здесь — сообщение придёт администратору."
+        template_key = QUICK_TEMPLATE_KEYS.get(template_name)
+        if template_key is None:
+            names = ", ".join(f"<code>+{name}</code>" for name in QUICK_TEMPLATE_KEYS)
+            return False, f"❌ Шаблон <code>+{template_name}</code> не найден.\n\nДоступные шаблоны: {names}"
+        reply_text = await db.get_message_template(template_key)
+        follow_up = await db.get_message_template("support.reply.follow_up")
+        user_message = f"{reply_text}\n\n{follow_up}"
     else:
-        # Обычный ответ: оборачиваем в шапку «Ответ от поддержки».
         if not body:
             body = "Без текста"
-        user_message = (
-            f"💬 <b>Ответ от поддержки «Семена Знаний»:</b>\n\n"
-            f"{body}\n\n"
-            f"Можете ответить прямо здесь — сообщение придёт администратору."
-        )
+        header = await db.get_message_template("support.reply.header")
+        follow_up = await db.get_message_template("support.reply.follow_up")
+        user_message = f"{header}\n\n{html.escape(body, quote=False)}\n\n{follow_up}"
 
     # В историю пишем «чистый» текст ответа (без обёртки «Ответ от
     # поддержки…» и трейлера «Можете ответить прямо здесь…»), чтобы
-    # админу в /history_<id> было удобно читать.
+    # админу было удобно читать историю.
     history_text = reply_text if is_template else (body or "Без текста")
     _append_history(
         user_id,
         role="admin",
-        name=message.from_user.full_name or str(message.from_user.id),
+        name=admin_name,
         text=history_text,
     )
     try:
@@ -1335,9 +1334,6 @@ async def _send_admin_reply(message: Message, user_id: int, body: str):
     except Exception as e:
         return False, f"❌ Ошибка: {e}"
 
-    # Админ ответил — сбрасываем трекинг эскалации, чтобы поллер не
-    # дублировал это сообщение повторно.
-    _clear_support_tracking(user_id)
     # Уведомления админам (пересылки и эскалации) переписываем в
     # «на вопрос уже ответили», чтобы остальные не дублировали ответ.
     await _rewrite_ticket_notices(
@@ -1345,8 +1341,10 @@ async def _send_admin_reply(message: Message, user_id: int, body: str):
         message.bot,
         f"✅ <b>На это сообщение уже ответили</b>\n\n"
         f"👤 Пользователь ID <code>{user_id}</code> получил ответ "
-        f"от {message.from_user.full_name} (ID: <code>{message.from_user.id}</code>).",
+        f"от {html.escape(admin_name, quote=False)} "
+        f"(ID: <code>{admin_id}</code>).",
     )
+    _clear_support_tracking(user_id)
     # На случай, если пользователь был сброшен из support_pending_users
     # (например, после перезапуска бота) — вернём его в режим диалога,
     # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
@@ -1357,12 +1355,9 @@ async def _send_admin_reply(message: Message, user_id: int, body: str):
     _remember_admin_chain_message(message, user_id)
 
     claim_hint = (
-        f"\n\n💡 <i>Чтобы коллеги не отвечали параллельно — "
-        f"закрепите тикет за собой:</i> <code>/claim_{user_id}</code>\n"
-        f"<i>Когда закончите — отпустите:</i> <code>/release_{user_id}</code>"
-        if support_claims.get(user_id) != message.from_user.id
-        else f"\n\n🔒 <i>Тикет уже закреплён за вами. "
-             f"Отпустить:</i> <code>/release_{user_id}</code>"
+        "\n\n💡 <i>Чтобы коллеги не отвечали параллельно — возьмите тикет в работу кнопкой.</i>"
+        if support_claims.get(user_id) != admin_id
+        else "\n\n🔒 <i>Тикет уже закреплён за вами.</i>"
     )
     used_note = (
         f" (шаблон <code>+{template_name}</code>)" if is_template else ""
@@ -1387,41 +1382,8 @@ def _remember_admin_chain_message(message: Message, user_id: int) -> None:
             support_msg_owner[(r.chat.id, r.message_id)] = user_id
 
 
-@router.message(F.text.startswith("/reply_"))
-async def admin_reply_to_user(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        parts = message.text.split(maxsplit=1)
-        user_id = int(parts[0].replace("/reply_", ""))
-        body = parts[1].strip() if len(parts) > 1 else ""
-        ok, status_text = await _send_admin_reply(message, user_id, body)
-        await message.answer(status_text, parse_mode="HTML")
-    except (ValueError, IndexError):
-        await message.answer("❌ Неверный формат: `/reply_ID текст`", parse_mode="HTML")
-
-
-@router.message(Command("templates"))
-async def admin_list_templates(message: Message):
-    """Показывает админу список быстрых шаблонов и их текст."""
-    if not is_admin(message.from_user.id):
-        return
-    if not SUPPORT_TEMPLATES:
-        await message.answer("ℹ️ Шаблонов пока нет.")
-        return
-    lines = ["📝 <b>Шаблоны быстрых ответов</b>\n"]
-    lines.append(
-        "Использование: <code>/reply_&lt;user_id&gt; +&lt;имя&gt;</code>\n"
-    )
-    for name, text in SUPPORT_TEMPLATES.items():
-        # Пре��ью режем по строкам, чтобы карточка не разрасталась.
-        preview = text if len(text) <= 120 else text[:120] + "…"
-        lines.append(f"<b>+{name}</b>\n<code>{preview}</code>")
-    await message.answer("\n\n".join(lines), parse_mode="HTML")
-
-
 async def _claim_ticket(user_id: int, admin_id: int, admin_name: str, bot: Bot) -> str:
-    """Закрепить тикет за админом (общая логика для команды и кнопки).
+    """Закрепить тикет за админом через кнопку.
 
     Возвращает текст-статус для админа.
     """
@@ -1446,35 +1408,33 @@ async def _claim_ticket(user_id: int, admin_id: int, admin_name: str, bot: Bot) 
     if claimed_by is not None:
         return (
             f"🚫 Тикет пользователя <code>{user_id}</code> уже ведёт другой админ "
-            f"(ID <code>{claimed_by}</code>). Попросите коллегу отпустить: "
-            f"<code>/release_{user_id}</code>."
+            f"(ID <code>{claimed_by}</code>)."
         )
 
     support_claims[user_id] = admin_id
     # Все разосланные по этому тикету уведомления (пересылки и дубли
     # эскалации) переписываем в «тикет уже в работе» — остальные админы
     # видят, что вопрос ведёт конкретный человек, и не отвечают параллельно.
+    safe_admin_name = html.escape(admin_name, quote=False)
     await _rewrite_ticket_notices(
         user_id,
         bot,
         f"🔒 <b>Тикет уже в работе</b>\n\n"
         f"👤 Пользователь ID <code>{user_id}</code>\n"
-        f"👮 Взял в работу: {admin_name} "
+        f"👮 Взял в работу: {safe_admin_name} "
         f"(ID: <code>{admin_id}</code>)\n\n"
         f"Отвечает он, параллельные ответы коллег не нужны.",
     )
     return (
         f"🔒 Тикет пользователя <code>{user_id}</code> закреплён за вами. "
-        f"Следующие сообщения от него придут только вам.\n"
-        f"Когда закончите — отпустите командой <code>/release_{user_id}</code>.\n\n"
-        f"💡 Для быстрых ответов есть шаблоны: <code>/reply_{user_id} +greeting</code> "
-        f"(приветствие), <code>+wait</code>, <code>+resolved</code> и др. "
-        f"Полный список — /templates."
+        f"Следующие сообщения от него придут только вам.\n\n"
+        f"💡 Для быстрого ответа введите <code>+greeting</code>, <code>+wait</code>, "
+        f"<code>+resolved</code> или другой шаблон из раздела «Тексты»."
     )
 
 
 def _release_ticket(user_id: int) -> str:
-    """Отпустить тикет (общая логика для команды и кнопки).
+    """Отпустить тикет через кнопку.
 
     Снимать может любой админ — это страховка от «зависших» тикетов.
     """
@@ -1509,74 +1469,13 @@ def _build_history_text(user_id: int) -> str:
         role = "👤 Юзер" if e["role"] == "user" else "👮 Админ"
         # Имя и текст экранируем, чтобы HTML в сообщении юзера не ломал карточку.
         raw_name = e["name"] or "—"
-        safe_name = raw_name.replace("<", "&lt;").replace(">", "&gt;")
+        safe_name = html.escape(raw_name, quote=False)
         raw_text = e["text"] if len(e["text"]) <= 200 else e["text"][:200] + "…"
-        safe_text = raw_text.replace("<", "&lt;").replace(">", "&gt;")
+        safe_text = html.escape(raw_text, quote=False)
         lines.append(
             f"<i>{ts}</i> {role} <b>{safe_name}</b>:\n<code>{safe_text}</code>"
         )
     return "\n\n".join(lines)
-
-
-@router.message(F.text.startswith("/claim_"))
-async def admin_claim_ticket(message: Message):
-    """Админ берёт тикет пользователя в работу: `/claim_<user_id>`.
-
-    После этого сообщения пользователя из поддержки идут только этому
-    админу, чтобы коллеги не отвечали параллельно.
-    """
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        user_id = int(message.text.split()[0].replace("/claim_", ""))
-    except (ValueError, IndexError):
-        await message.answer("❌ Неверный формат: `/claim_ID`", parse_mode="HTML")
-        return
-
-    status_text = await _claim_ticket(
-        user_id,
-        message.from_user.id,
-        message.from_user.full_name,
-        message.bot,
-    )
-    await message.answer(status_text, parse_mode="HTML")
-
-
-@router.message(F.text.startswith("/release_"))
-async def admin_release_ticket(message: Message):
-    """Админ отпускает тикет пользователя: `/release_<user_id>`.
-
-    После этого сообщения снова идут всем админам. Снимать может любой
-    админ — это страховка от «зависших» тикетов.
-    """
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        user_id = int(message.text.split()[0].replace("/release_", ""))
-    except (ValueError, IndexError):
-        await message.answer("❌ Неверный формат: `/release_ID`", parse_mode="HTML")
-        return
-
-    await message.answer(_release_ticket(user_id), parse_mode="HTML")
-
-
-@router.message(F.text.startswith("/history_"))
-async def admin_history(message: Message):
-    """История диалога с пользователем: `/history_<user_id>`.
-
-    Показывает последние 20 сообщений (от пользователя и от поддержки)
-    из in-memory лога, который пишется в `universal_text_handler`,
-    `_send_admin_reply` и кнопках. При рестарте процесса лог обнуляется.
-    """
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        user_id = int(message.text.split()[0].replace("/history_", ""))
-    except (ValueError, IndexError):
-        await message.answer("❌ Неверный формат: `/history_ID`", parse_mode="HTML")
-        return
-
-    await message.answer(_build_history_text(user_id), parse_mode="HTML")
 
 
 async def support_escalation_loop(bot: Bot):
@@ -1608,8 +1507,8 @@ async def support_escalation_loop(bot: Bot):
                 text = support_last_msg_text.get(user_id, "")
                 name = support_last_msg_name.get(user_id, str(user_id))
                 # Экранируем, чтобы HTML в тексте юзера не ломал карточку.
-                safe_text = text.replace("<", "&lt;").replace(">", "&gt;")
-                safe_name = name.replace("<", "&lt;").replace(">", "&gt;")
+                safe_text = html.escape(text, quote=False)
+                safe_name = html.escape(name, quote=False)
                 claimed_by = support_claims.get(user_id)
                 claim_note = (
                     f"🔒 Тикет закреплён за <code>{claimed_by}</code>, но ответа "
@@ -1625,9 +1524,7 @@ async def support_escalation_loop(bot: Bot):
                     f"{claim_note}\n\n"
                     f"Как ответить:\n"
                     f"• нажмите «Ответить» на это сообщение\n"
-                    f"• или кнопки ниже\n"
-                    f"• или <code>/reply_{user_id} текст</code>\n"
-                    f"Посмотреть диалог: <code>/history_{user_id}</code>"
+                    f"• или используйте кнопки ниже"
                 )
                 sent = 0
                 for admin_id in settings.ADMIN_IDS:
@@ -1662,14 +1559,6 @@ async def cancel_action(message: Message, state: FSMContext):
 
     # Аннулируем одноразовые коды подтверждения критичных действий
     revoke_otp(user_id)
-
-    if user_id in settings.support_pending_users or await db.is_support_active(user_id):
-        await set_support_mode(user_id, False)
-        cancelled.append("диалог с поддержкой")
-
-    if user_id in settings.broadcast_pending_users:
-        settings.broadcast_pending_users.discard(user_id)
-        cancelled.append("черновик рассылки")
 
     if cancelled:
         await message.answer(
@@ -1794,6 +1683,10 @@ async def invite_friend_callback(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data == "skip_description")
 async def skip_description(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await state.clear()
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
     data = await state.get_data()
 
     book_id = await db.add_book(

@@ -23,6 +23,21 @@ def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
 
 
+async def _require_admin_state(message: Message, state: FSMContext) -> bool:
+    if is_admin(message.from_user.id):
+        return True
+    await state.clear()
+    await message.answer("❌ Нет прав администратора.")
+    return False
+
+
+@router.message(F.text == "/cancel")
+async def cancel_admin_state(message: Message, state: FSMContext):
+    from handlers.user import cancel_action
+
+    await cancel_action(message, state)
+
+
 # ============================================
 # НАСТРОЙКИ ОПЛАТЫ (КАРТА/СБП)
 # ============================================
@@ -157,40 +172,55 @@ async def pay_set_instructions_start(callback: CallbackQuery, state: FSMContext)
 
 
 # Обработка текстовых сообщений для настройки оплаты
-@router.message(PaymentSettingsState.waiting_for_card)
+@router.message(PaymentSettingsState.waiting_for_card, F.text & ~F.text.startswith("/"))
 async def process_card(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+
     logger.debug(f" process_card: {message.text}")
     await db.set_payment_setting('card_number', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Номер карты обновлён: <code>{message.text.strip()}</code>", parse_mode="HTML")
 
 
-@router.message(PaymentSettingsState.waiting_for_sbp_phone)
+@router.message(PaymentSettingsState.waiting_for_sbp_phone, F.text & ~F.text.startswith("/"))
 async def process_sbp_phone(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+
     logger.debug(f" process_sbp_phone: {message.text}")
     await db.set_payment_setting('sbp_phone', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Телефон для СБП обновлён: <code>{message.text.strip()}</code>", parse_mode="HTML")
 
 
-@router.message(PaymentSettingsState.waiting_for_sbp_bank)
+@router.message(PaymentSettingsState.waiting_for_sbp_bank, F.text & ~F.text.startswith("/"))
 async def process_sbp_bank(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+
     logger.debug(f" process_sbp_bank: {message.text}")
     await db.set_payment_setting('sbp_bank', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Банк для СБП обновлён: {message.text.strip()}")
 
 
-@router.message(PaymentSettingsState.waiting_for_recipient)
+@router.message(PaymentSettingsState.waiting_for_recipient, F.text & ~F.text.startswith("/"))
 async def process_recipient(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+
     logger.debug(f" process_recipient: {message.text}")
     await db.set_payment_setting('recipient_name', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Получатель обновлён: {message.text.strip()}")
 
 
-@router.message(PaymentSettingsState.waiting_for_instructions)
+@router.message(PaymentSettingsState.waiting_for_instructions, F.text & ~F.text.startswith("/"))
 async def process_instructions(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+
     logger.debug(f" process_instructions: {message.text}")
     await db.set_payment_setting('payment_instructions', message.text.strip())
     await state.clear()
@@ -267,8 +297,11 @@ async def stars_set_rate_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(PaymentSettingsState.waiting_for_stars_rate)
+@router.message(PaymentSettingsState.waiting_for_stars_rate, F.text & ~F.text.startswith("/"))
 async def process_stars_rate(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+
     logger.debug(f" process_stars_rate: {message.text}")
 
     try:
@@ -288,18 +321,46 @@ async def process_stars_rate(message: Message, state: FSMContext):
 # ОБРАБОТКА ПЛАТЕЖЕЙ STARS
 # ============================================
 
+
+async def _validate_stars_payment(user_id: int, payload: str, currency: str, amount: int):
+    try:
+        order_id = int(payload)
+    except (TypeError, ValueError):
+        return None, "Заказ не найден"
+    order = await db.get_order_full(order_id)
+    if not order or order['user_id'] != user_id:
+        return None, "Заказ не найден"
+    if order['status'] != 'awaiting_stars_payment':
+        return None, "Заказ уже обработан"
+    if currency != 'XTR':
+        return None, "Неверная валюта"
+    try:
+        rate = int(await db.get_stars_setting('rubles_per_star', '0'))
+    except (TypeError, ValueError):
+        rate = 0
+    if rate <= 0:
+        return None, "Некорректный курс Stars"
+    expected_amount = (order['total'] + rate - 1) // rate
+    if amount != expected_amount:
+        return None, "Неверная сумма"
+    return order, None
+
 @router.pre_checkout_query()
 async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery, bot: Bot):
-    logger.debug(f" process_pre_checkout вызван")
+    order, error = await _validate_stars_payment(
+        pre_checkout_query.from_user.id,
+        pre_checkout_query.invoice_payload,
+        pre_checkout_query.currency,
+        pre_checkout_query.total_amount,
+    )
     try:
-        await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-    except Exception as e:
-        logger.warning(f"Ошибка pre_checkout: {e}")
         await bot.answer_pre_checkout_query(
             pre_checkout_query.id,
-            ok=False,
-            error_message="Ошибка обработки платежа"
+            ok=error is None,
+            error_message=error,
         )
+    except Exception as exc:
+        logger.warning(f"Ошибка pre_checkout: {exc}")
 
 
 @router.message(F.successful_payment)
@@ -307,17 +368,16 @@ async def process_successful_payment(message: Message, bot: Bot):
     logger.debug(f" process_successful_payment вызван")
     payment = message.successful_payment
 
-    try:
-        order_id = int(payment.invoice_payload)
-    except (ValueError, AttributeError):
-        await message.answer("❌ Ошибка: не удалось определить заказ")
+    order, error = await _validate_stars_payment(
+        message.from_user.id,
+        payment.invoice_payload,
+        payment.currency,
+        payment.total_amount,
+    )
+    if error:
+        await message.answer(f"❌ {error}")
         return
-
-    order = await db.get_order_full(order_id)
-    if not order:
-        await message.answer("❌ Заказ не найден")
-        return
-
+    order_id = order['id']
     await db.update_order_status(order_id, 'paid')
 
     items_list = "\n".join([f"• {item['title']}" for item in order['items']])
@@ -370,8 +430,11 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMCont
 
     logger.debug(f" Текущий статус заказа: {order['status']}")
 
-    # Более гибкая проверка: заказ не должен быть уже оплачен/подтверждён/выполнен
-    if order['status'] in ['paid', 'confirmed', 'completed']:
+    if order['user_id'] != callback.from_user.id:
+        await callback.answer("❌ Этот заказ принадлежит другому пользователю", show_alert=True)
+        return
+
+    if order['status'] != 'awaiting_payment':
         await callback.answer("Этот заказ уже обработан ✅", show_alert=True)
         return
 
@@ -461,6 +524,10 @@ async def payment_receipt_photo(message: Message, bot: Bot, state: FSMContext):
         await state.clear()
         await message.answer("❌ Заказ не найден.")
         return
+    if order['user_id'] != message.from_user.id:
+        await state.clear()
+        await message.answer("❌ Этот заказ принадлежит другому пользователю.")
+        return
 
     # Если заказ уже подтверждён/обработан — фото не нужно
     if order['status'] in ('paid', 'confirmed', 'completed'):
@@ -528,7 +595,7 @@ async def payment_receipt_photo(message: Message, bot: Bot, state: FSMContext):
         )
 
 
-@router.message(PaymentReceiptState.waiting_for_photo)
+@router.message(PaymentReceiptState.waiting_for_photo, F.text & ~F.text.startswith("/"))
 async def payment_receipt_reminder(message: Message, state: FSMContext):
     """Юзер шлёт не-фото, пока ждём чек — мягко напоминаем."""
     data = await state.get_data()
@@ -549,11 +616,21 @@ async def payment_receipt_reminder(message: Message, state: FSMContext):
 @router.callback_query(PaymentReceiptState.waiting_for_photo, F.data.startswith("payment_skip_photo_"))
 async def payment_skip_photo(callback: CallbackQuery, state: FSMContext):
     """Пользователь отказался от отправки фото чека."""
-    await state.clear()
+    data = await state.get_data()
     try:
         order_id = int(callback.data.split("_")[-1])
     except (ValueError, IndexError):
         order_id = None
+    if order_id != data.get('order_id'):
+        await state.clear()
+        await callback.answer("❌ Заказ не найден", show_alert=True)
+        return
+    order = await db.get_order_full(order_id)
+    if not order or order['user_id'] != callback.from_user.id:
+        await state.clear()
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await state.clear()
     text = (
         f"⏭ Хорошо, без фото.\n\n"
         f"Администратор проверит поступление по заказу #{order_id if order_id else ''} "
@@ -592,6 +669,10 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
         return
 
     logger.debug(f" Текущий статус заказа: {order['status']}")
+
+    if order['status'] != 'payment_pending':
+        await callback.answer("Этот заказ нельзя подтвердить в текущем статусе", show_alert=True)
+        return
 
     # Обновляем статус на "подтверждён"
     try:

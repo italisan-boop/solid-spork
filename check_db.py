@@ -1,21 +1,20 @@
-import sqlite3
+from db.schema import connect
 
-conn = sqlite3.connect('semena_znaniy.db')
-cursor = conn.cursor()
 
-print("=== Таблица orders ===")
-cursor.execute("SELECT * FROM orders")
-orders = cursor.fetchall()
-for order in orders:
-    print(order)
+with connect() as connection:
+    cursor = connection.cursor()
 
-print("\n=== Таблица order_items ===")
-cursor.execute("SELECT * FROM order_items")
-items = cursor.fetchall()
-for item in items:
-    print(item)
+    print("=== Таблица orders ===")
+    cursor.execute("SELECT * FROM orders")
+    orders = cursor.fetchall()
+    for order in orders:
+        print(order)
+
+    print("\n=== Таблица order_items ===")
+    cursor.execute("SELECT * FROM order_items")
+    items = cursor.fetchall()
+    for item in items:
+        print(item)
 
 print(f"\nВсего заказов: {len(orders)}")
 print(f"Всего товаров: {len(items)}")
-
-conn.close()

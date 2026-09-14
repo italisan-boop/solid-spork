@@ -22,12 +22,27 @@ PAGE_SIZE = 20  # Количество заказов на странице
 # Интервал опроса новых заказов для авто-уведомлений админам
 NEW_ORDER_POLL_INTERVAL = 15  # секунд
 
-# Множество пользователей, ожидающих сообщение для рассылки
-broadcast_pending_users = set()
-
-
 def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
+
+
+def admin_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Все заказы", callback_data="admin_orders_all")
+    builder.button(text="🆕 Новые", callback_data="admin_orders_new")
+    builder.button(text="✅ Подтверждённые", callback_data="admin_orders_confirmed")
+    builder.button(text="📊 Статистика", callback_data="admin_stats")
+    builder.button(text="📢 Рассылка", callback_data="admin_broadcast")
+    builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
+    builder.button(text="📂 Управление категориями", callback_data="admin_categories")
+    builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
+    builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
+    builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
+    builder.button(text="🗑 Сброс кэша", callback_data="admin_drop_cache")
+    builder.button(text="🎧 Поддержка", callback_data="admin_support_menu")
+    builder.button(text="✏️ Тексты", callback_data="admin_texts")
+    builder.adjust(2)
+    return builder.as_markup()
 
 
 async def safe_edit_text(callback: CallbackQuery, text: str, reply_markup=None, parse_mode=None):
@@ -55,25 +70,10 @@ async def cmd_admin(message: Message):
         await message.answer("❌ У вас нет прав администратора.")
         return
 
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📋 Все заказы", callback_data="admin_orders_all")
-    builder.button(text="🆕 Новые", callback_data="admin_orders_new")
-    builder.button(text="✅ Подтверждённые", callback_data="admin_orders_confirmed")
-    builder.button(text="📊 Статистика", callback_data="admin_stats")
-    builder.button(text="📢 Рассылка", callback_data="admin_broadcast")
-    builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
-    builder.button(text="📂 Управление категориями", callback_data="admin_categories")
-    builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
-    builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
-    builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
-    builder.button(text="🗑 Сброс кэша", callback_data="admin_drop_cache")
-    builder.button(text="🎧 Поддержка", callback_data="admin_support_menu")
-    builder.adjust(2)
-
     await message.answer(
         f"👨‍💼 <b>Админ-панель</b>\n\n"
         f"Добро пожаловать, {message.from_user.full_name}!",
-        reply_markup=builder.as_markup(), parse_mode="HTML"
+        reply_markup=admin_keyboard(), parse_mode="HTML"
     )
 
 
@@ -83,26 +83,11 @@ async def admin_menu(callback: CallbackQuery):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
 
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📋 Все заказы", callback_data="admin_orders_all")
-    builder.button(text="🆕 Новые", callback_data="admin_orders_new")
-    builder.button(text="✅ Подтверждённые", callback_data="admin_orders_confirmed")
-    builder.button(text="📊 Статистика", callback_data="admin_stats")
-    builder.button(text="📢 Рассылка", callback_data="admin_broadcast")
-    builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
-    builder.button(text="📂 Управление категориями", callback_data="admin_categories")
-    builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
-    builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
-    builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
-    builder.button(text="🗑 Сброс кэша", callback_data="admin_drop_cache")
-    builder.button(text="🎧 Поддержка", callback_data="admin_support_menu")
-    builder.adjust(2)
-
     await safe_edit_text(
         callback,
         f"👨‍💼 <b>Админ-панель</b>\n\n"
         f"Добро пожаловать, {callback.from_user.full_name}!",
-        reply_markup=builder.as_markup(),
+        reply_markup=admin_keyboard(),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -552,10 +537,20 @@ async def confirm_order(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Ошибка", show_alert=True)
         return
 
+    order = await db.get_order_full(order_id)
+    if not order:
+        await callback.answer("❌ Заказ не найден", show_alert=True)
+        return
+    if order['status'] not in PENDING_STATUSES:
+        await callback.answer(
+            f"⚠️ Заказ уже обработан (статус: {order['status']})",
+            show_alert=True,
+        )
+        return
+
     await db.update_order_status(order_id, 'confirmed')
     await callback.answer("✅ Заказ подтверждён!", show_alert=True)
 
-    order = await db.get_order_full(order_id)
     if order:
         try:
             await bot.send_message(
@@ -627,10 +622,20 @@ async def complete_order(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Ошибка", show_alert=True)
         return
 
+    order = await db.get_order_full(order_id)
+    if not order:
+        await callback.answer("❌ Заказ не найден", show_alert=True)
+        return
+    if order['status'] != 'confirmed':
+        await callback.answer(
+            f"❌ Нельзя завершить заказ со статусом '{order['status']}'",
+            show_alert=True,
+        )
+        return
+
     await db.update_order_status(order_id, 'completed')
     await callback.answer("📦 Заказ выполнен!", show_alert=True)
 
-    order = await db.get_order_full(order_id)
     if order:
         try:
             await bot.send_message(
@@ -656,6 +661,17 @@ async def restore_order(callback: CallbackQuery):
         order_id = int(callback.data.split("_")[-1])
     except (ValueError, IndexError):
         await callback.answer("❌ Ошибка", show_alert=True)
+        return
+
+    order = await db.get_order_full(order_id)
+    if not order:
+        await callback.answer("❌ Заказ не найден", show_alert=True)
+        return
+    if order['status'] != 'cancelled':
+        await callback.answer(
+            f"❌ Нельзя восстановить заказ со статусом '{order['status']}'",
+            show_alert=True,
+        )
         return
 
     await db.update_order_status(order_id, 'new')

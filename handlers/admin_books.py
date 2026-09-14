@@ -1,4 +1,4 @@
-from aiogram import Bot, Router, F
+from aiogram import BaseMiddleware, Bot, Router, F
 from aiogram.types import CallbackQuery, Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
@@ -53,6 +53,32 @@ PAGE_PHOTOS_LIMIT_NOTE = (
 def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором"""
     return user_id in settings.ADMIN_IDS
+
+
+class AdminBooksMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user and not is_admin(user.id):
+            state = data.get("state")
+            if state:
+                await state.clear()
+            if isinstance(event, CallbackQuery):
+                await event.answer("❌ Нет прав", show_alert=True)
+            elif isinstance(event, Message):
+                await event.answer("❌ Нет прав администратора.")
+            return None
+        return await handler(event, data)
+
+
+router.message.middleware(AdminBooksMiddleware())
+router.callback_query.middleware(AdminBooksMiddleware())
+
+
+@router.message(F.text == "/cancel")
+async def cancel_admin_state(message: Message, state: FSMContext):
+    from handlers.user import cancel_action
+
+    await cancel_action(message, state)
 
 
 def is_url(text: str) -> bool:

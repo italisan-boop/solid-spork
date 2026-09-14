@@ -1,11 +1,11 @@
 """Модуль для работы с заказами"""
 import aiosqlite
-from db import DB_NAME
+from db.connection import connection
 
 
 async def create_order(user_id: int, user_name: str, cart: list, total: int) -> int:
     """Создать новый заказ"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             "INSERT INTO orders (user_id, user_name, total, status) VALUES (?, ?, ?, 'new')",
             (user_id, user_name, total)
@@ -24,7 +24,7 @@ async def create_order(user_id: int, user_name: str, cart: list, total: int) -> 
 
 async def get_order(order_id: int) -> dict:
     """Получить заказ по ID"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
         row = await cursor.fetchone()
@@ -33,7 +33,7 @@ async def get_order(order_id: int) -> dict:
 
 async def get_order_full(order_id: int) -> dict:
     """Получить заказ со всеми товарами"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
 
         cursor = await db.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
@@ -69,7 +69,7 @@ async def get_order_full(order_id: int) -> dict:
 
 async def get_user_orders(user_id: int, limit: int = 10) -> list:
     """Получить заказы пользователя"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
@@ -81,7 +81,7 @@ async def get_user_orders(user_id: int, limit: int = 10) -> list:
 
 async def update_order_status(order_id: int, status: str):
     """Обновить статус заказа"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "UPDATE orders SET status = ? WHERE id = ?",
             (status, order_id)
@@ -100,7 +100,7 @@ async def get_unnotified_pending_orders(limit: int = 20) -> list:
     Поллер авто-уведомлений крутит эту функцию и по результату шлёт
     админам карточку с кнопками «Принять / Отклонить».
     """
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         placeholders = ",".join("?" * len(PENDING_STATUSES))
         cursor = await db.execute(
@@ -117,7 +117,7 @@ async def get_unnotified_pending_orders(limit: int = 20) -> list:
 
 async def mark_new_order_notified(order_id: int) -> None:
     """Отметить, что админы уже получили авто-уведомление о заказе."""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "UPDATE orders SET new_order_notified = 1 WHERE id = ?",
             (order_id,),
@@ -128,7 +128,7 @@ async def mark_new_order_notified(order_id: int) -> None:
 async def save_admin_notification_ids(order_id: int, admin_ids: list, message_ids: list):
     """Сохранить ID сообщений уведомлений админам для последующего удаления"""
     import json
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         # Получаем текущие ID
         cursor = await db.execute("SELECT admin_notification_ids FROM orders WHERE id = ?", (order_id,))
         row = await cursor.fetchone()
@@ -155,7 +155,7 @@ async def replace_admin_notification_ids(order_id: int, pairs: list):
     """Полностью заменить хранимые ID уведомлений (текстовый квиток -> фото-чек)."""
     import json
     data = json.dumps([{"admin_id": a, "message_id": m} for a, m in pairs if m])
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "UPDATE orders SET admin_notification_ids = ? WHERE id = ?",
             (data, order_id)
@@ -166,7 +166,7 @@ async def replace_admin_notification_ids(order_id: int, pairs: list):
 async def clear_admin_notifications(order_id: int, bot):
     """Удалить уведомления у всех админов после подтверждения одним из них"""
     import json
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute("SELECT admin_notification_ids FROM orders WHERE id = ?", (order_id,))
         row = await cursor.fetchone()
         
@@ -199,7 +199,7 @@ async def clear_admin_notifications(order_id: int, bot):
 
 async def get_all_orders(limit: int = 20, offset: int = 0, status: str = None) -> list:
     """Получить заказы с пагинацией"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
 
         if status:
@@ -223,7 +223,7 @@ async def get_all_orders(limit: int = 20, offset: int = 0, status: str = None) -
 
 async def get_orders_count(status: str = None) -> int:
     """Получить количество заказов (с фильтром по статусу)"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         if status:
             cursor = await db.execute(
                 "SELECT COUNT(*) as cnt FROM orders WHERE status = ?",
@@ -237,7 +237,7 @@ async def get_orders_count(status: str = None) -> int:
 
 async def get_stats() -> dict:
     """Получить статистику магазина"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
 
         cursor = await db.execute("SELECT COUNT(*) as cnt FROM orders")
@@ -262,7 +262,7 @@ async def get_stats() -> dict:
 
 async def get_all_unique_users() -> list:
     """Получить всех уникальных пользователей"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT DISTINCT user_id FROM orders")
         rows = await cursor.fetchall()

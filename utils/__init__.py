@@ -61,6 +61,43 @@ _EMOJI_ID_RE = re.compile(r'emoji-id\s*=\s*"([^"]*)"', re.IGNORECASE)
 _SAFE_URL_RE = re.compile(r"^(https?://|tg://)", re.IGNORECASE)
 
 
+
+def _balance_telegram_tags(text: str) -> str:
+    """Удалить осиротевшие и незакрытые теги после allowlist-очистки."""
+    output: list[str] = []
+    stack: list[tuple[str, int]] = []
+
+    position = 0
+    for match in _TAG_RE.finditer(text):
+        output.append(text[position:match.start()])
+        closing = match.group(1) == "/"
+        tag = match.group(2).lower()
+        attrs = match.group(3) or ""
+
+        if tag == "span" and (closing or 'class="tg-spoiler"' in attrs):
+            tag = "tg-spoiler"
+        elif tag == "span":
+            output.append(match.group(0))
+            position = match.end()
+            continue
+
+        if closing:
+            if stack and stack[-1][0] == tag:
+                output.append(match.group(0))
+                stack.pop()
+        elif tag in _ALLOWED_TAGS or tag == "a":
+            stack.append((tag, len(output)))
+            output.append(match.group(0))
+        else:
+            output.append(match.group(0))
+        position = match.end()
+
+    output.append(text[position:])
+    for _, index in stack:
+        output[index] = ""
+    return "".join(output)
+
+
 def sanitize_telegram_html(text: str) -> str:
     """Подготовить пользовательский текст к отправке через Telegram HTML.
 
@@ -145,6 +182,8 @@ def sanitize_telegram_html(text: str) -> str:
             return ""
 
         if tag == "tg-emoji":
+            if closing:
+                return "</tg-emoji>"
             eid = _EMOJI_ID_RE.search(attrs)
             if not eid:
                 return ""
@@ -165,7 +204,8 @@ def sanitize_telegram_html(text: str) -> str:
         return spans[int(m.group(1))]
 
     text = re.sub(r"\x00A(\d+)\x00", _restore, text)
-    return re.sub(r"\x00S(\d+)\x00", _restore_span, text)
+    text = re.sub(r"\x00S(\d+)\x00", _restore_span, text)
+    return _balance_telegram_tags(text)
 
 
 __all__ = ["setup_logger", "format_local_time", "parseBookImages", "sanitize_telegram_html"]

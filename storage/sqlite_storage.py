@@ -15,7 +15,7 @@ from aiogram.fsm.storage.base import (
     StorageKey,
 )
 
-from database import DB_NAME
+from db.schema import DB_PATH
 
 
 class SQLiteStorage(BaseStorage):
@@ -25,7 +25,7 @@ class SQLiteStorage(BaseStorage):
 
     def __init__(
         self,
-        db_path: str = DB_NAME,
+        db_path: str = str(DB_PATH),
         key_builder: "DefaultKeyBuilder | None" = None,
     ) -> None:
         self.db_path = db_path
@@ -36,18 +36,10 @@ class SQLiteStorage(BaseStorage):
 
     async def _connect(self) -> aiosqlite.Connection:
         if self._db is None:
-            self._db = await aiosqlite.connect(self.db_path)
+            self._db = await aiosqlite.connect(self.db_path, timeout=10)
             self._db.row_factory = aiosqlite.Row
-            await self._db.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.TABLE} (
-                    fsm_key TEXT PRIMARY KEY,
-                    state TEXT,
-                    data TEXT
-                )
-                """
-            )
-            await self._db.commit()
+            await self._db.execute("PRAGMA foreign_keys = ON")
+            await self._db.execute("PRAGMA busy_timeout = 10000")
         return self._db
 
     def _key(self, key: StorageKey) -> str:

@@ -29,20 +29,15 @@ class Settings:
             int(x.strip()) for x in admin_ids_str.split(",") if x.strip()
         ]
         
-        # Настройки базы данных
-        self.DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
+        # Обязательный абсолютный путь к общей SQLite-базе.
+        self.DATABASE_PATH = os.getenv("DATABASE_PATH", "").strip()
         
         # Настройки сервера
         self.HOST = os.getenv("HOST", "0.0.0.0")
         self.PORT = int(os.getenv("PORT", "8000"))
         
-        # Глобальные состояния для админки
-        self.broadcast_pending_users = set()
+        # Кэш активных диалогов поддержки.
         self.support_pending_users = set()
-        # Карта закреплённых тикетов: user_id -> admin_id.
-        # Если пользователь в поддержке И закреплён — его сообщения летят
-        # только этому админу, чтобы двое не отвечали одновременно.
-        self.support_claims: dict[int, int] = {}
 
 
 # Глобальный экземпляр настроек

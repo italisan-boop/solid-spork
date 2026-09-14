@@ -1,11 +1,11 @@
 """Модуль для работы с пользователями"""
 import aiosqlite
-from db import DB_NAME
+from db.connection import connection
 
 
 async def get_all_users() -> list:
     """Получить всех пользователей из таблицы users"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT user_id, user_name FROM users")
         rows = await cursor.fetchall()
@@ -14,7 +14,7 @@ async def get_all_users() -> list:
 
 async def get_user(user_id: int) -> dict:
     """Получить информацию о пользователе"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT user_id, user_name FROM users WHERE user_id = ?",
@@ -26,7 +26,7 @@ async def get_user(user_id: int) -> dict:
 
 async def add_user(user_id: int, user_name: str) -> bool:
     """Добавить пользователя в базу данных"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "INSERT OR IGNORE INTO users (user_id, user_name) VALUES (?, ?)",
             (user_id, user_name)
@@ -42,7 +42,7 @@ async def set_support_active(user_id: int, active: bool) -> None:
     в таблице users — создаёт строку, чтобы не терять состояние для
     только что зашедших пользователей.
     """
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "INSERT OR IGNORE INTO users (user_id, user_name) VALUES (?, ?)",
             (user_id, "")
@@ -56,7 +56,7 @@ async def set_support_active(user_id: int, active: bool) -> None:
 
 async def is_support_active(user_id: int) -> bool:
     """Проверить, активен ли диалог с поддержкой у пользователя."""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             "SELECT is_support_active FROM users WHERE user_id = ?",
             (user_id,)
@@ -67,7 +67,7 @@ async def is_support_active(user_id: int) -> bool:
 
 async def get_all_support_active_user_ids() -> list:
     """Список user_id пользователей с активным диалогом поддержки (для гидратации кэша при старте)."""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             "SELECT user_id FROM users WHERE is_support_active = 1"
         )

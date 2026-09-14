@@ -1,33 +1,14 @@
 """Модуль для работы с промокодами"""
 import aiosqlite
 from datetime import datetime
-from db import DB_NAME
+from db.connection import connection
 
 
-async def init_promo_codes():
-    """Создание таблицы промокодов"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS promo_codes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                discount_percent INTEGER NOT NULL DEFAULT 0,
-                discount_fixed INTEGER DEFAULT 0,
-                min_order INTEGER DEFAULT 0,
-                max_uses INTEGER DEFAULT 0,
-                current_uses INTEGER DEFAULT 0,
-                is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TEXT
-            )
-        """)
-        await db.commit()
-    print("✅ Таблица промокодов инициализирована")
 
 
 async def get_all_promo_codes() -> list:
     """Получить все промокоды"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM promo_codes ORDER BY created_at DESC")
         rows = await cursor.fetchall()
@@ -36,7 +17,7 @@ async def get_all_promo_codes() -> list:
 
 async def get_promo_code(code: str) -> dict:
     """Получить промокод по коду"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM promo_codes WHERE code = ? AND is_active = 1",
@@ -49,7 +30,7 @@ async def get_promo_code(code: str) -> dict:
 async def add_promo_code(code: str, discount_percent: int = 0, discount_fixed: int = 0,
                          min_order: int = 0, max_uses: int = 0, expires_at: str = None) -> int:
     """Добавить новый промокод"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             """INSERT INTO promo_codes (code, discount_percent, discount_fixed,
                min_order, max_uses, expires_at)
@@ -62,7 +43,7 @@ async def add_promo_code(code: str, discount_percent: int = 0, discount_fixed: i
 
 async def update_promo_code(promo_id: int, **kwargs) -> bool:
     """Обновить промокод"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         updates = []
         params = []
         for key, value in kwargs.items():
@@ -80,14 +61,14 @@ async def update_promo_code(promo_id: int, **kwargs) -> bool:
 
 async def delete_promo_code(promo_id: int):
     """Удалить промокод"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute("DELETE FROM promo_codes WHERE id = ?", (promo_id,))
         await db.commit()
 
 
 async def increment_promo_usage(code: str):
     """Увеличить счётчик использований промокода"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code = ?",
             (code.upper(),)

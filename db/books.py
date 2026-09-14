@@ -1,7 +1,7 @@
 """Модуль для работы с книгами (каталог)"""
 import aiosqlite
 import json
-from db import DB_NAME
+from db.connection import connection
 from db.categories import NO_CATEGORY_NAME
 
 PAGE_SIZE = 20  # Количество книг на странице
@@ -17,7 +17,7 @@ async def add_book(title: str, price: int, category_id: int,
     # Получаем название категории по ID. Если категория не указана или
     # удалена — сохраняем плейсхолдер NO_CATEGORY_NAME, чтобы catalog.py /
     # Mini App корректно отрисовали «📦 Без категории» через category_display.
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT name FROM categories WHERE id = ?",
@@ -26,7 +26,7 @@ async def add_book(title: str, price: int, category_id: int,
         row = await cursor.fetchone()
         category_name = row['name'] if row else NO_CATEGORY_NAME
 
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         # Зеркалим cover_photo в поле emoji — фронтенд Mini App и
         # catalog.py читают именно emoji. Без этого каталог рисует 📚
         # вместо присланной обложки.
@@ -52,7 +52,7 @@ async def find_book_by_title_author(title: str, author: str) -> dict | None:
     """
     if not title:
         return None
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT id, title, author, category
@@ -69,7 +69,7 @@ async def find_book_by_title_author(title: str, author: str) -> dict | None:
 
 async def get_all_books() -> list:
     """Получить все активные книги"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images, b.category_id, b.sort_order,
@@ -85,7 +85,7 @@ async def get_all_books() -> list:
 
 async def update_book_sort_order(book_id: int, sort_order: int):
     """Обновить порядок отображения книги"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "UPDATE books SET sort_order = ? WHERE id = ?",
             (sort_order, book_id)
@@ -95,7 +95,7 @@ async def update_book_sort_order(book_id: int, sort_order: int):
 
 async def get_book(book_id: int) -> dict:
     """Получить одну книгу по ID"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images, b.category_id, b.sort_order,
@@ -118,7 +118,7 @@ async def delete_book(book_id: int):
     скрывает книгу из каталога Mini App и админского списка; строку
     можно вернуть через restore_book().
     """
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         await db.execute(
             "UPDATE books SET is_archived = 1, is_active = 0 WHERE id = ?",
             (book_id,)
@@ -129,7 +129,7 @@ async def delete_book(book_id: int):
 
 async def restore_book(book_id: int) -> bool:
     """Вернуть книгу из архива в каталог (is_archived=0, is_active=1)."""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         cursor = await db.execute(
             "UPDATE books SET is_archived = 0, is_active = 1 WHERE id = ? AND is_archived = 1",
             (book_id,)
@@ -143,7 +143,7 @@ async def restore_book(book_id: int) -> bool:
 
 async def get_archived_books() -> list:
     """Получить все книги в архиве (is_archived=1) для админского восстановления."""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT b.id, b.title, b.price, b.category, b.emoji, b.category_id,
@@ -159,7 +159,7 @@ async def get_archived_books() -> list:
 
 async def update_book(book_id: int, **kwargs) -> bool:
     """Обновить поля книги"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         updates = []
         params = []
 
@@ -181,7 +181,7 @@ async def update_book(book_id: int, **kwargs) -> bool:
 
 async def update_book_full(book_id: int, **kwargs) -> bool:
     """Полное обновление книги"""
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         updates = []
         params = []
 
@@ -207,7 +207,7 @@ async def get_books_count(is_active: bool = True, search_query: str = "") -> int
     Поиск регистронезависимый и матчит подстроку в title, чтобы админ
     мог быстро найти книгу, созданную «условно несколько месяцев назад».
     """
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         if search_query:
             like = f"%{search_query}%"
             cursor = await db.execute(
@@ -248,7 +248,7 @@ async def get_all_books_paginated(
     """
     order_clause = _BOOKS_SORT_ORDERS.get(sort_by, _BOOKS_SORT_ORDERS["default"])
 
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with connection() as db:
         db.row_factory = aiosqlite.Row
         if search_query:
             like = f"%{search_query}%"

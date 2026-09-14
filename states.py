@@ -74,6 +74,10 @@ class CriticalActionState(StatesGroup):
     waiting_for_code = State()
 
 
+class TextSettingsState(StatesGroup):
+    waiting_for_value = State()
+
+
 class SupportReplyState(StatesGroup):
     """Админ нажал «⚡ Ответить» на тикет — ждём текст ответа."""
     waiting_for_text = State()

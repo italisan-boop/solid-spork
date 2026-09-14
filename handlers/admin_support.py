@@ -9,6 +9,7 @@
 """
 import logging
 import re
+import html
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -16,6 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
 from config import settings
+from content_defaults import QUICK_TEMPLATE_KEYS, TEMPLATES_BY_KEY
 from handlers.user import (
     is_admin,
     support_msg_owner,
@@ -85,6 +87,19 @@ async def native_admin_reply(message: Message):
 # 2. Кнопка «⚡ Ответить» — FSM: ждём текст, потом отправляем
 # ============================================================
 
+def _support_reply_markup(user_id: int):
+    builder = InlineKeyboardBuilder()
+    for alias, key in QUICK_TEMPLATE_KEYS.items():
+        builder.button(
+            text=TEMPLATES_BY_KEY[key].title,
+            callback_data=f"support_template:{user_id}:{alias}",
+        )
+    builder.button(text="✍️ Свой ответ", callback_data=f"support_custom_reply:{user_id}")
+    builder.button(text="◀️ К тикету", callback_data=f"support_ticket:{user_id}")
+    builder.adjust(2, 2, 1, 1, 1)
+    return builder.as_markup()
+
+
 @router.callback_query(F.data.startswith("support_reply:"))
 async def cb_support_reply(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -92,19 +107,78 @@ async def cb_support_reply(callback: CallbackQuery, state: FSMContext):
         return
     user_id = int(callback.data.split(":")[1])
     await state.clear()
-    await state.set_state(SupportReplyState.waiting_for_text)
-    await state.update_data(reply_user_id=user_id)
-    # Запоминаем связь «это сообщение → тикет», чтобы цепочка reply работала
     support_msg_owner[(callback.message.chat.id, callback.message.message_id)] = user_id
     await callback.message.answer(
-        "✍️ Введите текст ответа или шаблон (+greeting, +wait, +resolved, +ask_details, +payment).\n"
-        "Чтобы отменить — /cancel",
+        "⚡ <b>Выберите шаблон ответа или напишите свой текст:</b>",
+        reply_markup=_support_reply_markup(user_id),
+        parse_mode="HTML",
     )
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("support_template:"))
+async def cb_support_template(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    _, raw_user_id, alias = callback.data.split(":", 2)
+    if alias not in QUICK_TEMPLATE_KEYS:
+        await callback.answer("❌ Шаблон не найден", show_alert=True)
+        return
+    await state.clear()
+    ok, status_text = await _send_admin_reply(
+        callback.message,
+        int(raw_user_id),
+        f"+{alias}",
+        admin_id=callback.from_user.id,
+        admin_name=callback.from_user.full_name,
+    )
+    await callback.message.answer(status_text, parse_mode="HTML")
+    await callback.answer("Шаблон отправлен" if ok else "Не удалось отправить", show_alert=not ok)
+
+
+@router.callback_query(F.data.startswith("support_custom_reply:"))
+async def cb_support_custom_reply(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    user_id = int(callback.data.split(":")[1])
+    await state.clear()
+    await state.set_state(SupportReplyState.waiting_for_text)
+    await state.update_data(reply_user_id=user_id)
+    support_msg_owner[(callback.message.chat.id, callback.message.message_id)] = user_id
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Отмена", callback_data="support_reply_cancel")
+    await callback.message.answer("✍️ Введите текст ответа:", reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "support_reply_cancel")
+async def cb_support_reply_cancel(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await state.clear()
+    await cb_support_menu(callback)
+
+
+@router.message(SupportReplyState.waiting_for_text, F.text == "/cancel")
+async def support_reply_cancel_command(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
+        return
+    from handlers.user import cancel_action
+
+    await cancel_action(message, state)
+
 @router.message(SupportReplyState.waiting_for_text, F.text & ~F.text.startswith("/"))
 async def deferred_admin_reply(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
+        return
+
     data = await state.get_data()
     user_id = data.get("reply_user_id")
     await state.clear()
@@ -142,6 +216,10 @@ async def cb_support_claim(callback: CallbackQuery):
         return
     user_id = int(callback.data.split(":")[1])
     status = await _claim_ticket(user_id, callback.from_user.id, callback.from_user.full_name, callback.bot)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=_ticket_action_markup(user_id))
+    except Exception:
+        pass
     await callback.answer(_short_alert(status), show_alert=True)
 
 
@@ -152,6 +230,10 @@ async def cb_support_release(callback: CallbackQuery):
         return
     user_id = int(callback.data.split(":")[1])
     status = _release_ticket(user_id)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=_ticket_action_markup(user_id))
+    except Exception:
+        pass
     await callback.answer(_short_alert(status), show_alert=True)
 
 
@@ -180,9 +262,11 @@ def _build_support_menu_text(user_ids: list[int]) -> str:
         preview = last if len(last) <= 60 else last[:60] + "…"
         claimed = support_claims.get(uid)
         status = f"🔒 {claimed}" if claimed else ""
-        lines.append(f"• <b>{name}</b> (ID <code>{uid}</code>) {status}")
+        safe_name = html.escape(name, quote=False)
+        safe_preview = html.escape(preview, quote=False)
+        lines.append(f"• <b>{safe_name}</b> (ID <code>{uid}</code>) {status}")
         if preview:
-            lines.append(f"  <i>{preview}</i>")
+            lines.append(f"  <i>{safe_preview}</i>")
     return "\n".join(lines)
 
 
@@ -192,8 +276,8 @@ def _build_support_menu_markup(user_ids: list[int]):
         name = support_last_msg_name.get(uid, str(uid))
         label = f"👤 {name} ({uid})"
         builder.button(text=label, callback_data=f"support_ticket:{uid}")
-    if user_ids:
-        builder.adjust(1)
+    builder.button(text="◀️ В админ-панель", callback_data="admin_menu")
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -228,13 +312,13 @@ async def cb_support_ticket(callback: CallbackQuery):
     preview = last if len(last) <= 120 else last[:120] + "…"
     claimed = support_claims.get(user_id)
     status = f"🔒 Взят в работу: ID <code>{claimed}</code>" if claimed else "📝 Свободен"
+    safe_name = html.escape(name, quote=False)
+    safe_preview = html.escape(preview, quote=False)
     text = (
-        f"👤 <b>{name}</b> (ID <code>{user_id}</code>)\n"
+        f"👤 <b>{safe_name}</b> (ID <code>{user_id}</code>)\n"
         f"📌 {status}\n\n"
-        f"💬 Последнее сообщение:\n<code>{preview}</code>\n\n"
-        f"История: <code>/history_{user_id}</code>\n"
-        f"Ответить: <code>/reply_{user_id} текст</code>\n"
-        f"Шаблоны: <code>/reply_{user_id} +greeting</code>"
+        f"💬 Последнее сообщение:\n<code>{safe_preview}</code>\n\n"
+        "Используйте кнопки ниже или Telegram Reply для работы с тикетом."
     )
     try:
         await callback.message.edit_text(
