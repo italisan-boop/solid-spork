@@ -717,6 +717,10 @@
                 <h2 class="modal-title">🛒 Ваша корзина</h2>
                 <div class="cart-items" id="cartItems"></div>
                 <div class="cart-summary-box">
+                    <label class="cart-total-label" for="paymentMethodSelect">Способ оплаты</label>
+                    <select id="paymentMethodSelect" style="width: 100%; margin: 8px 0 16px; padding: 10px; border: 1px solid var(--border-sage); border-radius: 8px; background: var(--cream);">
+                        <option value="">Загрузка способов оплаты…</option>
+                    </select>
                     <div class="cart-total-row">
                         <span class="cart-total-label">Товары:</span>
                         <span class="cart-total-value" id="cartSubtotal">0 ₽</span>
@@ -808,11 +812,8 @@
                 </div>
                 <div class="payment-instructions" id="paymentInstructions"></div>
                 <div class="payment-warning">
-                    ⚠️ Обязательно укажите номер заказа в комментарии к переводу!
+                    ⚠️ После перевода нажмите «Я оплатил» в сообщении от бота в Telegram.
                 </div>
-                <button class="payment-confirm-btn" id="paymentConfirmBtn" onclick="confirmPayment()">
-                    ✅ Я оплатил
-                </button>
             </div>
         </div>
     </div>
@@ -881,6 +882,9 @@
         let promoCode = '';
         let discount = 0;
         let finalTotal = 0;
+        let paymentMethods = [];
+        let selectedPaymentMethod = '';
+        let checkoutKey = null;
 
         function parseBookImages(field) {
             if (!field || field === '') return [];
@@ -1023,6 +1027,106 @@
                 return false;
             });
             return cartSaveChain;
+        }
+
+        async function loadPaymentMethods() {
+            const selector = document.getElementById('paymentMethodSelect');
+            if (!initData) {
+                selector.innerHTML = '<option value="">Откройте магазин из Telegram</option>';
+                selector.disabled = true;
+                return;
+            }
+            try {
+                const response = await fetch('/api/checkout/options', {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                if (!response.ok) throw new Error(`Payment options failed: ${response.status}`);
+                const result = await response.json();
+                paymentMethods = Array.isArray(result.methods) ? result.methods : [];
+                selector.innerHTML = paymentMethods.map(method =>
+                    `<option value="${method.id}">${method.title}</option>`
+                ).join('');
+                selectedPaymentMethod = paymentMethods[0]?.id || '';
+                selector.disabled = !selectedPaymentMethod;
+            } catch (error) {
+                console.error('Ошибка загрузки способов оплаты:', error);
+                selector.innerHTML = '<option value="">Способы оплаты недоступны</option>';
+                selector.disabled = true;
+            }
+        }
+
+        document.getElementById('paymentMethodSelect').addEventListener('change', event => {
+            selectedPaymentMethod = event.target.value;
+        });
+
+        async function retryYookassaPayment(orderId) {
+            document.getElementById('loadingOverlay').classList.add('active');
+            try {
+                const response = await fetch(`/api/orders/${orderId}/yookassa/retry`, {
+                    method: 'POST',
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || `Payment retry failed: ${response.status}`);
+                if (result.confirmation_url) {
+                    tg.openLink(result.confirmation_url);
+                    watchYookassaPayment(orderId);
+                    return;
+                }
+                tg.showAlert(result.error || 'ЮKassa пока не подготовила платёж. Попробуйте ещё раз позже.');
+            } catch (error) {
+                console.error('Ошибка повторного платежа ЮKassa:', error);
+                tg.showAlert('Не удалось повторить платёж. Попробуйте позже.');
+            } finally {
+                document.getElementById('loadingOverlay').classList.remove('active');
+            }
+        }
+
+        let yookassaPaymentTimer = null;
+
+        function watchYookassaPayment(orderId) {
+            if (yookassaPaymentTimer) clearInterval(yookassaPaymentTimer);
+            const checkStatus = async () => {
+                try {
+                    const response = await fetch(`/api/orders/${orderId}/payment`, {
+                        headers: telegramAuthHeaders(),
+                        cache: 'no-store'
+                    });
+                    if (!response.ok) return;
+                    const result = await response.json();
+                    if (['paid', 'confirmed', 'completed'].includes(result.status)) {
+                        clearInterval(yookassaPaymentTimer);
+                        yookassaPaymentTimer = null;
+                        tg.showAlert(`✅ Оплата заказа #${orderId} подтверждена.`);
+                    } else if (result.provider_status === 'canceled') {
+                        clearInterval(yookassaPaymentTimer);
+                        yookassaPaymentTimer = null;
+                        tg.showConfirm(
+                            `Платёж по заказу #${orderId} отменён. Создать новый?`,
+                            confirmed => { if (confirmed) retryYookassaPayment(orderId); }
+                        );
+                    }
+                } catch (error) {
+                    console.error('Ошибка проверки платежа ЮKassa:', error);
+                }
+            };
+            checkStatus();
+            yookassaPaymentTimer = setInterval(checkStatus, 5000);
+        }
+
+        function handleYookassaCheckout(result) {
+            if (result.confirmation_url) {
+                tg.openLink(result.confirmation_url);
+                tg.showAlert('Откроется ЮKassa. После оплаты вернитесь в магазин: статус обновится после подтверждения платежа.');
+                watchYookassaPayment(result.order_id);
+                return;
+            }
+            tg.showConfirm(
+                `Заказ #${result.order_id} создан. ${result.payment_error || 'Платёж ЮKassa пока не готов.'}\n\nПовторить создание платежа?`,
+                confirmed => { if (confirmed) retryYookassaPayment(result.order_id); }
+            );
         }
 
         function getUniqueCategories() {
@@ -1621,7 +1725,7 @@
                 const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
                 const response = await fetch('/api/validate-promo', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: telegramAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ code, total })
                 });
 
@@ -1683,10 +1787,14 @@
                 return;
             }
 
+            if (!selectedPaymentMethod) { tg.showAlert('Выберите способ оплаты.'); return; }
+            checkoutKey = checkoutKey || crypto.randomUUID();
             const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
             const payload = {
                 cart: cart.map(b => ({ id: b.id, quantity: b.quantity || 1 })),
                 cart_revision: cartRevision,
+                checkout_key: checkoutKey,
+                payment_method: selectedPaymentMethod,
                 promo_code: promoCode
             };
 
@@ -1701,7 +1809,9 @@
                 if (result.success) {
                     tg.HapticFeedback.notificationOccurred('success');
 
-                    if (result.payment_required && result.payment_info) {
+                    if (result.payment_method === 'yookassa') {
+                        handleYookassaCheckout(result);
+                    } else if (result.payment_required && result.payment_info) {
                         showPaymentScreen(result.order_id, result.final_total, result.payment_info);
                     } else {
                         let message = `✅ Заказ #${result.order_id} создан!\n\n`;
@@ -1712,6 +1822,7 @@
                         tg.showAlert(message);
                     }
 
+                    checkoutKey = null;
                     cart = [];
                     cartRevision = result.cart_revision;
                     discount = 0;
@@ -1740,11 +1851,7 @@
             if (e.target === document.getElementById('cartOverlay')) closeCartModal();
         });
 
-        let currentPaymentOrderId = null;
-
         function showPaymentScreen(orderId, amount, paymentInfo) {
-            currentPaymentOrderId = orderId;
-
             document.getElementById('paymentOrderId').textContent = `#${orderId}`;
             document.getElementById('paymentAmount').textContent = `${amount.toLocaleString('ru-RU')} ₽`;
 
@@ -1772,7 +1879,6 @@
 
         function closePaymentModal() {
             document.getElementById('paymentOverlay').classList.remove('active');
-            currentPaymentOrderId = null;
         }
 
         function copyToClipboard(elementId) {
@@ -1785,28 +1891,6 @@
                 console.error('Ошибка копирования:', err);
                 tg.showAlert('❌ Не удалось скопировать');
             });
-        }
-
-        function confirmPayment() {
-            if (!currentPaymentOrderId) return;
-
-            const btn = document.getElementById('paymentConfirmBtn');
-            if (btn.disabled) return; // Защита от повторного нажатия
-            
-            btn.disabled = true;
-            btn.textContent = 'Отправляем...';
-
-            setTimeout(() => {
-                closePaymentModal();
-                tg.showAlert(
-                    `✅ Отлично!\n\n` +
-                    `Мы получили информацию о вашей оплате заказа #${currentPaymentOrderId}.\n\n` +
-                    `Администратор проверит поступление и подтвердит заказ в течение 5-15 минут.\n\n` +
-                    `Спасибо, что выбрали «Семена Знаний»! 🌿`
-                );
-                btn.disabled = false;
-                btn.textContent = '✅ Я оплатил';
-            }, 1000);
         }
 
         document.getElementById('paymentOverlay').addEventListener('click', (e) => {
@@ -1947,6 +2031,7 @@
             await loadCategories();
             await loadBooks();
             await loadCart();
+            await loadPaymentMethods();
             updateUI();
             renderCartItems();
             applyFiltersAndRender();

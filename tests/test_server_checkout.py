@@ -1,3 +1,4 @@
+import uuid
 from contextlib import ExitStack
 import hashlib
 import hmac
@@ -85,6 +86,8 @@ class CheckoutApiTests(unittest.TestCase):
         payload = {
             "cart": [{"id": 1, "title": "Подмена", "price": 1, "quantity": 2}],
             "cart_revision": 0,
+            "checkout_key": str(uuid.uuid4()),
+            "payment_method": "manual",
             "promo_code": "",
         }
         payload.update(overrides)
@@ -103,7 +106,7 @@ class CheckoutApiTests(unittest.TestCase):
 
     def test_checkout_uses_catalog_price_and_persists_quantity(self):
         self._settings(card=False)
-        response = self._order()
+        response = self._order(payment_method="none")
         self.assertEqual(200, response.status_code)
         result = response.get_json()
         self.assertEqual("none", result["payment_method"])
@@ -130,7 +133,7 @@ class CheckoutApiTests(unittest.TestCase):
             VALUES ('SAVE10', 10, 1, 0)
             """
         )
-        response = self._order(promo_code="save10")
+        response = self._order(promo_code="save10", payment_method="none")
         self.assertEqual(200, response.status_code)
         result = response.get_json()
         self.assertEqual(240, result["discount"])
@@ -140,10 +143,19 @@ class CheckoutApiTests(unittest.TestCase):
             "SELECT current_uses FROM promo_codes WHERE code = 'SAVE10'"
         ))
 
+    def test_rechecks_book_availability_inside_checkout_transaction(self):
+        self._settings(card=False)
+        with patch("server._checkout_cart_is_available", return_value=False):
+            response = self._order(payment_method="none")
+
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("book is unavailable", response.get_json()["error"])
+        self.assertEqual(0, self._scalar("SELECT COUNT(*) FROM orders"))
+
     def test_card_and_stars_contracts(self):
         self._settings(card=True, stars=False)
         card_result = self._order().get_json()
-        self.assertEqual("card", card_result["payment_method"])
+        self.assertEqual("manual", card_result["payment_method"])
         self.assertTrue(card_result["payment_required"])
         self.assertIn("payment_info", card_result)
         self._send_keyboard.assert_called_once()
@@ -153,6 +165,7 @@ class CheckoutApiTests(unittest.TestCase):
         stars_result = self._order(
             cart=[{"id": 1, "quantity": 1}],
             cart_revision=card_result["cart_revision"],
+            payment_method="stars",
         ).get_json()
         self.assertEqual("stars", stars_result["payment_method"])
         self.assertFalse(stars_result["payment_required"])

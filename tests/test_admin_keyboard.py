@@ -14,7 +14,6 @@ EXPECTED_BUTTONS = [
     ("📚 Управление книгами", "admin_books_menu"),
     ("📂 Управление категориями", "admin_categories"),
     ("💳 Настройки оплаты", "admin_payments"),
-    ("⭐ Настройки Stars", "admin_stars_settings"),
     ("🎟️ Промокоды", "admin_promo"),
     ("🗑 Сброс кэша", "admin_drop_cache"),
     ("🎧 Поддержка", "admin_support_menu"),
@@ -34,7 +33,7 @@ class AdminKeyboardTests(unittest.IsolatedAsyncioTestCase):
     def test_keyboard_has_current_buttons_in_order(self):
         markup = admin_keyboard()
         self.assertEqual(EXPECTED_BUTTONS, button_pairs(markup))
-        self.assertEqual([2, 2, 2, 2, 2, 2, 1], [len(row) for row in markup.inline_keyboard])
+        self.assertEqual([2, 2, 2, 2, 2, 2], [len(row) for row in markup.inline_keyboard])
 
     async def test_admin_command_uses_keyboard_factory(self):
         message = SimpleNamespace(

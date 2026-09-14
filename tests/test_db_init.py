@@ -60,6 +60,7 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "user_bonuses",
                 "payment_settings",
                 "stars_settings",
+                "yookassa_payments",
                 "message_templates",
                 "fsm_records",
                 "mini_app_carts",
@@ -68,7 +69,7 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schema.SCHEMA_VERSION, self._query_one("PRAGMA user_version"))
         self.assertEqual(6, self._query_one("SELECT COUNT(*) FROM categories"))
         self.assertEqual(6, self._query_one("SELECT COUNT(*) FROM books"))
-        self.assertEqual(6, self._query_one("SELECT COUNT(*) FROM payment_settings"))
+        self.assertEqual(7, self._query_one("SELECT COUNT(*) FROM payment_settings"))
         self.assertEqual(2, self._query_one("SELECT COUNT(*) FROM stars_settings"))
 
     async def test_legacy_books_migration_initializes_twice_without_locks(self):
@@ -119,9 +120,46 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(legacy_book[0])
         self.assertIsNotNone(legacy_book[1])
         self.assertEqual(6, self._query_one("SELECT COUNT(*) FROM categories"))
-        self.assertEqual(6, self._query_one("SELECT COUNT(*) FROM payment_settings"))
+        self.assertEqual(7, self._query_one("SELECT COUNT(*) FROM payment_settings"))
         self.assertEqual(2, self._query_one("SELECT COUNT(*) FROM stars_settings"))
 
+    async def test_legacy_orders_gain_checkout_and_yookassa_schema_idempotently(self):
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    total INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute("INSERT INTO orders (user_id, total) VALUES (101, 1200)")
+            connection.commit()
+        finally:
+            connection.close()
 
-if __name__ == "__main__":
-    unittest.main()
+        await db.init_db()
+        await db.init_db()
+
+        connection = sqlite3.connect(self.database_path)
+        try:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)")}
+            migrated_order = connection.execute(
+                "SELECT payment_method, checkout_key FROM orders WHERE id = 1"
+            ).fetchone()
+            indexes = {
+                row[1]
+                for row in connection.execute("PRAGMA index_list(orders)")
+            }
+            payment_table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'yookassa_payments'"
+            ).fetchone()
+        finally:
+            connection.close()
+
+        self.assertTrue({"payment_method", "checkout_key"}.issubset(columns))
+        self.assertEqual(("manual", None), migrated_order)
+        self.assertIn("idx_orders_user_checkout_key", indexes)
+        self.assertEqual(("yookassa_payments",), payment_table)

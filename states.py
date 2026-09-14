@@ -32,7 +32,8 @@ class EditBookState(StatesGroup):
 
 class AdminBooksState(StatesGroup):
     """Состояния админского списка книг: сортировка и поиск."""
-    waiting_for_search = State()  # админ ввёл подстроку для поиска
+    waiting_for_search = State()
+    waiting_for_archive_purge_code = State()
 
 
 class CategoryState(StatesGroup):

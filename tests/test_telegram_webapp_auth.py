@@ -81,9 +81,9 @@ class TelegramProtectedRoutesTests(unittest.TestCase):
         return {"X-Telegram-Init-Data": raw}
 
     def test_protected_routes_require_init_data(self):
-        for path in ("/order", "/api/cart", "/api/admin/dashboard", "/api/admin/export/orders", "/api/admin/export/books"):
-            method = self.client.post if path == "/order" else self.client.get
-            response = method(path, json={"cart": []} if path == "/order" else None)
+        for path in ("/order", "/api/cart", "/api/validate-promo", "/api/admin/dashboard", "/api/admin/export/orders", "/api/admin/export/books"):
+            method = self.client.post if path in {"/order", "/api/validate-promo"} else self.client.get
+            response = method(path, json={"cart": []} if path == "/order" else {"code": "SAVE", "total": 100} if path == "/api/validate-promo" else None)
             self.assertEqual(401, response.status_code, path)
 
     def test_admin_query_cannot_elevate_signed_non_admin(self):
@@ -106,6 +106,8 @@ class TelegramProtectedRoutesTests(unittest.TestCase):
                 "user_name": "Forged User",
                 "cart": [{"id": 1, "quantity": 1}],
                 "cart_revision": 0,
+                "checkout_key": "00000000-0000-4000-8000-000000000004",
+                "payment_method": "manual",
                 "promo_code": "",
             },
         )

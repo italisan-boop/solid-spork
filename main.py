@@ -1,45 +1,57 @@
 import asyncio
+import json
 import logging
+import re
+import secrets
+from urllib.parse import urlparse
 
-from aiogram import Bot, Dispatcher
+from aiohttp import web
+from aiohttp_wsgi import WSGIHandler
+from aiogram import BaseMiddleware, Bot, Dispatcher
+from aiogram.types import CallbackQuery, Update
 
 from config import settings
 import db
-from handlers import user, admin_orders, catalog, categories, payments, admin_books, admin_broadcast, admin_promo, admin_commands, admin_texts, admin_support
+from handlers import (
+    admin_books,
+    admin_broadcast,
+    admin_commands,
+    admin_orders,
+    admin_promo,
+    admin_support,
+    admin_texts,
+    catalog,
+    categories,
+    payments,
+    user,
+)
 from handlers.admin_orders import new_orders_notify_loop
 from handlers.user import support_escalation_loop
 from storage import SQLiteStorage
 from utils import setup_logger
 
-# Настраиваем логгер
+
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+BACKGROUND_TASKS_KEY = web.AppKey("background_tasks", list)
+RUNTIME_STARTED_KEY = web.AppKey("runtime_started", bool)
+
 logger = setup_logger(__name__)
 logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
-# Инициализация бота
 bot = Bot(token=settings.BOT_TOKEN)
-# FSM-состояния храним в SQLite, чтобы они переживали рестарт бота
 storage = SQLiteStorage()
 dp = Dispatcher(storage=storage)
-from aiogram import BaseMiddleware
 
 
 class CallbackLoggerMiddleware(BaseMiddleware):
-    """Мидлварь для логирования callback-запросов."""
-    
     async def __call__(self, handler, event, data):
-        from aiogram.types import CallbackQuery
-        
         if isinstance(event, CallbackQuery):
-            logger.debug(f"📥 [CALLBACK] {event.data} от {event.from_user.id}")
-        
+            logger.debug("Callback %s from %s", event.data, event.from_user.id)
         return await handler(event, data)
 
 
-# Добавляем middleware
 dp.callback_query.middleware(CallbackLoggerMiddleware())
-
-# Подключаем роутеры
-# ВАЖНО: payments должен быть ПЕРВЫМ, чтобы его callback-хендлеры срабатывали раньше
 dp.include_router(payments.router)
 dp.include_router(admin_orders.router)
 dp.include_router(admin_books.router)
@@ -49,57 +61,141 @@ dp.include_router(catalog.router)
 dp.include_router(categories.router)
 dp.include_router(admin_commands.router)
 dp.include_router(admin_texts.router)
-dp.include_router(admin_support.router)  # нативный reply / кнопки поддержки — до user.router
-dp.include_router(user.router)  # user.router должен быть ПОСЛЕДНИМ, т.к. он перехватывает всё
+dp.include_router(admin_support.router)
+dp.include_router(user.router)
 
-async def on_startup():
-    """Инициализация при запуске бота."""
+
+async def initialize_runtime():
     await db.init_db()
-    # Восстанавливаем активные диалоги с поддержкой из БД,
-    # чтобы они переживали рестарт бота.
     active_support_users = await db.get_all_support_active_user_ids()
     settings.support_pending_users = set(active_support_users)
-    logger.info(
-        f"База данных инициализирована. "
-        f"Активных диалогов поддержки: {len(active_support_users)}"
-    )
+    logger.info("Database initialized; active support dialogs: %s", len(active_support_users))
 
 
-async def on_shutdown():
-    """Очистка при остановке бота."""
+def start_background_tasks():
+    return [
+        asyncio.create_task(new_orders_notify_loop(bot)),
+        asyncio.create_task(support_escalation_loop(bot)),
+    ]
+
+
+async def stop_background_tasks(tasks):
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def close_runtime():
     await storage.close()
     await bot.session.close()
-    logger.info("Бот остановлен")
+    logger.info("Bot stopped")
 
 
 async def start_polling():
-    """Запуск бота в режиме polling."""
-    await on_startup()
-    logger.info("🚀 Бот запущен в режиме polling!")
-    logger.info(f"🌐 WebApp URL: {settings.WEBAPP_URL}")
-    logger.info(f"👥 Админы: {settings.ADMIN_IDS}")
-
-    # Фоновая задача авто-уведомлений о новых заказах
-    notifier_task = asyncio.create_task(new_orders_notify_loop(bot))
-    # Фоновая задача эскалации неотвеченных сообщений поддержки
-    escalation_task = asyncio.create_task(support_escalation_loop(bot))
-
+    tasks = []
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        await bot.delete_webhook(drop_pending_updates=False)
+        await initialize_runtime()
+        tasks = start_background_tasks()
+        logger.info("Bot started in polling mode")
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types(),
+            close_bot_session=False,
+        )
     finally:
-        escalation_task.cancel()
-        notifier_task.cancel()
-        await on_shutdown()
+        await stop_background_tasks(tasks)
+        await close_runtime()
 
 
-def main():
-    """Точка входа приложения."""
-    if not settings.BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN не найден!")
+def webhook_configuration_error() -> str | None:
+    parsed = urlparse(settings.WEBHOOK_URL)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.path != WEBHOOK_PATH:
+        return f"WEBHOOK_URL must be an HTTPS URL ending with {WEBHOOK_PATH}"
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", settings.WEBHOOK_SECRET):
+        return "WEBHOOK_SECRET must contain 1-256 letters, digits, underscores, or hyphens"
+    return None
+
+
+async def webhook_update(request: web.Request):
+    received_secret = request.headers.get(WEBHOOK_SECRET_HEADER, "")
+    if not secrets.compare_digest(received_secret, settings.WEBHOOK_SECRET):
+        return web.Response(status=403)
+    try:
+        payload = await request.json(loads=json.loads)
+        update = Update.model_validate(payload, context={"bot": bot})
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return web.Response(status=400)
+    await dp.feed_update(bot, update)
+    return web.Response()
+
+
+async def webhook_health(_request: web.Request):
+    return web.Response(text="ok")
+
+
+async def webhook_startup(app: web.Application):
+    try:
+        await initialize_runtime()
+        await bot.set_webhook(
+            url=settings.WEBHOOK_URL,
+            secret_token=settings.WEBHOOK_SECRET,
+            allowed_updates=dp.resolve_used_update_types(),
+            drop_pending_updates=False,
+        )
+        app[BACKGROUND_TASKS_KEY] = start_background_tasks()
+        app[RUNTIME_STARTED_KEY] = True
+        logger.info("Bot started in webhook mode on %s", WEBHOOK_PATH)
+    except Exception:
+        await close_runtime()
+        raise
+
+
+async def webhook_shutdown(app: web.Application):
+    if not app.get(RUNTIME_STARTED_KEY):
         return
-    
-    logger.info(f"🔧 Режим: {settings.RUN_MODE}")
-    asyncio.run(start_polling())
+    await stop_background_tasks(app.get(BACKGROUND_TASKS_KEY, []))
+    await close_runtime()
+
+
+def create_webhook_app() -> web.Application:
+    from server import app as flask_app
+
+    wsgi_handler = WSGIHandler(flask_app)
+
+    async def flask_fallback(request: web.Request):
+        return await wsgi_handler(request)
+
+    app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, webhook_update)
+    app.router.add_route("*", "/{path_info:.*}", flask_fallback)
+    app.on_startup.append(webhook_startup)
+    app.on_shutdown.append(webhook_shutdown)
+    return app
+
+
+def run_webhook():
+    web.run_app(create_webhook_app(), host=settings.HOST, port=settings.PORT)
+
+
+def main() -> int:
+    if not settings.BOT_TOKEN:
+        logger.error("BOT_TOKEN not found")
+        return 1
+    if settings.RUN_MODE == "polling":
+        asyncio.run(start_polling())
+        return 0
+    if settings.RUN_MODE == "webhook":
+        error = webhook_configuration_error()
+        if error:
+            logger.error("Invalid webhook configuration: %s", error)
+            return 2
+        run_webhook()
+        return 0
+    logger.error("RUN_MODE must be polling or webhook")
+    return 2
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

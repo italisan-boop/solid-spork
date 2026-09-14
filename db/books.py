@@ -109,22 +109,62 @@ async def get_book(book_id: int) -> dict:
         return dict(row) if row else None
 
 
-async def delete_book(book_id: int):
-    """Мягко удалить (архивировать) книгу.
+def _normalize_book_ids(book_ids) -> list[int]:
+    normalized = []
+    seen = set()
+    for book_id in book_ids:
+        if isinstance(book_id, bool) or not isinstance(book_id, int) or book_id <= 0:
+            raise ValueError("book IDs must be positive integers")
+        if book_id not in seen:
+            seen.add(book_id)
+            normalized.append(book_id)
+    return sorted(normalized)
 
-    Строка остаётся в БД с is_archived=1: заказы, в которых книга
-    участвовала, не теряют ссылку на неё (order_items.book_id и
-    выгрузки для бухгалтерии продолжают видеть книгу). Архивный флаг
-    скрывает книгу из каталога Mini App и админского списка; строку
-    можно вернуть через restore_book().
-    """
+
+async def archive_books(book_ids) -> dict[str, list[int]]:
+    """Архивировать только ещё активные книги из указанного набора IDs."""
+    ids = _normalize_book_ids(book_ids)
+    if not ids:
+        return {"archived_ids": [], "skipped_ids": []}
+    placeholders = ",".join("?" for _ in ids)
     async with connection() as db:
-        await db.execute(
-            "UPDATE books SET is_archived = 1, is_active = 0 WHERE id = ?",
-            (book_id,)
+        cursor = await db.execute(
+            f"""
+            SELECT id FROM books
+            WHERE id IN ({placeholders})
+              AND is_active = 1
+              AND COALESCE(is_archived, 0) = 0
+            """,
+            ids,
         )
+        archived_ids = sorted(row[0] for row in await cursor.fetchall())
+        if archived_ids:
+            selected = ",".join("?" for _ in archived_ids)
+            await db.execute(
+                f"""
+                UPDATE books
+                SET is_archived = 1, is_active = 0
+                WHERE id IN ({selected})
+                  AND is_active = 1
+                  AND COALESCE(is_archived, 0) = 0
+                """,
+                archived_ids,
+            )
         await db.commit()
-    print(f"✅ Книга #{book_id} перенесена в архив")
+    archived_set = set(archived_ids)
+    return {
+        "archived_ids": archived_ids,
+        "skipped_ids": [book_id for book_id in ids if book_id not in archived_set],
+    }
+
+
+async def delete_book(book_id: int) -> bool:
+    """Мягко удалить (архивировать) одну активную книгу."""
+    result = await archive_books([book_id])
+    archived = bool(result["archived_ids"])
+    if archived:
+        print(f"✅ Книга #{book_id} перенесена в архив")
+    return archived
 
 
 async def restore_book(book_id: int) -> bool:
@@ -141,20 +181,99 @@ async def restore_book(book_id: int) -> bool:
     return restored
 
 
-async def get_archived_books() -> list:
-    """Получить все книги в архиве (is_archived=1) для админского восстановления."""
+async def get_archived_books(limit: int | None = None, offset: int = 0) -> list:
+    """Получить архивные книги вместе с числом исторических позиций заказа."""
+    suffix = "" if limit is None else " LIMIT ? OFFSET ?"
+    params = () if limit is None else (limit, offset)
     async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            """SELECT b.id, b.title, b.price, b.category, b.emoji, b.category_id,
-                      c.emoji as category_emoji
-               FROM books b
-               LEFT JOIN categories c ON b.category_id = c.id
-               WHERE b.is_archived = 1
-               ORDER BY b.created_at DESC, b.id DESC"""
+            f"""SELECT b.id, b.title, b.price, b.category, b.emoji, b.category_id,
+                       c.emoji AS category_emoji,
+                       (SELECT COUNT(*) FROM order_items oi WHERE oi.book_id = b.id) AS order_items_count
+                FROM books b
+                LEFT JOIN categories c ON b.category_id = c.id
+                WHERE b.is_archived = 1
+                ORDER BY b.created_at DESC, b.id DESC{suffix}""",
+            params,
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return [dict(row) for row in rows]
+
+
+async def get_archived_books_count() -> int:
+    async with connection() as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM books WHERE is_archived = 1")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def _classify_archived_book_ids(db, ids: list[int]) -> dict[str, list[int]]:
+    if not ids:
+        return {"eligible_ids": [], "referenced_ids": [], "not_archived_ids": [], "missing_ids": []}
+    placeholders = ",".join("?" for _ in ids)
+    cursor = await db.execute(
+        f"""SELECT b.id, b.is_archived,
+                   EXISTS(SELECT 1 FROM order_items oi WHERE oi.book_id = b.id) AS has_order_items
+            FROM books b
+            WHERE b.id IN ({placeholders})""",
+        ids,
+    )
+    rows = {row[0]: row for row in await cursor.fetchall()}
+    eligible_ids = []
+    referenced_ids = []
+    not_archived_ids = []
+    missing_ids = []
+    for book_id in ids:
+        row = rows.get(book_id)
+        if row is None:
+            missing_ids.append(book_id)
+        elif not row[1]:
+            not_archived_ids.append(book_id)
+        elif row[2]:
+            referenced_ids.append(book_id)
+        else:
+            eligible_ids.append(book_id)
+    return {
+        "eligible_ids": eligible_ids,
+        "referenced_ids": referenced_ids,
+        "not_archived_ids": not_archived_ids,
+        "missing_ids": missing_ids,
+    }
+
+
+async def classify_archived_book_ids(book_ids) -> dict[str, list[int]]:
+    ids = _normalize_book_ids(book_ids)
+    async with connection() as db:
+        return await _classify_archived_book_ids(db, ids)
+
+
+async def purge_archived_books(book_ids) -> dict[str, list[int]]:
+    """Безвозвратно удалить архивные книги без истории заказов."""
+    ids = _normalize_book_ids(book_ids)
+    if not ids:
+        return {"deleted_ids": [], "referenced_ids": [], "not_archived_ids": [], "missing_ids": []}
+    async with connection() as db:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            classified = await _classify_archived_book_ids(db, ids)
+            deleted_ids = classified["eligible_ids"]
+            if deleted_ids:
+                placeholders = ",".join("?" for _ in deleted_ids)
+                await db.execute(
+                    f"""DELETE FROM books
+                        WHERE id IN ({placeholders})
+                          AND is_archived = 1
+                          AND NOT EXISTS (
+                              SELECT 1 FROM order_items oi WHERE oi.book_id = books.id
+                          )""",
+                    deleted_ids,
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return {"deleted_ids": deleted_ids, **{key: classified[key] for key in classified if key != "eligible_ids"}}
 
 
 async def update_book(book_id: int, **kwargs) -> bool:

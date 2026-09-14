@@ -1,0 +1,223 @@
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+import main
+import server
+
+
+class RunModeDispatchTests(TestCase):
+    def test_webhook_configuration_requires_explicit_secure_values(self):
+        with patch.multiple(
+            main.settings,
+            WEBHOOK_URL="https://bot.example.com/webhook",
+            WEBHOOK_SECRET="valid_secret-123",
+        ):
+            self.assertIsNone(main.webhook_configuration_error())
+        with patch.multiple(main.settings, WEBHOOK_URL="http://bot.example.com/webhook"):
+            self.assertIsNotNone(main.webhook_configuration_error())
+        with patch.multiple(main.settings, WEBHOOK_URL="https://bot.example.com/other"):
+            self.assertIsNotNone(main.webhook_configuration_error())
+
+    def test_main_selects_only_requested_transport(self):
+        polling_coroutine = object()
+        with (
+            patch.object(main.settings, "BOT_TOKEN", "123456:test-token"),
+            patch.object(main.settings, "RUN_MODE", "polling"),
+            patch("main.start_polling", new=MagicMock(return_value=polling_coroutine)),
+            patch("main.asyncio.run") as run,
+            patch("main.run_webhook") as run_webhook,
+        ):
+            self.assertEqual(0, main.main())
+        run.assert_called_once_with(polling_coroutine)
+        run_webhook.assert_not_called()
+
+        with (
+            patch.object(main.settings, "BOT_TOKEN", "123456:test-token"),
+            patch.object(main.settings, "RUN_MODE", "webhook"),
+            patch("main.webhook_configuration_error", return_value=None),
+            patch("main.run_webhook") as run_webhook,
+            patch("main.asyncio.run") as run,
+        ):
+            self.assertEqual(0, main.main())
+        run_webhook.assert_called_once()
+        run.assert_not_called()
+
+    def test_main_rejects_unknown_or_incomplete_modes(self):
+        with (
+            patch.object(main.settings, "BOT_TOKEN", "123456:test-token"),
+            patch.object(main.settings, "RUN_MODE", "invalid"),
+            patch("main.asyncio.run") as run,
+            patch("main.run_webhook") as run_webhook,
+        ):
+            self.assertEqual(2, main.main())
+        run.assert_not_called()
+        run_webhook.assert_not_called()
+
+        with (
+            patch.object(main.settings, "BOT_TOKEN", "123456:test-token"),
+            patch.object(main.settings, "RUN_MODE", "webhook"),
+            patch("main.webhook_configuration_error", return_value="missing URL"),
+            patch("main.run_webhook") as run_webhook,
+        ):
+            self.assertEqual(2, main.main())
+        run_webhook.assert_not_called()
+
+
+class HttpLaunchTests(TestCase):
+    def test_standalone_flask_uses_shared_host_port_and_debug_setting(self):
+        with (
+            patch.object(server.settings, "HOST", "127.0.0.1"),
+            patch.object(server.settings, "PORT", 9123),
+            patch.object(server.settings, "FLASK_DEBUG", False),
+            patch.object(server.app, "run") as run,
+        ):
+            server.run_server()
+        run.assert_called_once_with(
+            host="127.0.0.1",
+            port=9123,
+            debug=False,
+            use_reloader=False,
+        )
+
+
+class UnifiedWebhookAppTests(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        with patch("main.webhook_startup", new_callable=AsyncMock), patch(
+            "main.webhook_shutdown", new_callable=AsyncMock
+        ):
+            self.app = main.create_webhook_app()
+        self.server = TestServer(self.app)
+        self.client = TestClient(self.server)
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def test_flask_health_and_catalog_are_mounted_under_webhook_server(self):
+        health = await self.client.get("/health")
+        self.assertEqual(200, health.status)
+        self.assertEqual({"status": "ok"}, await health.json())
+
+        root = await self.client.get("/")
+        self.assertEqual(200, root.status)
+        self.assertIn("Семена Знаний", await root.text())
+
+        books = await self.client.get("/api/books")
+        self.assertEqual(200, books.status)
+        self.assertIn("books", await books.json())
+
+    async def test_webhook_route_wins_over_flask_fallback(self):
+        with (
+            patch.object(main.settings, "WEBHOOK_SECRET", "valid_secret"),
+            patch.object(main.dp, "feed_update", new_callable=AsyncMock) as feed_update,
+        ):
+            blocked = await self.client.post("/webhook", json={"update_id": 1})
+            self.assertEqual(403, blocked.status)
+            accepted = await self.client.post(
+                "/webhook",
+                json={"update_id": 2},
+                headers={main.WEBHOOK_SECRET_HEADER: "valid_secret"},
+            )
+            self.assertEqual(200, accepted.status)
+        feed_update.assert_awaited_once()
+
+
+
+    async def test_polling_removes_webhook_before_full_dispatcher(self):
+        calls = []
+
+        async def delete_webhook(**kwargs):
+            calls.append(("delete", kwargs))
+
+        async def initialize():
+            calls.append(("initialize", {}))
+
+        async def start_polling(*_args, **kwargs):
+            calls.append(("poll", kwargs))
+
+        with (
+            patch.object(main.bot, "delete_webhook", side_effect=delete_webhook),
+            patch("main.initialize_runtime", side_effect=initialize),
+            patch("main.start_background_tasks", return_value=[]),
+            patch.object(main.dp, "start_polling", side_effect=start_polling),
+            patch.object(main.dp, "resolve_used_update_types", return_value=["message"]),
+            patch("main.close_runtime", new_callable=AsyncMock),
+        ):
+            await main.start_polling()
+
+        self.assertEqual("delete", calls[0][0])
+        self.assertEqual({"drop_pending_updates": False}, calls[0][1])
+        self.assertEqual("poll", calls[-1][0])
+        self.assertEqual(["message"], calls[-1][1]["allowed_updates"])
+        self.assertFalse(calls[-1][1]["close_bot_session"])
+
+    async def test_webhook_startup_registers_full_dispatcher_and_shutdown_keeps_webhook(self):
+        app = web.Application()
+        with (
+            patch.object(main.settings, "WEBHOOK_URL", "https://bot.example.com/webhook"),
+            patch.object(main.settings, "WEBHOOK_SECRET", "valid_secret"),
+            patch("main.initialize_runtime", new_callable=AsyncMock) as initialize,
+            patch("main.start_background_tasks", return_value=[]),
+            patch.object(main.bot, "set_webhook", new_callable=AsyncMock) as set_webhook,
+            patch.object(main.bot, "delete_webhook", new_callable=AsyncMock) as delete_webhook,
+            patch.object(main.dp, "resolve_used_update_types", return_value=["message"]),
+            patch("main.close_runtime", new_callable=AsyncMock) as close_runtime,
+        ):
+            await main.webhook_startup(app)
+            await main.webhook_shutdown(app)
+
+        initialize.assert_awaited_once()
+        set_webhook.assert_awaited_once_with(
+            url="https://bot.example.com/webhook",
+            secret_token="valid_secret",
+            allowed_updates=["message"],
+            drop_pending_updates=False,
+        )
+        close_runtime.assert_awaited_once()
+        delete_webhook.assert_not_awaited()
+
+
+    async def test_webhook_rejects_wrong_secret_before_dispatch(self):
+        with (
+            patch.object(main.settings, "WEBHOOK_SECRET", "valid_secret"),
+            patch.object(main.dp, "feed_update", new_callable=AsyncMock) as feed_update,
+        ):
+            response = await self.client.post("/webhook", json={"update_id": 1})
+            self.assertEqual(403, response.status)
+            response = await self.client.post(
+                "/webhook",
+                json={"update_id": 1},
+                headers={main.WEBHOOK_SECRET_HEADER: "wrong"},
+            )
+            self.assertEqual(403, response.status)
+        feed_update.assert_not_awaited()
+
+    async def test_webhook_dispatches_valid_update_and_rejects_bad_json(self):
+        with (
+            patch.object(main.settings, "WEBHOOK_SECRET", "valid_secret"),
+            patch.object(main.dp, "feed_update", new_callable=AsyncMock) as feed_update,
+        ):
+            response = await self.client.post(
+                "/webhook",
+                json={"update_id": 1},
+                headers={main.WEBHOOK_SECRET_HEADER: "valid_secret"},
+            )
+            self.assertEqual(200, response.status)
+            feed_update.assert_awaited_once()
+            self.assertIs(main.bot, feed_update.await_args.args[0])
+
+            response = await self.client.post(
+                "/webhook",
+                data="not-json",
+                headers={main.WEBHOOK_SECRET_HEADER: "valid_secret"},
+            )
+            self.assertEqual(400, response.status)
+            self.assertEqual(1, feed_update.await_count)
+
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

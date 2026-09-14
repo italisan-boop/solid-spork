@@ -72,8 +72,12 @@ from db.books import (
     update_book_sort_order,
     get_book,
     delete_book,
+    archive_books,
     restore_book,
     get_archived_books,
+    get_archived_books_count,
+    classify_archived_book_ids,
+    purge_archived_books,
     update_book,
     update_book_full,
 )

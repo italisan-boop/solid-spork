@@ -6,12 +6,13 @@ from config import settings
 from handlers.admin_books import AdminBooksMiddleware
 from handlers.admin_broadcast import process_broadcast_code, process_message
 from handlers.admin_commands import cmd_drop_cache, submit_drop_cache_code
-from handlers.admin_orders import confirm_order
+from handlers.admin_orders import cancel_order, confirm_order
 from handlers.admin_promo import admin_promo_create
 from handlers.admin_support import cb_support_reply, deferred_admin_reply
 from handlers.admin_texts import admin_texts, save_template_value
 from handlers.categories import category_add_start
 from handlers.payments import (
+    admin_yookassa_settings,
     pay_toggle_enabled,
     process_card,
     process_instructions,
@@ -20,6 +21,7 @@ from handlers.payments import (
     process_sbp_phone,
     process_stars_rate,
     stars_toggle,
+    yookassa_toggle,
 )
 from handlers.user import _send_admin_reply, support_claims, universal_text_handler
 from states import (
@@ -188,7 +190,30 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         update_order.assert_not_awaited()
 
-    async def test_cancel_clears_payment_receipt_and_book_states_without_writes(self):
+    async def test_admin_can_accept_verified_provider_payment_only_after_paid(self):
+        callback = self.callback("confirm_44", ADMIN_ID)
+        order = {"id": 44, "user_id": 1, "status": "paid", "payment_method": "yookassa"}
+        with (
+            patch("handlers.admin_orders.db.get_order_full", new_callable=AsyncMock, return_value=order),
+            patch("handlers.admin_orders.db.update_order_status", new_callable=AsyncMock) as update_order,
+            patch("handlers.admin_orders.order_detail", new_callable=AsyncMock),
+        ):
+            await confirm_order(callback, callback.bot)
+
+        update_order.assert_awaited_once_with(44, "confirmed")
+
+    async def test_admin_cannot_cancel_verified_provider_payment(self):
+        callback = self.callback("cancel_order_44", ADMIN_ID)
+        order = {"id": 44, "user_id": 1, "status": "paid", "payment_method": "yookassa"}
+        with (
+            patch("handlers.admin_orders.db.get_order_full", new_callable=AsyncMock, return_value=order),
+            patch("handlers.admin_orders.db.update_order_status", new_callable=AsyncMock) as update_order,
+        ):
+            await cancel_order(callback, callback.bot)
+
+        update_order.assert_not_awaited()
+
+
         from handlers.user import cancel_action
 
         for current_state in (
@@ -297,6 +322,32 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         set_payment.assert_not_awaited()
         set_stars.assert_not_awaited()
+
+    async def test_yookassa_callbacks_are_denied_to_non_admin(self):
+        callback = self.callback("payment_settings:yookassa")
+        toggle_callback = self.callback("yookassa_toggle")
+        with patch("handlers.payments.db.set_payment_setting", new_callable=AsyncMock) as set_payment:
+            await admin_yookassa_settings(callback)
+            await yookassa_toggle(toggle_callback)
+
+        callback.message.edit_text.assert_not_awaited()
+        set_payment.assert_not_awaited()
+
+    async def test_admin_yookassa_toggle_requires_environment_configuration(self):
+        callback = self.callback("yookassa_toggle", ADMIN_ID)
+        with (
+            patch("handlers.payments.db.get_payment_setting", new_callable=AsyncMock, return_value="0"),
+            patch("handlers.payments.db.set_payment_setting", new_callable=AsyncMock) as set_payment,
+            patch("handlers.payments.settings.YOOKASSA_SHOP_ID", ""),
+            patch("handlers.payments.settings.YOOKASSA_SECRET_KEY", ""),
+            patch("handlers.payments.settings.YOOKASSA_RETURN_URL", ""),
+        ):
+            await yookassa_toggle(callback)
+
+        set_payment.assert_not_awaited()
+        callback.answer.assert_awaited_once_with(
+            "Сначала задайте shopId, secret key и return URL в .env", show_alert=True
+        )
 
     async def test_admin_payment_and_stars_writers_can_update_settings(self):
         payment_state = self.state()

@@ -3,6 +3,7 @@ from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from datetime import datetime, timedelta
+from html import escape
 from utils import setup_logger
 
 import db
@@ -44,6 +45,49 @@ async def cancel_admin_state(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_payments")
 async def admin_payments_menu(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    payment_settings = await db.get_all_payment_settings()
+    stars_enabled = await db.get_stars_setting("stars_enabled", "0")
+    yookassa_enabled = payment_settings.get("yookassa_enabled") == "1"
+    configured = bool(
+        settings.YOOKASSA_SHOP_ID
+        and settings.YOOKASSA_SECRET_KEY
+        and settings.YOOKASSA_RETURN_URL.startswith("https://")
+    )
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="💳 Реквизиты: " + ("включены" if payment_settings.get("payment_enabled") == "1" else "выключены"),
+        callback_data="payment_settings:manual",
+    )
+    builder.button(
+        text="⭐ Telegram Stars: " + ("включены" if stars_enabled == "1" else "выключены"),
+        callback_data="payment_settings:stars",
+    )
+    builder.button(
+        text="🟣 ЮKassa: " + ("включена" if yookassa_enabled else "выключена"),
+        callback_data="payment_settings:yookassa",
+    )
+    builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.adjust(1)
+    status = "✅ ключи настроены" if configured else "⚠️ ключи не настроены в .env"
+    await callback.message.edit_text(
+        "💳 <b>Настройки оплаты</b>\n\n"
+        "Выберите способ, который нужно настроить. Покупатель увидит только включённые способы.\n\n"
+        f"ЮKassa: {status}",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "payment_settings:manual")
+async def admin_manual_settings(callback: CallbackQuery):
+    await show_manual_settings(callback)
+
+
+async def show_manual_settings(callback: CallbackQuery):
     logger.debug(f" admin_payments_menu вызван")
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
@@ -67,7 +111,7 @@ async def admin_payments_menu(callback: CallbackQuery):
     builder.button(text="📝 Инструкция", callback_data="pay_set_instructions")
     status_text = "🔴 Отключить оплату" if settings.get('payment_enabled') == '1' else "🟢 Включить оплату"
     builder.button(text=status_text, callback_data="pay_toggle_enabled")
-    builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="◀️ К способам оплаты", callback_data="admin_payments")
     builder.adjust(1)
 
     await callback.message.edit_text(
@@ -96,7 +140,7 @@ async def pay_toggle_enabled(callback: CallbackQuery):
 
     status = "✅ Включена" if new_value == '1' else "❌ Отключена"
     await callback.answer(f"Оплата {status}", show_alert=True)
-    await admin_payments_menu(callback)
+    await show_manual_settings(callback)
 
 
 @router.callback_query(F.data == "pay_set_card")
@@ -231,8 +275,7 @@ async def process_instructions(message: Message, state: FSMContext):
 # НАСТРОЙКИ TELEGRAM STARS
 # ============================================
 
-@router.callback_query(F.data == "admin_stars_settings")
-async def admin_stars_menu(callback: CallbackQuery):
+async def show_stars_settings(callback: CallbackQuery):
     logger.debug(f" admin_stars_menu вызван")
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
@@ -246,7 +289,7 @@ async def admin_stars_menu(callback: CallbackQuery):
     builder.button(text=f"💱 Курс: 1 Star = {rubles_per_star}₽", callback_data="stars_set_rate")
     status_text = "🔴 Отключить Stars" if enabled == '1' else "🟢 Включить Stars"
     builder.button(text=status_text, callback_data="stars_toggle")
-    builder.button(text="◀️ Назад", callback_data="admin_menu")
+    builder.button(text="◀️ К способам оплаты", callback_data="admin_payments")
     builder.adjust(1)
 
     await callback.message.edit_text(
@@ -265,6 +308,16 @@ async def admin_stars_menu(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "payment_settings:stars")
+async def admin_stars_settings(callback: CallbackQuery):
+    await show_stars_settings(callback)
+
+
+@router.callback_query(F.data == "admin_stars_settings")
+async def admin_stars_legacy_settings(callback: CallbackQuery):
+    await show_stars_settings(callback)
+
+
 @router.callback_query(F.data == "stars_toggle")
 async def stars_toggle(callback: CallbackQuery):
     logger.debug(f" stars_toggle вызван")
@@ -276,7 +329,7 @@ async def stars_toggle(callback: CallbackQuery):
 
     status = "✅ Включена" if new_value == '1' else "❌ Отключена"
     await callback.answer(f"Оплата Stars {status}", show_alert=True)
-    await admin_stars_menu(callback)
+    await show_stars_settings(callback)
 
 
 @router.callback_query(F.data == "stars_set_rate")
@@ -315,6 +368,58 @@ async def process_stars_rate(message: Message, state: FSMContext):
     await db.set_stars_setting('rubles_per_star', str(rate))
     await state.clear()
     await message.answer(f"✅ Курс обновлён: 1 Star = {rate} ₽")
+
+
+@router.callback_query(F.data == "payment_settings:yookassa")
+async def admin_yookassa_settings(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    payment_settings = await db.get_all_payment_settings()
+    enabled = payment_settings.get("yookassa_enabled") == "1"
+    configured = bool(
+        settings.YOOKASSA_SHOP_ID
+        and settings.YOOKASSA_SECRET_KEY
+        and settings.YOOKASSA_RETURN_URL.startswith("https://")
+    )
+    return_url = escape(settings.YOOKASSA_RETURN_URL) if settings.YOOKASSA_RETURN_URL else "не задан"
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔴 Отключить ЮKassa" if enabled else "🟢 Включить ЮKassa",
+        callback_data="yookassa_toggle",
+    )
+    builder.button(text="◀️ К способам оплаты", callback_data="admin_payments")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        "🟣 <b>ЮKassa</b>\n\n"
+        f"Статус: {'✅ Включена' if enabled else '❌ Отключена'}\n"
+        f"Конфигурация: {'✅ shopId, secret key и return URL заданы' if configured else '⚠️ Заполните YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY и YOOKASSA_RETURN_URL в .env'}\n"
+        f"Return URL: <code>{return_url}</code>\n\n"
+        "Секретный ключ не хранится в боте и не показывается в Telegram.\n"
+        "В личном кабинете ЮKassa настройте публичный HTTPS webhook: <code>/webhooks/yookassa</code>.\n"
+        "Прокси должен пропускать к этому пути только официальные IP-адреса ЮKassa.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "yookassa_toggle")
+async def yookassa_toggle(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    configured = bool(
+        settings.YOOKASSA_SHOP_ID
+        and settings.YOOKASSA_SECRET_KEY
+        and settings.YOOKASSA_RETURN_URL.startswith("https://")
+    )
+    current = await db.get_payment_setting("yookassa_enabled", "0")
+    if current != "1" and not configured:
+        await callback.answer("Сначала задайте shopId, secret key и return URL в .env", show_alert=True)
+        return
+    await db.set_payment_setting("yookassa_enabled", "0" if current == "1" else "1")
+    await admin_yookassa_settings(callback)
 
 
 # ============================================

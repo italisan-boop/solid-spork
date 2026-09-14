@@ -19,6 +19,7 @@ OTP_TTL_SECONDS = 120
 # Имена критичных действий (используются и как ключи, и в логах)
 ACTION_DROP_CACHE = "drop_cache"
 ACTION_MASS_BROADCAST = "mass_broadcast"
+ACTION_PURGE_ARCHIVED_BOOKS = "purge_archived_books"
 
 # (admin_id, action) -> (code, expires_at)
 _pending: dict[tuple[int, str], tuple[str, float]] = {}

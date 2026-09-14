@@ -3,6 +3,27 @@ import aiosqlite
 from db.connection import connection
 
 
+PAID_STATUSES = ('paid', 'confirmed', 'completed')
+PENDING_STATUSES = ('new', 'payment_pending', 'paid')
+AWAITING_PAYMENT_STATUSES = (
+    'awaiting_payment',
+    'awaiting_stars_payment',
+    'awaiting_yookassa_payment',
+)
+AUTOMATIC_PAYMENT_METHODS = ('stars', 'yookassa')
+STATUS_LABELS = {
+    'new': 'Новый',
+    'awaiting_payment': 'Ожидает оплаты',
+    'awaiting_stars_payment': 'Ожидает оплаты (Stars)',
+    'awaiting_yookassa_payment': 'Ожидает оплаты (ЮKassa)',
+    'payment_pending': 'Ожидает подтверждения',
+    'paid': 'Оплачен',
+    'confirmed': 'Подтверждён',
+    'completed': 'Выполнен',
+    'cancelled': 'Отменён',
+}
+
+
 async def create_order(user_id: int, user_name: str, cart: list, total: int) -> int:
     """Создать новый заказ"""
     async with connection() as db:
@@ -61,6 +82,8 @@ async def get_order_full(order_id: int) -> dict:
             'user_name': order['user_name'],
             'total': order['total'],
             'status': order['status'],
+            'payment_method': order['payment_method'],
+            'checkout_key': order['checkout_key'],
             'created_at': order['created_at'],
             'admin_notification_ids': admin_notification_ids,
             'items': [dict(item) for item in items]
@@ -88,10 +111,6 @@ async def update_order_status(order_id: int, status: str):
         )
         await db.commit()
     print(f"✅ Статус заказа #{order_id} изменён на '{status}'")
-
-
-# Статусы заказов, требующих внимания админа (для авто-уведомлений)
-PENDING_STATUSES = ('new', 'awaiting_payment', 'awaiting_stars_payment', 'payment_pending')
 
 
 async def get_unnotified_pending_orders(limit: int = 20) -> list:
@@ -248,8 +267,10 @@ async def get_stats() -> dict:
         )
         by_status = await cursor.fetchall()
 
+        placeholders = ",".join("?" for _ in PAID_STATUSES)
         cursor = await db.execute(
-            "SELECT SUM(total) as sum FROM orders WHERE status != 'cancelled'"
+            f"SELECT SUM(total) as sum FROM orders WHERE status IN ({placeholders})",
+            PAID_STATUSES,
         )
         total_revenue = (await cursor.fetchone())['sum'] or 0
 

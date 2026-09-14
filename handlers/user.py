@@ -1575,8 +1575,8 @@ async def show_user_orders(message_or_callback, user_id: int):
         if not orders:
             text = "📭 У вас пока нет заказов.\n\nЗагляните в магазин! 🌱"
         else:
-            status_emoji = {'new': '🆕', 'confirmed': '✅', 'completed': '📦', 'cancelled': '❌', 'awaiting_payment': '💳', 'awaiting_stars_payment': '⭐', 'payment_pending': '⏳', 'paid': '💰'}
-            status_names = {'new': 'Новый', 'confirmed': 'Подтверждён', 'completed': 'Выполнен', 'cancelled': 'Отменён', 'awaiting_payment': 'Ожидает оплаты', 'awaiting_stars_payment': 'Ожидает Stars', 'payment_pending': 'Ожидает подтверждения', 'paid': 'Оплачен'}
+            status_emoji = {'new': '🆕', 'confirmed': '✅', 'completed': '📦', 'cancelled': '❌', 'awaiting_payment': '💳', 'awaiting_stars_payment': '⭐', 'awaiting_yookassa_payment': '🟣', 'payment_pending': '⏳', 'paid': '💰'}
+            status_names = {'new': 'Новый', 'confirmed': 'Подтверждён', 'completed': 'Выполнен', 'cancelled': 'Отменён', 'awaiting_payment': 'Ожидает оплаты', 'awaiting_stars_payment': 'Ожидает Stars', 'awaiting_yookassa_payment': 'Ожидает оплаты (ЮKassa)', 'payment_pending': 'Ожидает подтверждения', 'paid': 'Оплачен'}
             orders_list = [
                 f"{status_emoji.get(o['status'], '')} Заказ #{o['id']} · {o['total']} ₽ · {status_names.get(o['status'], o['status'])} · {format_local_time(o['created_at'])}"
                 for o in orders]

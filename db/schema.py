@@ -8,7 +8,7 @@ from config import settings
 from content_defaults import TEMPLATES
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 _CONNECTION_TIMEOUT_SECONDS = 10
 _INITIALIZATION_LOCK = threading.Lock()
 
@@ -70,7 +70,9 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             status TEXT NOT NULL DEFAULT 'new',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             admin_notification_ids TEXT DEFAULT '[]',
-            new_order_notified INTEGER NOT NULL DEFAULT 0
+            new_order_notified INTEGER NOT NULL DEFAULT 0,
+            payment_method TEXT NOT NULL DEFAULT 'manual',
+            checkout_key TEXT
         );
         CREATE TABLE IF NOT EXISTS order_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,6 +142,19 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             setting_key TEXT NOT NULL UNIQUE,
             setting_value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS yookassa_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            idempotence_key TEXT NOT NULL UNIQUE,
+            provider_payment_id TEXT UNIQUE,
+            amount TEXT NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'RUB',
+            status TEXT NOT NULL DEFAULT 'created',
+            confirmation_url TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (order_id) REFERENCES orders (id)
+        );
         CREATE TABLE IF NOT EXISTS message_templates (
             template_key TEXT PRIMARY KEY,
             template_value TEXT NOT NULL,
@@ -156,6 +171,10 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             revision INTEGER NOT NULL DEFAULT 0,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE INDEX IF NOT EXISTS idx_order_items_book_id
+        ON order_items (book_id, order_id);
+        CREATE INDEX IF NOT EXISTS idx_yookassa_payments_order_id
+        ON yookassa_payments (order_id);
         """
     )
 
@@ -173,6 +192,8 @@ def _migrate_columns(connection: sqlite3.Connection) -> None:
             "created_at": "created_at TIMESTAMP",
             "admin_notification_ids": "admin_notification_ids TEXT DEFAULT '[]'",
             "new_order_notified": "new_order_notified INTEGER NOT NULL DEFAULT 0",
+            "payment_method": "payment_method TEXT NOT NULL DEFAULT 'manual'",
+            "checkout_key": "checkout_key TEXT",
         },
         "books": {
             "category_id": "category_id INTEGER",
@@ -195,6 +216,14 @@ def _migrate_columns(connection: sqlite3.Connection) -> None:
     for table, definitions in columns.items():
         for column, definition in definitions.items():
             _ensure_column(connection, table, column, definition)
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_user_checkout_key "
+        "ON orders (user_id, checkout_key) WHERE checkout_key IS NOT NULL"
+    )
+    connection.execute(
+        "UPDATE orders SET payment_method = 'manual' "
+        "WHERE payment_method IS NULL OR payment_method = ''"
+    )
 
 
 def _seed_categories(connection: sqlite3.Connection) -> None:
@@ -246,6 +275,7 @@ def _seed_settings(connection: sqlite3.Connection) -> None:
             ("sbp_bank", ""),
             ("recipient_name", ""),
             ("payment_instructions", "После перевода укажите номер заказа в комментарии"),
+            ("yookassa_enabled", "0"),
         ],
     )
     connection.executemany(

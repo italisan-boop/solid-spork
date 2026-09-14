@@ -134,7 +134,13 @@ class PersistentCartApiTests(unittest.TestCase):
 
         checkout = self.client.post(
             "/order",
-            json={"cart": [{"id": 1, "quantity": 1}], "cart_revision": 1, "promo_code": ""},
+            json={
+                "cart": [{"id": 1, "quantity": 1}],
+                "cart_revision": 1,
+                "checkout_key": "00000000-0000-4000-8000-000000000001",
+                "payment_method": "none",
+                "promo_code": "",
+            },
             headers=signed_headers(101),
         )
         self.assertEqual(200, checkout.status_code)
@@ -150,7 +156,13 @@ class PersistentCartApiTests(unittest.TestCase):
 
         response = self.client.post(
             "/order",
-            json={"cart": [{"id": 1, "quantity": 1}], "cart_revision": 0, "promo_code": ""},
+            json={
+                "cart": [{"id": 1, "quantity": 1}],
+                "cart_revision": 0,
+                "checkout_key": "00000000-0000-4000-8000-000000000002",
+                "payment_method": "none",
+                "promo_code": "",
+            },
             headers=signed_headers(),
         )
         self.assertEqual(409, response.status_code)
@@ -160,7 +172,13 @@ class PersistentCartApiTests(unittest.TestCase):
 
         response = self.client.post(
             "/order",
-            json={"cart": [], "cart_revision": 1, "promo_code": ""},
+            json={
+                "cart": [],
+                "cart_revision": 1,
+                "checkout_key": "00000000-0000-4000-8000-000000000003",
+                "payment_method": "none",
+                "promo_code": "",
+            },
             headers=signed_headers(),
         )
         self.assertEqual(400, response.status_code)

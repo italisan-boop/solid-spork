@@ -6,9 +6,16 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncio
 import json
 from config.settings import settings
-from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, restore_book, get_archived_books, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
+from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, archive_books, restore_book, get_archived_books, get_archived_books_count, classify_archived_book_ids, purge_archived_books, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
 from db.categories import get_all_categories, add_category, get_category_by_id, category_display, NO_CATEGORY_NAME
 from utils import parseBookImages, setup_logger
+from utils.otp_confirm import (
+    ACTION_PURGE_ARCHIVED_BOOKS,
+    OTP_TTL_SECONDS,
+    consume_otp,
+    issue_otp,
+    revoke_otp,
+)
 from states import EditBookState, AddBookState as BookAddState, AdminBooksState
 import re
 
@@ -16,6 +23,8 @@ logger = setup_logger(__name__)
 router = Router()
 
 PAGE_SIZE = 10  # Количество книг на странице (было 20; книг стало больше — пора уменьшить)
+ARCHIVE_PAGE_SIZE = 8
+MAX_BOOK_SELECTION = 100
 
 
 # Ключи сортировки админского списка книг. Каждому соответствует строка
@@ -1073,6 +1082,8 @@ async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int)
     data = await state.get_data()
     sort_by = data.get("sort_by", "default") or "default"
     search_query = data.get("search_query", "") or ""
+    selection_mode = data.get("book_selection_mode")
+    selected_book_ids = set(data.get("selected_book_ids", []))
 
     offset = page * PAGE_SIZE
     books = await get_all_books_paginated(
@@ -1110,12 +1121,18 @@ async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int)
     builder = InlineKeyboardBuilder()
 
     if books:
-        # Кнопки для каждой книги на странице
         for book in books:
-            builder.button(
-                text=f"📝 {book['title']}",
-                callback_data=f"admin_book_edit_{book['id']}",
-            )
+            if selection_mode == "archive":
+                selected = book['id'] in selected_book_ids
+                builder.button(
+                    text=f"{'☑️' if selected else '☐'} {book['title']}",
+                    callback_data=f"admin_books_archive_toggle_{book['id']}",
+                )
+            else:
+                builder.button(
+                    text=f"📝 {book['title']}",
+                    callback_data=f"admin_book_edit_{book['id']}",
+                )
 
     # Навигация между страницами
     nav_buttons = []
@@ -1139,7 +1156,15 @@ async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int)
             callback_data=f"admin_books_sort_{key}",
         )
 
-    builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
+    if selection_mode == "archive":
+        builder.button(
+            text=f"📥 В архив выбранные ({len(selected_book_ids)})",
+            callback_data="admin_books_archive_review",
+        )
+        builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
+    else:
+        builder.button(text="☑️ Выбрать несколько для архива", callback_data="admin_books_archive_select")
+        builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
     builder.button(text="🗂 Архив", callback_data="admin_books_archive")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
@@ -1234,7 +1259,80 @@ async def books_clear_search(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Поиск сброшен")
 
 
-async def render_books_list_for_message(message: Message, state: FSMContext):
+@router.callback_query(F.data == "admin_books_archive_select")
+async def start_archive_selection(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(book_selection_mode="archive", selected_book_ids=[])
+    data = await state.get_data()
+    await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
+    await callback.answer("Выберите книги для архива")
+
+
+@router.callback_query(F.data.regexp(r"^admin_books_archive_toggle_\d+$"))
+async def toggle_archive_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if data.get("book_selection_mode") != "archive":
+        await callback.answer("Откройте выбор книг заново", show_alert=True)
+        return
+    book_id = int(callback.data.rsplit("_", 1)[-1])
+    selected = set(data.get("selected_book_ids", []))
+    if book_id in selected:
+        selected.remove(book_id)
+    else:
+        if len(selected) >= MAX_BOOK_SELECTION:
+            await callback.answer(f"Можно выбрать не более {MAX_BOOK_SELECTION} книг", show_alert=True)
+            return
+        if not await get_book(book_id):
+            await callback.answer("Книга больше недоступна", show_alert=True)
+            return
+        selected.add(book_id)
+    await state.update_data(selected_book_ids=sorted(selected))
+    await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_books_archive_review")
+async def review_archive_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_book_ids", [])
+    if data.get("book_selection_mode") != "archive" or not selected:
+        await callback.answer("Выберите хотя бы одну книгу", show_alert=True)
+        return
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"📥 Архивировать {len(selected)} книг", callback_data="admin_books_archive_selected_confirm")
+    builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        f"⚠️ <b>Перенести в архив {len(selected)} книг?</b>\n\n"
+        "Книги исчезнут из каталога, но останутся в базе и их можно будет восстановить.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_books_archive_selected_confirm")
+async def confirm_archive_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_book_ids", [])
+    if data.get("book_selection_mode") != "archive" or not selected:
+        await callback.answer("Выбор книг устарел", show_alert=True)
+        return
+    result = await archive_books(selected)
+    await state.update_data(book_selection_mode=None, selected_book_ids=[])
+    await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
+    await callback.answer(
+        f"В архив перенесено: {len(result['archived_ids'])}; пропущено: {len(result['skipped_ids'])}",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data == "admin_books_selection_cancel")
+async def cancel_book_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(book_selection_mode=None, selected_book_ids=[])
+    await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
+    await callback.answer("Выбор отменён")
+
     """Рендер списка книг из message-хендлера (после ввода поиска).
 
     По сути — show_books_list, но шлёт новое сообщение с клавиатурой
@@ -1243,6 +1341,8 @@ async def render_books_list_for_message(message: Message, state: FSMContext):
     data = await state.get_data()
     sort_by = data.get("sort_by", "default") or "default"
     search_query = data.get("search_query", "") or ""
+    selection_mode = data.get("book_selection_mode")
+    selected_book_ids = set(data.get("selected_book_ids", []))
     page = data.get("current_page", 0) or 0
 
     offset = page * PAGE_SIZE
@@ -1277,10 +1377,17 @@ async def render_books_list_for_message(message: Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
     if books:
         for book in books:
-            builder.button(
-                text=f"📝 {book['title']}",
-                callback_data=f"admin_book_edit_{book['id']}",
-            )
+            if selection_mode == "archive":
+                selected = book['id'] in selected_book_ids
+                builder.button(
+                    text=f"{'☑️' if selected else '☐'} {book['title']}",
+                    callback_data=f"admin_books_archive_toggle_{book['id']}",
+                )
+            else:
+                builder.button(
+                    text=f"📝 {book['title']}",
+                    callback_data=f"admin_book_edit_{book['id']}",
+                )
 
     nav_buttons = []
     if page > 0:
@@ -1299,7 +1406,15 @@ async def render_books_list_for_message(message: Message, state: FSMContext):
             text=f"{prefix}{label}",
             callback_data=f"admin_books_sort_{key}",
         )
-    builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
+    if selection_mode == "archive":
+        builder.button(
+            text=f"📥 В архив выбранные ({len(selected_book_ids)})",
+            callback_data="admin_books_archive_review",
+        )
+        builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
+    else:
+        builder.button(text="☑️ Выбрать несколько для архива", callback_data="admin_books_archive_select")
+        builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
     builder.button(text="🗂 Архив", callback_data="admin_books_archive")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
@@ -2211,46 +2326,234 @@ async def delete_book_confirm(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_books_archive")
 async def show_archive_list(callback: CallbackQuery, state: FSMContext):
-    """Архив книг: мягко удалённые, доступны к восстановлению."""
+    """Открыть архив без сохранённых destructive selections."""
     await state.clear()
-    books = await get_archived_books()
+    await state.update_data(archive_page=0, book_selection_mode=None, selected_book_ids=[])
+    await render_archive_list(callback, state, page=0)
+    await callback.answer()
 
-    text = "🗂 <b>Архив книг</b>\n\n"
-    if books:
-        text += (
-            "Книги в архиве скрыты из каталога, но их заказы и "
-            "выгрузки для бухгалтерии сохранены. Нажмите кнопку, "
-            "чтобы вернуть книгу в каталог:\n\n"
-        )
+
+async def render_archive_list(callback: CallbackQuery, state: FSMContext, page: int):
+    data = await state.get_data()
+    selection_mode = data.get("book_selection_mode")
+    selected_ids = set(data.get("selected_book_ids", []))
+    total_books = await get_archived_books_count()
+    total_pages = max(1, (total_books + ARCHIVE_PAGE_SIZE - 1) // ARCHIVE_PAGE_SIZE)
+    page = min(max(page, 0), total_pages - 1)
+    await state.update_data(archive_page=page)
+    books = await get_archived_books(limit=ARCHIVE_PAGE_SIZE, offset=page * ARCHIVE_PAGE_SIZE)
+
+    text = f"🗂 <b>Архив книг</b>\n\nСтраница {page + 1} из {total_pages}\n"
+    if selection_mode == "purge":
+        text += f"Выбрано для удаления: {len(selected_ids)}\n\n"
+    elif books:
+        text += "Книги с заказами нельзя удалить навсегда — они остаются в архиве для учёта.\n\n"
     else:
         text += "Архив пуст — сюда попадают удалённые книги."
 
     builder = InlineKeyboardBuilder()
     for book in books:
-        emoji = book.get('category_emoji') or '📖'
+        emoji = book.get("category_emoji") or "📖"
+        order_count = book.get("order_items_count", 0)
+        if selection_mode == "purge":
+            if order_count:
+                builder.button(
+                    text=f"🔒 {emoji} {book['title']} — есть заказы",
+                    callback_data=f"admin_books_purge_protected_{book['id']}",
+                )
+            else:
+                selected = book["id"] in selected_ids
+                builder.button(
+                    text=f"{'☑️' if selected else '☐'} {emoji} {book['title']}",
+                    callback_data=f"admin_books_purge_toggle_{book['id']}",
+                )
+            continue
+
         builder.button(
             text=f"↩️ {emoji} {book['title']} — {book['price']} ₽",
             callback_data=f"admin_book_restore_{book['id']}",
         )
+        if order_count:
+            builder.button(
+                text=f"🔒 Не удалять: {book['title']} ({order_count} заказов)",
+                callback_data=f"admin_books_purge_protected_{book['id']}",
+            )
+        else:
+            builder.button(
+                text=f"🗑 Удалить навсегда: {book['title']}",
+                callback_data=f"admin_book_purge_{book['id']}",
+            )
+
+    if page > 0:
+        builder.button(text="⬅️ Назад", callback_data=f"admin_books_archive_page_{page - 1}")
+    if page < total_pages - 1:
+        builder.button(text="➡️ Вперёд", callback_data=f"admin_books_archive_page_{page + 1}")
+
+    if selection_mode == "purge":
+        builder.button(
+            text=f"🗑 Удалить выбранные ({len(selected_ids)})",
+            callback_data="admin_books_purge_review",
+        )
+        builder.button(text="✖ Отменить выбор", callback_data="admin_books_purge_cancel")
+    else:
+        builder.button(text="☑️ Выбрать несколько для удаления", callback_data="admin_books_purge_select")
     builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
-
-    row_sizes = [1] * len(books) if books else []
-    row_sizes.append(2)
-    builder.adjust(*row_sizes)
+    builder.adjust(1)
 
     try:
-        await callback.bot.edit_message_text(
-            chat_id=callback.from_user.id,
-            message_id=callback.message.message_id,
-            text=text,
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.error(f"Ошибка при показе архива: {e}")
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    except Exception:
         await callback.message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.regexp(r"^admin_books_archive_page_\d+$"))
+async def archive_page_navigation(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.rsplit("_", 1)[-1])
+    await render_archive_list(callback, state, page)
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_books_purge_select")
+async def start_purge_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(book_selection_mode="purge", selected_book_ids=[])
+    await render_archive_list(callback, state, data.get("archive_page", 0) or 0)
+    await callback.answer("Выберите архивные книги без заказов")
+
+
+@router.callback_query(F.data.regexp(r"^admin_books_purge_toggle_\d+$"))
+async def toggle_purge_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if data.get("book_selection_mode") != "purge":
+        await callback.answer("Откройте выбор заново", show_alert=True)
+        return
+    book_id = int(callback.data.rsplit("_", 1)[-1])
+    selected = set(data.get("selected_book_ids", []))
+    if book_id in selected:
+        selected.remove(book_id)
+    else:
+        if len(selected) >= MAX_BOOK_SELECTION:
+            await callback.answer(f"Можно выбрать не более {MAX_BOOK_SELECTION} книг", show_alert=True)
+            return
+        classification = await classify_archived_book_ids([book_id])
+        if not classification["eligible_ids"]:
+            await callback.answer("Эту книгу нельзя удалить навсегда", show_alert=True)
+            return
+        selected.add(book_id)
+    await state.update_data(selected_book_ids=sorted(selected))
+    await render_archive_list(callback, state, data.get("archive_page", 0) or 0)
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^admin_book_purge_\d+$"))
+async def start_single_purge(callback: CallbackQuery, state: FSMContext):
+    book_id = int(callback.data.rsplit("_", 1)[-1])
+    await state.update_data(book_selection_mode="purge", selected_book_ids=[book_id])
+    await review_purge_selection(callback, state)
+
+
+@router.callback_query(F.data == "admin_books_purge_review")
+async def review_purge_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_book_ids", [])
+    if data.get("book_selection_mode") != "purge" or not selected:
+        await callback.answer("Выберите хотя бы одну книгу", show_alert=True)
+        return
+    classification = await classify_archived_book_ids(selected)
+    eligible = classification["eligible_ids"]
+    blocked = len(selected) - len(eligible)
+    if not eligible:
+        await state.update_data(selected_book_ids=[])
+        await render_archive_list(callback, state, data.get("archive_page", 0) or 0)
+        await callback.answer("Выбранные книги нельзя удалить", show_alert=True)
+        return
+    await state.update_data(selected_book_ids=eligible)
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"🔐 Получить код для удаления ({len(eligible)})", callback_data="admin_books_purge_issue_code")
+    builder.button(text="◀️ К архиву", callback_data="admin_books_purge_cancel")
+    builder.adjust(1)
+    note = f"\nПропущено недоступных книг: {blocked}." if blocked else ""
+    await callback.message.edit_text(
+        f"⚠️ <b>Безвозвратно удалить {len(eligible)} книг?</b>\n\n"
+        "Восстановить их будет нельзя. Книги с заказами не удаляются."
+        f"{note}",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_books_purge_issue_code")
+async def issue_purge_code(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await state.clear()
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    data = await state.get_data()
+    selected = data.get("selected_book_ids", [])
+    if data.get("book_selection_mode") != "purge" or not selected:
+        await callback.answer("Выбор книг устарел", show_alert=True)
+        return
+    classification = await classify_archived_book_ids(selected)
+    eligible = classification["eligible_ids"]
+    if not eligible:
+        await state.clear()
+        await callback.answer("Выбранные книги больше нельзя удалить", show_alert=True)
+        return
+    code = issue_otp(callback.from_user.id, ACTION_PURGE_ARCHIVED_BOOKS)
+    await state.update_data(purge_book_ids=eligible, book_selection_mode="purge_pending")
+    await state.set_state(AdminBooksState.waiting_for_archive_purge_code)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✖ Отмена", callback_data="admin_books_purge_cancel")
+    await callback.message.edit_text(
+        f"🔐 <b>Подтверждение удаления {len(eligible)} книг</b>\n\n"
+        f"Отправьте одноразовый код: <code>{code}</code>\n"
+        f"Код действует {OTP_TTL_SECONDS} сек.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AdminBooksState.waiting_for_archive_purge_code, F.text & ~F.text.startswith("/"))
+async def confirm_purge_code(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
+        return
+    data = await state.get_data()
+    selected = data.get("purge_book_ids", [])
+    if data.get("book_selection_mode") != "purge_pending" or not selected:
+        await state.clear()
+        await message.answer("⚠️ Выбор книг устарел.")
+        return
+    if not consume_otp(message.from_user.id, ACTION_PURGE_ARCHIVED_BOOKS, (message.text or "").strip()):
+        await state.clear()
+        await message.answer("✖ Неверный или истёкший код. Удаление отменено.")
+        return
+    result = await purge_archived_books(selected)
+    await state.clear()
+    await message.answer(
+        f"✅ Удалено безвозвратно: {len(result['deleted_ids'])}.\n"
+        f"Оставлено в архиве: {len(result['referenced_ids']) + len(result['not_archived_ids']) + len(result['missing_ids'])}.",
+    )
+
+
+@router.callback_query(F.data == "admin_books_purge_cancel")
+async def cancel_purge(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    page = data.get("archive_page", 0) or 0
+    revoke_otp(callback.from_user.id, ACTION_PURGE_ARCHIVED_BOOKS)
+    await state.clear()
+    await state.update_data(archive_page=page, book_selection_mode=None, selected_book_ids=[])
+    await render_archive_list(callback, state, page)
+    await callback.answer("Удаление отменено")
+
+
+@router.callback_query(F.data.regexp(r"^admin_books_purge_protected_\d+$"))
+async def protected_purge_notice(callback: CallbackQuery):
+    await callback.answer("Книга есть в заказах и остаётся в архиве для учёта", show_alert=True)
 
 
 @router.callback_query(F.data.regexp(r"^admin_book_restore_\d+$"))
@@ -2261,4 +2564,6 @@ async def restore_book_handler(callback: CallbackQuery, state: FSMContext):
     if not restored:
         await callback.answer("❌ Книга не найдена в архиве", show_alert=True)
         return
-    await show_archive_list(callback, state)
+    data = await state.get_data()
+    await render_archive_list(callback, state, data.get("archive_page", 0) or 0)
+    await callback.answer("Книга восстановлена")

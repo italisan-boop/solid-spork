@@ -1,11 +1,15 @@
-from flask import Flask, Response, g, jsonify, make_response, request, send_from_directory
+from flask import Flask, Response, g, jsonify, make_response, redirect, request, send_from_directory
 from functools import wraps
 import requests
 import os
 import sqlite3
 import json
+import ipaddress
+import uuid
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 
+from config import settings
 from db.schema import DB_PATH, connect, initialize_database
 from dotenv import load_dotenv
 
@@ -20,7 +24,6 @@ ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip()]
 
 app = Flask(__name__, static_folder='.')
-initialize_database()
 
 
 def _authentication_error(error: TelegramInitDataError):
@@ -112,15 +115,28 @@ def get_categories_sync():
     return [dict(c) for c in cats]
 
 
-def create_order(user_id, user_name, cart, total, status='new', connection=None):
+def create_order(
+    user_id,
+    user_name,
+    cart,
+    total,
+    status='new',
+    connection=None,
+    *,
+    payment_method='manual',
+    checkout_key=None,
+):
     """Создать заказ в переданной или новой транзакции."""
     owns_connection = connection is None
     conn = connection or connect()
     cursor = conn.cursor()
 
     cursor.execute(
-        "INSERT INTO orders (user_id, user_name, total, status) VALUES (?, ?, ?, ?)",
-        (user_id, user_name, total, status)
+        """
+        INSERT INTO orders (user_id, user_name, total, status, payment_method, checkout_key)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, user_name, total, status, payment_method, checkout_key),
     )
     order_id = cursor.lastrowid
 
@@ -288,7 +304,246 @@ def _clear_cart(connection: sqlite3.Connection, user_id: int) -> int:
     return next_revision
 
 
-def get_all_unique_users():
+def _checkout_cart_is_available(connection: sqlite3.Connection, cart: list[dict]) -> bool:
+    book_ids = [item["id"] for item in cart]
+    placeholders = ",".join("?" for _ in book_ids)
+    available = connection.execute(
+        f"""
+        SELECT COUNT(*) FROM books
+        WHERE id IN ({placeholders})
+          AND is_active = 1
+          AND COALESCE(is_archived, 0) = 0
+        """,
+        book_ids,
+    ).fetchone()[0]
+    return available == len(book_ids)
+
+
+PAYMENT_METHOD_MANUAL = "manual"
+PAYMENT_METHOD_STARS = "stars"
+PAYMENT_METHOD_YOOKASSA = "yookassa"
+PAYMENT_METHOD_NONE = "none"
+YOO_KASSA_SOURCE_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "185.71.76.0/27",
+        "185.71.77.0/27",
+        "77.75.153.0/25",
+        "77.75.156.11/32",
+        "77.75.156.35/32",
+        "77.75.154.128/25",
+        "2a02:5180::/32",
+    )
+)
+
+
+def _money_rub(amount: int) -> str:
+    return f"{Decimal(amount):.2f}"
+
+
+def _normalized_rub_amount(value) -> str | None:
+    try:
+        amount = Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not amount.is_finite() or amount < 0:
+        return None
+    return format(amount, ".2f")
+
+
+def yookassa_is_configured() -> bool:
+    return bool(
+        settings.YOOKASSA_SHOP_ID
+        and settings.YOOKASSA_SECRET_KEY
+        and settings.YOOKASSA_RETURN_URL.startswith("https://")
+    )
+
+
+def _payment_options(connection: sqlite3.Connection) -> list[dict]:
+    settings_rows = connection.execute(
+        "SELECT setting_key, setting_value FROM payment_settings"
+    ).fetchall()
+    payment_settings = {row[0]: row[1] for row in settings_rows}
+    stars_rows = connection.execute(
+        "SELECT setting_key, setting_value FROM stars_settings"
+    ).fetchall()
+    stars_settings = {row[0]: row[1] for row in stars_rows}
+    options = []
+    if payment_settings.get("payment_enabled") == "1":
+        options.append({"id": PAYMENT_METHOD_MANUAL, "title": "Карта или СБП"})
+    try:
+        stars_rate = int(stars_settings.get("rubles_per_star", "0"))
+    except (TypeError, ValueError):
+        stars_rate = 0
+    if stars_settings.get("stars_enabled") == "1" and stars_rate > 0:
+        options.append({"id": PAYMENT_METHOD_STARS, "title": "Telegram Stars"})
+    if payment_settings.get("yookassa_enabled") == "1" and yookassa_is_configured():
+        options.append({"id": PAYMENT_METHOD_YOOKASSA, "title": "ЮKassa"})
+    if not options:
+        options.append({"id": PAYMENT_METHOD_NONE, "title": "Без онлайн-оплаты"})
+    return options
+
+
+def _yookassa_create_payment(amount: str, order_id: int, attempt_id: int, idempotence_key: str):
+    from yookassa import Configuration, Payment
+
+    Configuration.configure(settings.YOOKASSA_SHOP_ID, settings.YOOKASSA_SECRET_KEY)
+    return Payment.create(
+        {
+            "amount": {"value": amount, "currency": "RUB"},
+            "capture": True,
+            "confirmation": {
+                "type": "redirect",
+                "return_url": settings.YOOKASSA_RETURN_URL,
+            },
+            "description": f"Заказ #{order_id}",
+            "metadata": {"order_id": str(order_id), "attempt_id": str(attempt_id)},
+        },
+        idempotence_key,
+    )
+
+
+def _yookassa_find_payment(provider_payment_id: str):
+    from yookassa import Configuration, Payment
+
+    Configuration.configure(settings.YOOKASSA_SHOP_ID, settings.YOOKASSA_SECRET_KEY)
+    return Payment.find_one(provider_payment_id)
+
+
+def _payment_value(payment, path: str, default=None):
+    value = payment
+    for key in path.split("."):
+        if isinstance(value, dict):
+            value = value.get(key)
+        else:
+            value = getattr(value, key, None)
+        if value is None:
+            return default
+    return value
+
+
+def _yookassa_attempt(connection: sqlite3.Connection, order_id: int):
+    return connection.execute(
+        "SELECT * FROM yookassa_payments WHERE order_id = ? ORDER BY id DESC LIMIT 1",
+        (order_id,),
+    ).fetchone()
+
+
+def _start_yookassa_attempt(order_id: int) -> tuple[dict | None, str | None]:
+    connection = connect()
+    connection.row_factory = sqlite3.Row
+    try:
+        attempt = _yookassa_attempt(connection, order_id)
+        if not attempt:
+            return None, "Платёж не найден"
+        attempt = dict(attempt)
+        if attempt["status"] == "canceled":
+            return attempt, "Платёж отменён. Создайте новый платёж."
+        if attempt["provider_payment_id"] and attempt["confirmation_url"]:
+            return attempt, None
+        if not yookassa_is_configured():
+            return attempt, "ЮKassa временно недоступна"
+        try:
+            payment = _yookassa_create_payment(
+                attempt["amount"], order_id, attempt["id"], attempt["idempotence_key"]
+            )
+        except Exception:
+            connection.execute(
+                "UPDATE yookassa_payments SET status = 'creation_pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (attempt["id"],),
+            )
+            connection.commit()
+            attempt["status"] = "creation_pending"
+            return attempt, "Не удалось создать платёж ЮKassa"
+        provider_payment_id = _payment_value(payment, "id")
+        confirmation_url = _payment_value(payment, "confirmation.confirmation_url", "")
+        status = _payment_value(payment, "status", "pending")
+        if not provider_payment_id or not confirmation_url:
+            connection.execute(
+                "UPDATE yookassa_payments SET status = 'creation_pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (attempt["id"],),
+            )
+            connection.commit()
+            attempt["status"] = "creation_pending"
+            return attempt, "ЮKassa вернула неполный ответ"
+        connection.execute(
+            """
+            UPDATE yookassa_payments
+            SET provider_payment_id = ?, confirmation_url = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (provider_payment_id, confirmation_url, status, attempt["id"]),
+        )
+        connection.commit()
+        attempt.update(
+            provider_payment_id=provider_payment_id,
+            confirmation_url=confirmation_url,
+            status=status,
+        )
+        return attempt, None
+    finally:
+        connection.close()
+
+
+def _safe_payment_response(order: sqlite3.Row | dict, attempt=None) -> dict:
+    order = dict(order)
+    result = {
+        "order_id": order["id"],
+        "payment_method": order["payment_method"],
+        "status": order["status"],
+        "final_total": order["total"],
+    }
+    if order["payment_method"] == PAYMENT_METHOD_YOOKASSA and attempt:
+        provider_status = attempt["status"]
+        result["confirmation_url"] = (
+            attempt["confirmation_url"] or None
+            if provider_status not in {"canceled", "succeeded"}
+            else None
+        )
+        result["provider_status"] = provider_status
+    return result
+
+
+def _existing_checkout_response(
+    user_id: int,
+    order: sqlite3.Row | dict,
+    attempt: sqlite3.Row | dict | None,
+    cart_revision: int,
+):
+    order = dict(order)
+    payment_error = None
+    if order["payment_method"] == PAYMENT_METHOD_YOOKASSA:
+        if attempt is None:
+            payment_error = "Платёж не найден"
+        elif not attempt["confirmation_url"] or attempt["status"] == "canceled":
+            attempt, payment_error = _start_yookassa_attempt(order["id"])
+    response = {
+        "success": True,
+        **_safe_payment_response(order, attempt),
+        "reused": True,
+        "cart_revision": cart_revision,
+    }
+    if payment_error:
+        response["payment_error"] = payment_error
+    return jsonify(response)
+
+
+def _checkout_key(value) -> str:
+    if not isinstance(value, str):
+        raise ValueError("checkout_key must be a UUID")
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("checkout_key must be a UUID") from exc
+
+
+def _is_yookassa_source(address: str | None) -> bool:
+    try:
+        peer = ipaddress.ip_address(address or "")
+    except ValueError:
+        return False
+    return any(peer in network for network in YOO_KASSA_SOURCE_NETWORKS)
+
     """Получить всех уникальных пользователей"""
     conn = connect()
     conn.row_factory = sqlite3.Row
@@ -311,6 +566,7 @@ STATUS_LABELS = {
     'new': 'новый',
     'awaiting_payment': 'ожидает оплаты',
     'awaiting_stars_payment': 'ожидает оплаты (Stars)',
+    'awaiting_yookassa_payment': 'ожидает оплаты (ЮKassa)',
     'payment_pending': 'платёж в обработке',
     'confirmed': 'подтверждён',
     'paid': 'оплачен',
@@ -767,6 +1023,152 @@ def save_cart():
     finally:
         connection.close()
 
+
+@app.route('/api/checkout/options', methods=['GET'])
+@require_telegram_user
+def api_checkout_options():
+    connection = connect()
+    try:
+        return make_response(jsonify({"methods": _payment_options(connection)}), 200, {"Cache-Control": "private, no-store"})
+    finally:
+        connection.close()
+
+
+@app.route('/api/orders/<int:order_id>/payment', methods=['GET'])
+@require_telegram_user
+def api_order_payment(order_id: int):
+    connection = connect()
+    connection.row_factory = sqlite3.Row
+    try:
+        order = connection.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if not order or order["user_id"] != g.telegram_user.id:
+            return jsonify({"error": "Заказ не найден"}), 404
+        attempt = _yookassa_attempt(connection, order_id) if order["payment_method"] == PAYMENT_METHOD_YOOKASSA else None
+        response = jsonify(_safe_payment_response(order, attempt))
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+    finally:
+        connection.close()
+
+
+@app.route('/api/orders/<int:order_id>/yookassa/retry', methods=['POST'])
+@require_telegram_user
+def retry_yookassa_payment(order_id: int):
+    connection = connect()
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        order = connection.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if (
+            not order
+            or order["user_id"] != g.telegram_user.id
+            or order["payment_method"] != PAYMENT_METHOD_YOOKASSA
+            or order["status"] != "awaiting_yookassa_payment"
+        ):
+            connection.rollback()
+            return jsonify({"error": "Платёж недоступен"}), 404
+        attempt = _yookassa_attempt(connection, order_id)
+        if not attempt:
+            connection.rollback()
+            return jsonify({"error": "Платёж не найден"}), 404
+        if attempt["status"] == "canceled":
+            connection.execute(
+                """
+                INSERT INTO yookassa_payments (order_id, idempotence_key, amount, currency)
+                VALUES (?, ?, ?, 'RUB')
+                """,
+                (order_id, str(uuid.uuid4()), _money_rub(order["total"])),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    attempt, error = _start_yookassa_attempt(order_id)
+    if not attempt:
+        return jsonify({"error": error}), 503
+    response = jsonify(_safe_payment_response({"id": order_id, "payment_method": PAYMENT_METHOD_YOOKASSA, "status": "awaiting_yookassa_payment", "total": order["total"]}, attempt))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.route('/payments/yookassa/return', methods=['GET'])
+def yookassa_return():
+    return redirect(settings.WEBAPP_URL)
+
+
+@app.route('/webhooks/yookassa', methods=['POST'])
+def yookassa_webhook():
+    if request.content_length is not None and request.content_length > 65536:
+        return jsonify({"error": "Payload too large"}), 413
+    if not _is_yookassa_source(request.remote_addr):
+        return jsonify({"error": "Forbidden"}), 403
+    payload = request.get_json(silent=True)
+    provider_payment_id = (
+        payload.get("object", {}).get("id") if isinstance(payload, dict) and isinstance(payload.get("object"), dict) else None
+    )
+    if not isinstance(provider_payment_id, str) or not provider_payment_id:
+        return jsonify({"error": "Invalid payload"}), 400
+    if not yookassa_is_configured():
+        return jsonify({"error": "Verification unavailable"}), 503
+    try:
+        payment = _yookassa_find_payment(provider_payment_id)
+    except Exception:
+        return jsonify({"error": "Verification unavailable"}), 503
+
+    connection = connect()
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        attempt = connection.execute(
+            "SELECT * FROM yookassa_payments WHERE provider_payment_id = ?",
+            (provider_payment_id,),
+        ).fetchone()
+        if not attempt:
+            connection.rollback()
+            return "", 200
+        order = connection.execute("SELECT * FROM orders WHERE id = ?", (attempt["order_id"],)).fetchone()
+        active_attempt = _yookassa_attempt(connection, attempt["order_id"])
+        provider_id = _payment_value(payment, "id")
+        provider_status = _payment_value(payment, "status", "unknown")
+        paid = _payment_value(payment, "paid", False)
+        amount = _normalized_rub_amount(_payment_value(payment, "amount.value"))
+        currency = _payment_value(payment, "amount.currency")
+        metadata = _payment_value(payment, "metadata", {}) or {}
+        valid_identity = (
+            order is not None
+            and active_attempt is not None
+            and active_attempt["id"] == attempt["id"]
+            and provider_id == provider_payment_id
+            and amount == attempt["amount"]
+            and currency == attempt["currency"]
+            and isinstance(metadata, dict)
+            and str(metadata.get("order_id", "")) == str(order["id"])
+            and str(metadata.get("attempt_id", "")) == str(attempt["id"])
+        )
+        connection.execute(
+            "UPDATE yookassa_payments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (provider_status, attempt["id"]),
+        )
+        if (
+            provider_status == "succeeded"
+            and paid is True
+            and valid_identity
+            and order["status"] == "awaiting_yookassa_payment"
+        ):
+            connection.execute(
+                "UPDATE orders SET status = 'paid', new_order_notified = 0 WHERE id = ? AND status = 'awaiting_yookassa_payment'",
+                (order["id"],),
+            )
+        connection.commit()
+        return "", 200
+    except sqlite3.Error:
+        connection.rollback()
+        return jsonify({"error": "Verification unavailable"}), 503
+    finally:
+        connection.close()
+
+
+@app.route('/api/validate-promo', methods=['POST'])
+@require_telegram_user
 def api_validate_promo():
     """API: проверка промокода"""
     try:
@@ -791,13 +1193,36 @@ def receive_order():
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return jsonify({'error': 'Invalid JSON body'}), 400
+        user_id = g.telegram_user.id
+        user_name = g.telegram_user.name
+        try:
+            checkout_key = _checkout_key(data.get("checkout_key"))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        existing_connection = connect()
+        existing_connection.row_factory = sqlite3.Row
+        try:
+            existing_order = existing_connection.execute(
+                "SELECT * FROM orders WHERE user_id = ? AND checkout_key = ?",
+                (user_id, checkout_key),
+            ).fetchone()
+            existing_attempt = _yookassa_attempt(existing_connection, existing_order["id"]) if existing_order else None
+            _, existing_cart_revision = _read_cart(existing_connection, user_id)
+        finally:
+            existing_connection.close()
+        if existing_order:
+            return _existing_checkout_response(
+                user_id,
+                existing_order,
+                existing_attempt,
+                existing_cart_revision,
+            )
         try:
             cart = resolve_checkout_cart(data.get('cart'))
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
-        user_id = g.telegram_user.id
-        user_name = g.telegram_user.name
         promo_code = str(data.get('promo_code') or '').strip()
+        payment_method = data.get("payment_method")
         cart_revision = data.get('cart_revision')
         if (
             isinstance(cart_revision, bool)
@@ -827,6 +1252,21 @@ def receive_order():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         conn.execute('BEGIN IMMEDIATE')
+        raced_order = cursor.execute(
+            "SELECT * FROM orders WHERE user_id = ? AND checkout_key = ?",
+            (user_id, checkout_key),
+        ).fetchone()
+        if raced_order:
+            raced_attempt = _yookassa_attempt(conn, raced_order["id"])
+            _, raced_cart_revision = _read_cart(conn, user_id)
+            conn.rollback()
+            conn.close()
+            return _existing_checkout_response(
+                user_id,
+                raced_order,
+                raced_attempt,
+                raced_cart_revision,
+            )
         stored_cart, stored_revision = _read_cart(conn, user_id)
         if stored_revision != cart_revision:
             conn.rollback()
@@ -837,6 +1277,10 @@ def receive_order():
                 409,
                 error='Cart has changed in another session',
             )
+        if not _checkout_cart_is_available(conn, cart):
+            conn.rollback()
+            conn.close()
+            return jsonify({'error': 'book is unavailable'}), 400
 
         cursor.execute(
             "SELECT * FROM user_bonuses WHERE user_id = ? AND is_used = 0 ORDER BY created_at DESC LIMIT 1",
@@ -869,29 +1313,34 @@ def receive_order():
         stars_settings = {row['setting_key']: row['setting_value'] for row in cursor.fetchall()}
 
 
-        # Определяем метод оплаты
-        stars_enabled = stars_settings.get('stars_enabled', '0') == '1'
-        payment_enabled = payment_settings.get('payment_enabled', '1') == '1'
-        rubles_per_star = int(stars_settings.get('rubles_per_star', '2'))
-
-        # Конвертируем в Stars
-        stars_amount = (final_total + rubles_per_star - 1) // rubles_per_star if rubles_per_star > 0 else 0
-
-        if stars_enabled and rubles_per_star <= 0:
+        # Покупатель выбирает способ, но сервер разрешает только включённые методы.
+        options = {option["id"] for option in _payment_options(conn)}
+        if final_total == 0:
+            payment_method = PAYMENT_METHOD_NONE
+        elif payment_method not in options:
+            conn.rollback()
+            conn.close()
+            return jsonify({'error': 'Выбранный способ оплаты недоступен'}), 400
+        try:
+            rubles_per_star = int(stars_settings.get('rubles_per_star', '0'))
+        except (TypeError, ValueError):
+            rubles_per_star = 0
+        if payment_method == PAYMENT_METHOD_STARS and rubles_per_star <= 0:
             conn.rollback()
             conn.close()
             return jsonify({'error': 'Invalid Stars rate'}), 503
-
-        # Определяем статус заказа
-        if stars_enabled:
+        if payment_method == PAYMENT_METHOD_STARS:
             status = 'awaiting_stars_payment'
-            payment_method = 'stars'
-        elif payment_enabled:
+            stars_amount = (final_total + rubles_per_star - 1) // rubles_per_star
+        elif payment_method == PAYMENT_METHOD_MANUAL:
             status = 'awaiting_payment'
-            payment_method = 'card'
+            stars_amount = None
+        elif payment_method == PAYMENT_METHOD_YOOKASSA:
+            status = 'awaiting_yookassa_payment'
+            stars_amount = None
         else:
             status = 'new'
-            payment_method = 'none'
+            stars_amount = None
 
         if promo_code_to_consume:
             updated = cursor.execute(
@@ -907,11 +1356,28 @@ def receive_order():
                 conn.close()
                 return jsonify({'error': 'Промокод больше не действует'}), 409
 
-        order_id = create_order(user_id, user_name, cart, final_total, status, connection=conn)
+        order_id = create_order(
+            user_id,
+            user_name,
+            cart,
+            final_total,
+            status,
+            connection=conn,
+            payment_method=payment_method,
+            checkout_key=checkout_key,
+        )
+        if payment_method == PAYMENT_METHOD_YOOKASSA:
+            cursor.execute(
+                """
+                INSERT INTO yookassa_payments (order_id, idempotence_key, amount, currency)
+                VALUES (?, ?, ?, 'RUB')
+                """,
+                (order_id, str(uuid.uuid4()), _money_rub(final_total)),
+            )
         cart_revision = _clear_cart(conn, user_id)
         conn.commit()
         conn.close()
-        print(f"✅ Заказ #{order_id} от {user_name} | {final_total}₽ | Метод: {payment_method} | Статус: {status}")
+        print(f"Order #{order_id}: {final_total} RUB, method={payment_method}, status={status}")
 
         # Формируем ответ
         response_data = {
@@ -920,18 +1386,19 @@ def receive_order():
             'discount': discount,
             'final_total': final_total,
             'payment_method': payment_method,
-            'payment_required': payment_method == 'card',
+            'status': status,
+            'payment_required': payment_method == PAYMENT_METHOD_MANUAL,
             'applied_promo': applied_promo,
             'applied_bonus': applied_bonus,
             'cart_revision': cart_revision
         }
 
         # Добавляем информацию о Stars
-        if payment_method == 'stars':
+        if payment_method == PAYMENT_METHOD_STARS:
             response_data['stars_amount'] = stars_amount
 
-        # Добавляем реквизиты для оплаты картой
-        if payment_method == 'card':
+        # Добавляем реквизиты для ручной оплаты картой/СБП
+        if payment_method == PAYMENT_METHOD_MANUAL:
             response_data['payment_info'] = {
                 'card': payment_settings.get('card_number', ''),
                 'sbp_phone': payment_settings.get('sbp_phone', ''),
@@ -940,11 +1407,23 @@ def receive_order():
                 'instructions': payment_settings.get('payment_instructions', '')
             }
 
+        if payment_method == PAYMENT_METHOD_YOOKASSA:
+            attempt, payment_error = _start_yookassa_attempt(order_id)
+            if attempt:
+                response_data["confirmation_url"] = (
+                    attempt["confirmation_url"] or None
+                    if attempt["status"] not in {"canceled", "succeeded"}
+                    else None
+                )
+                response_data["provider_status"] = attempt["status"]
+            if payment_error:
+                response_data["payment_error"] = payment_error
+
         # Уведомление пользователю
         # === ОТПРАВКА СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЮ ===
         items_list = "\n".join([f"• {item['title']} ({item['price']} ₽ × {item.get('quantity', 1)})" for item in cart])
 
-        if payment_method == 'stars':
+        if payment_method == PAYMENT_METHOD_STARS:
             # === ОТПРАВКА ИНВОЙСА STARS ===
             invoice_title = f"Заказ #{order_id} — Семена Знаний"
             invoice_desc = f"📚 {len(cart)} книг\n\n{items_list}\n\n💰 {final_total} ₽"
@@ -971,7 +1450,7 @@ def receive_order():
                     f"💰 Сумма: <b>{final_total} ₽</b>"
                 )
 
-        elif payment_method == 'card':
+        elif payment_method == PAYMENT_METHOD_MANUAL:
             # === ОТПРАВКА РЕКВИЗИТОВ ===
             payment_info = response_data.get('payment_info', {})
 
@@ -996,8 +1475,8 @@ def receive_order():
             buttons = [[{'text': '✅ Я оплатил', 'callback_data': f'user_paid_{order_id}'}]]
             send_telegram_with_keyboard(user_id, payment_text, buttons)
 
-        else:
-            # === БЕЗ ОПЛАТЫ ===
+        elif payment_method == PAYMENT_METHOD_NONE:
+            # Заказ без онлайн-оплаты.
             send_telegram_message(
                 user_id,
                 f"🛒 <b>Заказ #{order_id} создан!</b>\n\n{items_list}\n\n"
@@ -1013,11 +1492,9 @@ def receive_order():
 
         return jsonify(response_data)
 
-    except Exception as e:
-        print(f"❌ Ошибка в /order: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        print("Order checkout failed")
+        return jsonify({'error': 'Не удалось оформить заказ'}), 500
 
 
 @app.route('/health', methods=['GET'])
@@ -1030,11 +1507,16 @@ def health():
 # ЗАПУСК
 # ============================================
 
+def run_server():
+    initialize_database()
+    app.run(
+        host=settings.HOST,
+        port=settings.PORT,
+        debug=settings.FLASK_DEBUG,
+        use_reloader=settings.FLASK_DEBUG,
+    )
+
+
 if __name__ == '__main__':
-    print(f"🚀 Сервер запущен на порту 8080")
-    print(f"📱 Mini App: http://localhost:8080")
-    print(f"📚 API книг: http://localhost:8080/api/books")
-    print(f"📂 API категорий: http://localhost:8080/api/categories")
-    print(f"👥 Админы: {ADMIN_IDS}")
-    print(f"🤖 Bot token: {'✅' if BOT_TOKEN else '❌ НЕ ЗАДАН'}")
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    print(f"Mini App server: http://{settings.HOST}:{settings.PORT}")
+    run_server()

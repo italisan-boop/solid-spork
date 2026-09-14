@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Семена Знаний — инструкция по установке</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18251c;
+      --muted: #5b6960;
+      --paper: #f7f8f3;
+      --panel: #ffffff;
+      --accent: #2c6b42;
+      --accent-soft: #e4f0e7;
+      --line: #d9e2da;
+      --warning: #7a4900;
+      --warning-soft: #fff2d9;
+      --code: #16221a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    header {
+      background: linear-gradient(135deg, #173a25, #2c6b42);
+      color: #fff;
+      padding: 64px 24px 54px;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; }
+    h1 { margin: 0 0 12px; font-size: clamp(2rem, 5vw, 3.6rem); line-height: 1.08; }
+    header p { margin: 0; max-width: 670px; color: #d9ecde; font-size: 1.1rem; }
+    main { padding: 32px 24px 64px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 28px;
+      margin: 20px 0;
+      box-shadow: 0 6px 22px rgb(22 53 31 / 4%);
+    }
+    h2 { margin: 0 0 14px; font-size: 1.45rem; }
+    h3 { margin: 24px 0 8px; font-size: 1.06rem; }
+    p, li { color: var(--muted); }
+    ol, ul { padding-left: 22px; }
+    li + li { margin-top: 7px; }
+    code {
+      background: #edf2ed;
+      color: #173a25;
+      border-radius: 5px;
+      padding: 2px 5px;
+      font-size: .92em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 12px 0;
+      padding: 18px;
+      border-radius: 10px;
+      background: var(--code);
+      color: #e8f5ea;
+      font: 13px/1.55 "Cascadia Code", Consolas, monospace;
+      white-space: pre;
+    }
+    pre code { background: none; color: inherit; padding: 0; }
+    .note, .warning {
+      padding: 15px 17px;
+      border-radius: 10px;
+      margin: 16px 0;
+    }
+    .note { background: var(--accent-soft); border-left: 4px solid var(--accent); }
+    .warning { background: var(--warning-soft); border-left: 4px solid #b16b00; color: var(--warning); }
+    .warning p, .note p { color: inherit; margin: 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: var(--ink); font-size: .9rem; }
+    td { color: var(--muted); }
+    .checklist li { list-style: square; }
+    footer { color: var(--muted); text-align: center; padding: 8px 24px 48px; font-size: .9rem; }
+    @media (max-width: 640px) {
+      section { padding: 20px; }
+      th, td { display: block; border: 0; padding: 6px 0; }
+      tr { display: block; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Семена Знаний</h1>
+      <p>Локальная инструкция по установке, запуску, резервному копированию и безопасной передаче Telegram-магазина.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>1. Что входит в проект</h2>
+      <ul>
+        <li>Telegram-бот на Aiogram с админ-панелью, заказами, поддержкой и каталогом.</li>
+        <li>Telegram Mini App на Flask: каталог, корзина, промокоды, оформление заказа и WebApp-аутентификация.</li>
+        <li>SQLite-база с миграциями, persistent-корзинами и хранением FSM-состояний.</li>
+        <li>Оплата картой/СБП с ручным подтверждением, Telegram Stars и ЮKassa с hosted checkout.</li>
+      </ul>
+      <div class="note"><p>В <code>RUN_MODE=webhook</code> запускается один общий процесс <code>main.py</code>: он обслуживает Telegram webhook и Flask Mini App/API на одном <code>HOST:PORT</code>. В <code>RUN_MODE=polling</code> бот и Mini App запускаются разными процессами и должны использовать разные порты.</p></div>
+    </section>
+
+    <section>
+      <h2>2. Требования</h2>
+      <ul>
+        <li>Windows, Linux или macOS.</li>
+        <li>Python 3.11 или новее.</li>
+        <li>Публичный HTTPS-домен для Mini App в production.</li>
+        <li>Telegram-бот, созданный через BotFather.</li>
+      </ul>
+      <pre><code>python -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -r requirements.txt</code></pre>
+      <p>На Linux/macOS вместо <code>.venv\Scripts\python.exe</code> используйте <code>.venv/bin/python</code>.</p>
+    </section>
+
+    <section>
+      <h2>3. Файл окружения</h2>
+      <p>Создайте локальный файл <code>.env</code> в корне проекта. Его нельзя добавлять в Git.</p>
+      <pre><code>BOT_TOKEN=получите_новый_токен_в_BotFather
+WEBAPP_URL=https://shop.example.ru
+ADMIN_IDS=123456789
+DATABASE_PATH=C:\\Apps\\semena-znaniy\\semena_znaniy.sqlite
+RUN_MODE=polling
+# Только для RUN_MODE=webhook:
+# WEBHOOK_URL=https://bot.example.ru/webhook
+# WEBHOOK_SECRET=сгенерируйте_случайную_строку_без_пробелов
+# HOST=0.0.0.0
+# PORT=8081
+# ЮKassa: задаются только локально или в secret store:
+# YOOKASSA_SHOP_ID=идентификатор_магазина
+# YOOKASSA_SECRET_KEY=секретный_ключ_ЮKassa
+# YOOKASSA_RETURN_URL=https://shop.example.ru/payments/yookassa/return</code></pre>
+      <table>
+        <thead><tr><th>Переменная</th><th>Назначение</th></tr></thead>
+        <tbody>
+          <tr><td><code>BOT_TOKEN</code></td><td>Обязательный token Telegram-бота. Используется ботом, отправкой уведомлений и проверкой WebApp <code>initData</code>.</td></tr>
+          <tr><td><code>WEBAPP_URL</code></td><td>Публичный HTTPS-адрес Mini App. Бот передаёт его в кнопке открытия магазина.</td></tr>
+          <tr><td><code>ADMIN_IDS</code></td><td>Telegram ID администраторов через запятую. Это security-critical настройка, хотя она не является секретом.</td></tr>
+          <tr><td><code>DATABASE_PATH</code></td><td>Обязательный абсолютный путь к общей SQLite-базе. Если файла нет, приложение создаст его и применит схему.</td></tr>
+          <tr><td><code>RUN_MODE</code></td><td>Рабочий переключатель: <code>polling</code> запускает получение updates через Telegram API; <code>webhook</code> запускает aiohttp webhook listener.</td></tr>
+          <tr><td><code>WEBHOOK_URL</code></td><td>Обязательный публичный HTTPS URL вида <code>https://домен/webhook</code> только для режима webhook.</td></tr>
+          <tr><td><code>WEBHOOK_SECRET</code></td><td>Секрет проверки заголовка от Telegram. Нужен только для webhook и не должен попадать в Git или логи.</td></tr>
+          <tr><td><code>HOST</code> / <code>PORT</code></td><td>Адрес и порт HTTP-сервера текущего запуска. В webhook режиме это общий listener для Telegram и Mini App; standalone Flask также использует эти значения.</td></tr>
+          <tr><td><code>YOOKASSA_SHOP_ID</code></td><td>Идентификатор магазина из личного кабинета ЮKassa. Нужен только серверу для создания и проверки платежей.</td></tr>
+          <tr><td><code>YOOKASSA_SECRET_KEY</code></td><td>Секрет API ЮKassa. Хранится только в <code>.env</code> или secret store, не вводится в Telegram, не попадает в SQLite, ответы API, логи или Git.</td></tr>
+          <tr><td><code>YOOKASSA_RETURN_URL</code></td><td>Публичный HTTPS-адрес <code>/payments/yookassa/return</code>. Это только возврат в Mini App после оплаты, а не подтверждение платежа.</td></tr>
+        </tbody>
+      </table>
+      <div class="warning"><p>Не сохраняйте token в исходниках, URL изображений, логах, скриншотах или Git-коммитах. При любом раскрытии token немедленно отзовите его через BotFather и выпустите новый.</p></div>
+    </section>
+
+    <section>
+      <h2>4. Первый запуск</h2>
+      <h3>Webhook: единый запуск бота и Mini App</h3>
+      <pre><code># В .env:
+RUN_MODE=webhook
+PORT=8081
+
+# Затем:
+.venv\Scripts\python.exe main.py</code></pre>
+      <p>Один процесс обслуживает Mini App/API и <code>POST /webhook</code> на <code>HOST:PORT</code>. Внешний HTTPS reverse proxy должен направлять все пути на этот процесс.</p>
+      <h3>Polling: два процесса</h3>
+      <pre><code># В .env перед запуском Mini App:
+RUN_MODE=polling
+PORT=8080
+
+# Окно 1:
+.venv\Scripts\python.exe server.py
+
+# Окно 2:
+.venv\Scripts\python.exe main.py</code></pre>
+      <p>При первом запуске SQLite создаст файл базы и таблицы автоматически. Для production Flask не должен запускаться с <code>debug=True</code>; разместите его за HTTPS reverse proxy или WSGI-сервером и проверьте, что proxy передаёт заголовок <code>X-Telegram-Init-Data</code>.</p>
+    </section>
+
+    <section>
+      <h2>5. Настройка Telegram Mini App</h2>
+      <ol>
+        <li>Разместите Mini App по адресу из <code>WEBAPP_URL</code> с действующим HTTPS-сертификатом.</li>
+        <li>Укажите этот адрес для Web App у бота в BotFather.</li>
+        <li>Откройте бота в Telegram, нажмите кнопку магазина и убедитесь, что каталог загружается.</li>
+        <li>Добавьте товар в корзину, полностью закройте Mini App и откройте снова: корзина должна восстановиться для того же Telegram-пользователя.</li>
+        <li>Проверьте под другой Telegram-учётной записью, что она не видит чужую корзину.</li>
+      </ol>
+      <div class="note"><p>Корзина и checkout принимают пользователя только из серверно проверенного Telegram <code>initData</code>. Обычный браузер без Telegram не сможет сохранять серверную корзину или оформлять заказ.</p></div>
+    </section>
+
+    <section>
+      <h2>6. Настройка оплаты</h2>
+      <ol>
+        <li>Откройте в боте <b>Админ-панель → Настройки оплаты</b>. Там отдельно включаются реквизиты, Telegram Stars и ЮKassa; покупатель выбирает только доступный способ при checkout.</li>
+        <li>Для ручной оплаты заполните хотя бы карту или СБП. Покупатель сообщает о переводе кнопкой в сообщении Telegram, после чего администратор проверяет поступление.</li>
+        <li>Для Stars задайте курс и убедитесь, что товары соответствуют правилам Telegram для этого способа.</li>
+        <li>Для ЮKassa создайте магазин и тестовый ключ в личном кабинете, поместите три переменные <code>YOOKASSA_*</code> в локальный secret store, перезапустите процесс и только затем включите метод в админ-панели.</li>
+        <li>В личном кабинете ЮKassa зарегистрируйте публичный HTTPS endpoint <code>POST /webhooks/yookassa</code> и события успешной оплаты и отмены платежа.</li>
+      </ol>
+      <div class="note"><p>Сначала в ЮKassa сохраняется локальная попытка с idempotency key, затем создаётся hosted redirect. Повторный запрос не создаёт второй заказ или второе списание. Статус меняется на «оплачен» только после webhook и независимой проверки платежа через API ЮKassa; <code>return URL</code> ничего не подтверждает.</p></div>
+      <div class="warning"><p>Для прямого доступа приложение проверяет адрес отправителя webhook. Если перед ним стоит reverse proxy, ограничьте путь <code>/webhooks/yookassa</code> официальными IP-адресами ЮKassa на границе сети и не передавайте произвольный <code>X-Forwarded-For</code> как доверенный адрес клиента.</p></div>
+    </section>
+
+    <section>
+      <h2>7. Администрирование каталога</h2>
+      <ul>
+        <li>Обычное удаление книги переносит её в архив и скрывает из магазина.</li>
+        <li>В управлении книгами можно выбрать несколько книг на разных страницах и одним действием перенести их в архив.</li>
+        <li>В архиве книгу можно восстановить.</li>
+        <li>Удалить навсегда можно только архивную книгу без исторических заказов. Для удаления нужен одноразовый код подтверждения.</li>
+        <li>Книги, присутствующие в заказах, остаются в архиве для сохранения бухгалтерской истории и выгрузок.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>8. Проверка перед передачей покупателю</h2>
+      <pre><code>set PYTHONIOENCODING=utf-8
+.venv\Scripts\python.exe -m unittest discover -s tests -v</code></pre>
+      <ul class="checklist">
+        <li>Проверить создание заказа, промокод, ручную оплату, Stars и ЮKassa в тестовой среде ЮKassa.</li>
+        <li>Проверить повторную отправку checkout, возврат из ЮKassa, успешный webhook и отменённый webhook; браузерный return не должен менять статус заказа.</li>
+        <li>Проверить вход админа, добавление/архивирование/восстановление книги и работу поддержки.</li>
+        <li>Проверить открытие Mini App из Telegram, persistent-корзину и checkout.</li>
+        <li>Проверить, что неадминистратор не открывает admin API и admin callbacks.</li>
+        <li>Проверить, что <code>.env</code>, SQLite-файлы и резервные копии не добавлены в Git.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>9. Резервная копия и восстановление</h2>
+      <ol>
+        <li>Остановите Flask и бот, чтобы не копировать базу во время записи.</li>
+        <li>Скопируйте файл из <code>DATABASE_PATH</code> в защищённое место с датой в имени.</li>
+        <li>При использовании SQLite WAL копируйте также соседние файлы <code>-wal</code> и <code>-shm</code>, либо выполняйте копирование после штатной остановки процессов.</li>
+        <li>Для восстановления остановите процессы, замените файл базы резервной копией и запустите процессы снова.</li>
+      </ol>
+      <div class="warning"><p>Постоянное удаление архивной книги нельзя отменить через интерфейс. Перед массовой очисткой архива сделайте и проверьте резервную копию SQLite.</p></div>
+    </section>
+
+    <section>
+      <h2>10. Передача проекта покупателю</h2>
+      <ol>
+        <li>Передайте исходный код без <code>.env</code>, без SQLite production-базы и без папки <code>.venv</code>.</li>
+        <li>Покупатель создаёт собственного бота в BotFather и использует только собственный <code>BOT_TOKEN</code>.</li>
+        <li>Покупатель создаёт новую SQLite-базу через свой <code>DATABASE_PATH</code> либо получает отдельную согласованную копию данных.</li>
+        <li>Передайте эту страницу, список доменов, способ деплоя и процедуру backup.</li>
+        <li>Зафиксируйте в договоре: передаются ли исключительные права, входит ли развёртывание и срок технической поддержки.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>Локальная инструкция. Не публикуйте её вместе с секретами или production-дампом базы данных.</footer>
+</body>
+</html>

@@ -10,7 +10,14 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 import db
-from db.orders import save_admin_notification_ids, clear_admin_notifications, PENDING_STATUSES
+from db.orders import (
+    AUTOMATIC_PAYMENT_METHODS,
+    AWAITING_PAYMENT_STATUSES,
+    PAID_STATUSES,
+    PENDING_STATUSES,
+    clear_admin_notifications,
+    save_admin_notification_ids,
+)
 from config import settings
 from utils import setup_logger, format_local_time
 
@@ -26,6 +33,15 @@ def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
 
 
+def _can_cancel_order(order: dict) -> bool:
+    if order['status'] in {'completed', 'cancelled'}:
+        return False
+    return not (
+        order.get('payment_method') in AUTOMATIC_PAYMENT_METHODS
+        and order['status'] in PAID_STATUSES
+    )
+
+
 def admin_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="📋 Все заказы", callback_data="admin_orders_all")
@@ -36,7 +52,6 @@ def admin_keyboard():
     builder.button(text="📚 Управление книгами", callback_data="admin_books_menu")
     builder.button(text="📂 Управление категориями", callback_data="admin_categories")
     builder.button(text="💳 Настройки оплаты", callback_data="admin_payments")
-    builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
     builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
     builder.button(text="🗑 Сброс кэша", callback_data="admin_drop_cache")
     builder.button(text="🎧 Поддержка", callback_data="admin_support_menu")
@@ -119,7 +134,7 @@ async def admin_orders_new(callback: CallbackQuery):
 async def admin_orders_pending(callback: CallbackQuery, page: int = 0):
     """Показать заказы, требующие внимания админа"""
     # Получаем заказы со статусами, требующими обработки
-    statuses = ['new', 'awaiting_payment', 'awaiting_stars_payment', 'payment_pending']
+    statuses = ['new', *AWAITING_PAYMENT_STATUSES, 'payment_pending', 'paid']
 
     all_orders = []
     for status in statuses:
@@ -161,7 +176,9 @@ async def admin_orders_pending(callback: CallbackQuery, page: int = 0):
         'new': '🆕 Новый',
         'awaiting_payment': '💳 Ожидает оплаты',
         'awaiting_stars_payment': '⭐ Ожидает Stars',
-        'payment_pending': '⏳ Ожидает подтверждения'
+        'awaiting_yookassa_payment': '🟣 Ожидает ЮKassa',
+        'payment_pending': '⏳ Ожидает подтверждения',
+        'paid': '💰 Оплачен'
     }
 
     orders_text = "⏳ <b>Заказы, требующие внимания</b>\n"
@@ -296,6 +313,7 @@ async def admin_orders_list(callback: CallbackQuery, status: str = None, title: 
         'cancelled': '❌ Отменён',
         'awaiting_payment': '💳 Ожидает оплаты',
         'awaiting_stars_payment': '⭐ Ожидает Stars',
+        'awaiting_yookassa_payment': '🟣 Ожидает ЮKassa',
         'payment_pending': '⏳ Ожидает подтверждения',
         'paid': '💰 Оплачен'
     }
@@ -409,6 +427,7 @@ async def order_detail(callback: CallbackQuery):
         'cancelled': '❌ Отменён',
         'awaiting_payment': '💳 Ожидает оплаты',
         'awaiting_stars_payment': '⭐ Ожидает Stars',
+        'awaiting_yookassa_payment': '🟣 Ожидает ЮKassa',
         'payment_pending': '⏳ Ожидает подтверждения',
         'paid': '💰 Оплачен'
     }
@@ -430,10 +449,10 @@ async def order_detail(callback: CallbackQuery):
     builder = InlineKeyboardBuilder()
 
     # Кнопки действий в зависимости от статуса
-    if order['status'] in ['new', 'awaiting_payment', 'awaiting_stars_payment', 'payment_pending']:
+    if order['status'] in PENDING_STATUSES:
         builder.button(text="✅ Подтвердить", callback_data=f"confirm_{order_id}")
 
-    if order['status'] in ['new', 'awaiting_payment', 'awaiting_stars_payment', 'payment_pending', 'confirmed']:
+    if _can_cancel_order(order):
         builder.button(text="❌ Отменить", callback_data=f"cancel_order_{order_id}")
 
     if order['status'] == 'confirmed':
@@ -484,6 +503,7 @@ async def cmd_order_by_id(message: Message):
         'cancelled': '❌ Отменён',
         'awaiting_payment': '💳 Ожидает оплаты',
         'awaiting_stars_payment': '⭐ Ожидает Stars',
+        'awaiting_yookassa_payment': '🟣 Ожидает ЮKassa',
         'payment_pending': '⏳ Ожидает подтверждения',
         'paid': '💰 Оплачен'
     }
@@ -504,10 +524,10 @@ async def cmd_order_by_id(message: Message):
 
     builder = InlineKeyboardBuilder()
 
-    if order['status'] in ['new', 'awaiting_payment', 'awaiting_stars_payment', 'payment_pending']:
+    if order['status'] in PENDING_STATUSES:
         builder.button(text="✅ Подтвердить", callback_data=f"confirm_{order_id}")
 
-    if order['status'] in ['new', 'awaiting_payment', 'awaiting_stars_payment', 'payment_pending', 'confirmed']:
+    if _can_cancel_order(order):
         builder.button(text="❌ Отменить", callback_data=f"cancel_order_{order_id}")
 
     if order['status'] == 'confirmed':
@@ -584,12 +604,10 @@ async def cancel_order(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Заказ не найден", show_alert=True)
         return
 
-    # Проверяем, можно ли отменить
-    non_cancellable = ['completed', 'cancelled']
-    if order['status'] in non_cancellable:
+    if not _can_cancel_order(order):
         await callback.answer(
-            f"❌ Нельзя отменить заказ со статусом '{order['status']}'",
-            show_alert=True
+            "❌ Нельзя отменить заказ в текущем статусе",
+            show_alert=True,
         )
         return
 
@@ -695,7 +713,9 @@ async def _notify_admins_new_order(bot: Bot, order: dict) -> bool:
         'new': '🆕 Новый',
         'awaiting_payment': '💳 Ожидает оплаты',
         'awaiting_stars_payment': '⭐ Ожидает Stars',
-        'payment_pending': '⏳ Ожидает подтверждения'
+        'awaiting_yookassa_payment': '🟣 Ожидает ЮKassa',
+        'payment_pending': '⏳ Ожидает подтверждения',
+        'paid': '💰 Оплачен'
     }
     st = status_names.get(order['status'], order['status'])
 
@@ -839,6 +859,12 @@ async def new_order_reject(callback: CallbackQuery, bot: Bot):
             show_alert=True
         )
         return
+    if not _can_cancel_order(order):
+        await callback.answer(
+            "❌ Оплаченный заказ через платёжного провайдера нельзя отклонить",
+            show_alert=True,
+        )
+        return
 
     await db.update_order_status(order_id, 'cancelled')
     await callback.answer("❌ Заказ отклонён!", show_alert=True)
@@ -887,6 +913,7 @@ async def admin_stats(callback: CallbackQuery):
         'cancelled': '❌ Отменённые',
         'awaiting_payment': '💳 Ожидает оплаты',
         'awaiting_stars_payment': '⭐ Ожидает Stars',
+        'awaiting_yookassa_payment': '🟣 Ожидает ЮKassa',
         'payment_pending': '⏳ Ожидает подтверждения',
         'paid': '💰 Оплачен'
     }
