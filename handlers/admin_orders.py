@@ -67,6 +67,7 @@ async def cmd_admin(message: Message):
     builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
     builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
     builder.button(text="🗑 Сброс кэша", callback_data="admin_drop_cache")
+    builder.button(text="🎧 Поддержка", callback_data="admin_support_menu")
     builder.adjust(2)
 
     await message.answer(
@@ -94,6 +95,7 @@ async def admin_menu(callback: CallbackQuery):
     builder.button(text="⭐ Настройки Stars", callback_data="admin_stars_settings")
     builder.button(text="🎟️ Промокоды", callback_data="admin_promo")
     builder.button(text="🗑 Сброс кэша", callback_data="admin_drop_cache")
+    builder.button(text="🎧 Поддержка", callback_data="admin_support_menu")
     builder.adjust(2)
 
     await safe_edit_text(
