@@ -1,6 +1,6 @@
 import logging
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -34,23 +34,43 @@ _CODE_TEXT = (
 )
 
 
+async def _start_drop_cache_flow(admin_id: int, state: FSMContext) -> str:
+    """Выдать OTP и войти в состояние ожидания кода. Возвращает текст с кодом."""
+    code = issue_otp(admin_id, ACTION_DROP_CACHE)
+    await state.set_state(CriticalActionState.waiting_for_code)
+    await state.update_data(action=ACTION_DROP_CACHE)
+    return (
+        "🗑 <b>Сброс кэша поддержки</b>\n\n"
+        "Будут сброшены:\n"
+        "• закреплённые тикеты\n"
+        "• активные диалоги поддержки\n\n"
+        + _CODE_TEXT.format(code=code, ttl=OTP_TTL_SECONDS)
+    )
+
+
 @router.message(Command("drop_cache"))
 async def cmd_drop_cache(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    code = issue_otp(message.from_user.id, ACTION_DROP_CACHE)
-    await state.set_state(CriticalActionState.waiting_for_code)
-    await state.update_data(action=ACTION_DROP_CACHE)
-
     await message.answer(
-        "🗑 <b>Сброс кэша поддержки</b>\n\n"
-        "Будут сброшены:\n"
-        "• закреплённые тикеты\n"
-        "• активные диалоги поддержки\n\n"
-        + _CODE_TEXT.format(code=code, ttl=OTP_TTL_SECONDS),
+        await _start_drop_cache_flow(message.from_user.id, state),
         parse_mode="HTML",
     )
+
+
+@router.callback_query(F.data == "admin_drop_cache")
+async def cb_drop_cache(callback: CallbackQuery, state: FSMContext):
+    """Кнопка «Сброс кэша» в админ-панели — тот же поток, что /drop_cache."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    await callback.message.answer(
+        await _start_drop_cache_flow(callback.from_user.id, state),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.message(CriticalActionState.waiting_for_code, ~F.text.startswith("/"))
