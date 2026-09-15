@@ -311,17 +311,55 @@
             justify-content: center;
             font-size: 64px;
         }
+        .book-cover-gallery {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            touch-action: pan-y;
+            transition: transform 220ms ease;
+        }
+        .book-cover-slide {
+            min-width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--surface-alt);
+            font-size: 64px;
+        }
         .book-cover img {
             width: 100%;
             height: 100%;
-            object-fit: contain;  /* ← Изображение полностью помещается, не обрезается */
+            object-fit: contain;
             object-position: center;
+            pointer-events: none;
+        }
+        .book-cover-pagination {
+            position: absolute;
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 4px;
+            pointer-events: none;
+        }
+        .book-cover-pagination-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.55);
+        }
+        .book-cover-pagination-dot.active {
+            width: 14px;
+            border-radius: 4px;
+            background: #fff;
         }
         .book-cover .photo-count {
             position: absolute; bottom: 8px; right: 8px;
             background: rgba(0,0,0,0.7); color: white;
             padding: 4px 8px; border-radius: 12px;
             font-size: 11px; font-weight: 600;
+            pointer-events: none;
         }
 
         .book-info { padding: 14px; }
@@ -1079,6 +1117,10 @@
         let viewMode = 'all';
         let currentSort = 'default';
 
+        const catalogGalleryIndexes = new Map();
+        const catalogSwipeStarts = new Map();
+        const catalogSwipeSuppressions = new Set();
+
         let currentModalBook = null;
         let currentImageIndex = 0;
         let touchStartX = 0;
@@ -1462,16 +1504,69 @@
             const regex = new RegExp(`(${safeQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
             return safeText.replace(regex, '<mark style="background: #ffeb3b; padding: 0 2px; border-radius: 3px; color: #000;">$1</mark>');
         }
-        function renderBookCover(book) {
-            const cover = book.emoji || '📚';
+        function renderCatalogCover(book) {
+            const gallery = getBookGallery(book);
+            const currentIndex = Math.min(catalogGalleryIndexes.get(book.id) || 0, gallery.length - 1);
+            const slides = gallery.map((image, index) => {
+                const label = index === 0 ? 'Обложка книги' : `Страница ${index}`;
+                if (typeof image === 'string' && image.startsWith('http')) {
+                    return `<div class="book-cover-slide"><img src="${escapeHtml(image)}" alt="${label}: ${escapeHtml(book.title)}" loading="lazy" onerror="this.parentElement.innerHTML='📚'"></div>`;
+                }
+                return `<div class="book-cover-slide" role="img" aria-label="${label}: ${escapeHtml(book.title)}">${escapeHtml(String(image))}</div>`;
+            }).join('');
+            const pagination = gallery.length > 1
+                ? `<div class="book-cover-pagination" aria-hidden="true">${gallery.map((_, index) => `<span class="book-cover-pagination-dot ${index === currentIndex ? 'active' : ''}"></span>`).join('')}</div>`
+                : '';
+            const count = gallery.length > 1
+                ? `<div class="photo-count">${currentIndex + 1}/${gallery.length}</div>`
+                : '';
+            return `<div class="book-cover-gallery" data-book-id="${book.id}" style="transform: translateX(-${currentIndex * 100}%);">${slides}</div>${pagination}${count}`;
+        }
 
-            // Если обложка — URL, показываем как изображение
-            if (cover.startsWith('http')) {
-                return `<img src="${cover}" alt="${escapeHtml(book.title)}" loading="lazy" onerror="this.outerHTML='📚'">`;
+        function startCatalogSwipe(bookId, event) {
+            if (event.isPrimary === false) return;
+            catalogSwipeStarts.set(bookId, {
+                x: event.clientX,
+                y: event.clientY,
+            });
+        }
+
+        function endCatalogSwipe(bookId, event) {
+            const start = catalogSwipeStarts.get(bookId);
+            catalogSwipeStarts.delete(bookId);
+            if (!start || event.isPrimary === false) return;
+            const horizontal = event.clientX - start.x;
+            const vertical = event.clientY - start.y;
+            if (Math.abs(horizontal) < 42 || Math.abs(horizontal) <= Math.abs(vertical)) return;
+
+            const book = books.find(candidate => candidate.id === bookId);
+            const gallery = book ? getBookGallery(book) : [];
+            if (gallery.length <= 1) return;
+            const previous = catalogGalleryIndexes.get(bookId) || 0;
+            const next = horizontal < 0
+                ? (previous + 1) % gallery.length
+                : (previous - 1 + gallery.length) % gallery.length;
+            catalogGalleryIndexes.set(bookId, next);
+            catalogSwipeSuppressions.add(bookId);
+            renderCatalogGallery(bookId);
+            tg.HapticFeedback.impactOccurred('light');
+            window.setTimeout(() => catalogSwipeSuppressions.delete(bookId), 0);
+        }
+
+        function renderCatalogGallery(bookId) {
+            const book = books.find(candidate => candidate.id === bookId);
+            const cover = document.querySelector(`.book-cover[data-book-id="${bookId}"]`);
+            if (!book || !cover) return;
+            cover.innerHTML = renderCatalogCover(book);
+        }
+
+        function openCatalogBook(bookId, event) {
+            if (catalogSwipeSuppressions.has(bookId)) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
             }
-
-            // Иначе — это эмодзи
-            return cover;
+            openBookModal(bookId);
         }
 
         function renderBooks(filteredBooks) {
@@ -1497,11 +1592,11 @@
                 const categoryHtml = searchQuery ? highlightText(categoryDisplay, searchQuery) : safeCategory;
 
                 return `
-                    <div class="book-card ${inCartClass}" data-id="${book.id}" role="button" tabindex="0" aria-label="Открыть книгу: ${safeTitle}" onclick="openBookModal(${book.id})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openBookModal(${book.id}); }">
+                    <div class="book-card ${inCartClass}" data-id="${book.id}" role="button" tabindex="0" aria-label="Открыть книгу: ${safeTitle}" onclick="openCatalogBook(${book.id}, event)" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openBookModal(${book.id}); }">
                         <button type="button" class="heart-btn ${inWishlistClass}" aria-label="${wishlist.includes(book.id) ? 'Убрать из избранного' : 'Добавить в избранное'}: ${safeTitle}" aria-pressed="${wishlist.includes(book.id)}" onclick="toggleWishlistItem(${book.id}, event)">${heartIcon}</button>
                         <button type="button" class="share-btn-card" aria-label="Поделиться книгой: ${safeTitle}" onclick="shareBook(${book.id}, event)" title="Поделиться">📤</button>
                         <div class="check-mark" aria-hidden="true">✓</div>
-                        <div class="book-cover">${renderBookCover(book)}</div>
+                        <div class="book-cover" data-book-id="${book.id}" onpointerdown="startCatalogSwipe(${book.id}, event)" onpointerup="endCatalogSwipe(${book.id}, event)" onpointercancel="catalogSwipeStarts.delete(${book.id})">${renderCatalogCover(book)}</div>
                         <div class="book-info">
                             <div class="book-title">${titleHtml}</div>
                             <div class="book-category">${categoryHtml}</div>

@@ -191,7 +191,7 @@ def _create_tables(connection: sqlite3.Connection) -> None:
 
 def _cleanup_expired_support_messages(connection: sqlite3.Connection) -> None:
     connection.execute(
-        "DELETE FROM support_messages WHERE created_at < datetime('now', '-90 days')"
+        "DELETE FROM support_messages WHERE date(created_at) < date('now', '-90 days')"
     )
 
 
