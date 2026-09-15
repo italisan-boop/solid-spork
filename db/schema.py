@@ -8,7 +8,7 @@ from config import settings
 from content_defaults import TEMPLATES
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _CONNECTION_TIMEOUT_SECONDS = 10
 _INITIALIZATION_LOCK = threading.Lock()
 
@@ -61,6 +61,14 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             user_name TEXT NOT NULL DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             is_support_active INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('user', 'admin')),
+            sender_name TEXT NOT NULL DEFAULT '',
+            text TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,9 +181,17 @@ def _create_tables(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_order_items_book_id
         ON order_items (book_id, order_id);
+        CREATE INDEX IF NOT EXISTS idx_support_messages_user_id_id
+        ON support_messages (user_id, id);
         CREATE INDEX IF NOT EXISTS idx_yookassa_payments_order_id
         ON yookassa_payments (order_id);
         """
+    )
+
+
+def _cleanup_expired_support_messages(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "DELETE FROM support_messages WHERE created_at < datetime('now', '-90 days')"
     )
 
 
@@ -313,6 +329,7 @@ def initialize_database(path: str | Path | None = None) -> None:
             connection.execute("BEGIN IMMEDIATE")
             _create_tables(connection)
             _migrate_columns(connection)
+            _cleanup_expired_support_messages(connection)
             _seed_categories(connection)
             _backfill_books(connection)
             _seed_books(connection)

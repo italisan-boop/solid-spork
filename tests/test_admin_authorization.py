@@ -394,6 +394,7 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         message.reply_to_message = None
         with (
             patch("handlers.user.db.get_message_template", new_callable=AsyncMock, side_effect=["Header", "Follow up"]),
+            patch("handlers.user.db.append_support_message", new_callable=AsyncMock),
             patch("handlers.user.set_support_mode", new_callable=AsyncMock),
         ):
             ok, _ = await _send_admin_reply(message, 44, "reply")

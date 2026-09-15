@@ -3,10 +3,12 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from handlers.admin_books import (
+    _build_books_list_view,
     confirm_archive_selection,
     confirm_purge_code,
     issue_purge_code,
     render_archive_list,
+    render_books_list_for_message,
     start_archive_selection,
     toggle_archive_selection,
 )
@@ -68,7 +70,49 @@ class AdminBookDeletionHandlerTests(unittest.IsolatedAsyncioTestCase):
         state.update_data.assert_awaited_once_with(book_selection_mode=None, selected_book_ids=[])
         show_list.assert_awaited_once_with(callback, state, page=1)
 
-    async def test_archive_renders_individual_purge_only_for_unreferenced_books(self):
+    async def test_books_actions_are_visible_before_book_rows_and_titles_are_safe(self):
+        books = [
+            {
+                "id": index,
+                "title": "<Очень длинное название & книги>" * 4,
+                "price": 100,
+                "category_emoji": "📖",
+            }
+            for index in range(1, 11)
+        ]
+        state = self.state({"sort_by": "default", "search_query": "", "current_page": 0})
+        with (
+            patch("handlers.admin_books.get_books_count", new_callable=AsyncMock, return_value=10),
+            patch("handlers.admin_books.get_all_books_paginated", new_callable=AsyncMock, return_value=books),
+        ):
+            text, markup, page = await _build_books_list_view(state, 0)
+
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        book_label = next(label for label in labels if label.startswith("📝 "))
+        self.assertEqual(0, page)
+        self.assertLess(labels.index("➕ Добавить книгу"), labels.index(book_label))
+        self.assertLess(labels.index("☑️ Выбрать несколько для архива"), labels.index(book_label))
+        self.assertIn("&lt;Очень длинное название &amp; книги&gt;", text)
+        self.assertIn("admin_add_book", callbacks)
+        self.assertIn("admin_books_archive_select", callbacks)
+
+    async def test_search_message_renderer_uses_shared_books_view(self):
+        state = self.state({"sort_by": "default", "search_query": "needle", "current_page": 0})
+        message = self.message("needle")
+        with (
+            patch("handlers.admin_books.get_books_count", new_callable=AsyncMock, return_value=0),
+            patch("handlers.admin_books.get_all_books_paginated", new_callable=AsyncMock, return_value=[]),
+        ):
+            await render_books_list_for_message(message, state)
+
+        self.assertIn("По этому запросу ничего не найдено", message.answer.await_args.args[0])
+        self.assertIn(
+            "admin_add_book",
+            [button.callback_data for row in message.answer.await_args.kwargs["reply_markup"].inline_keyboard for button in row],
+        )
+
+
         state = self.state({"archive_page": 0, "book_selection_mode": None})
         callback = self.callback("admin_books_archive")
         books = [

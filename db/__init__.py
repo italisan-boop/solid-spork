@@ -65,6 +65,15 @@ from db.users import (
     set_support_active,
     is_support_active,
     get_all_support_active_user_ids,
+    clear_support_active_users,
+)
+from db.support_history import (
+    append_support_message,
+    get_support_messages,
+    get_support_message_count,
+    get_support_dialogs,
+    get_support_dialog_count,
+    clear_support_history,
 )
 from db.books import (
     add_book,

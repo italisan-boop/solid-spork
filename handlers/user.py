@@ -27,12 +27,9 @@ logger = setup_logger(__name__)
 # обнуляется — это сознательно: никто не окажется «вечно залоченным».
 support_claims: dict[int, int] = {}
 
-# История переписки с пользователями поддержки: user_id → список сообщений
-# (по одному на каждое сообщение пользователя и на каждый ответ админа).
-# Хранит до HISTORY_LIMIT последних сообщений, чтобы админ мог открыть контекст.
-# Живёт в памяти процесса (как support_claims) — при рестарте обнуляется; в БД не
-# пишем намеренно: история не нужна после рестарта, а постоянный лог
-# диалогов — это уже отдельная фича.
+# Краткий runtime-кэш истории поддержки: user_id → последние сообщения.
+# Постоянный источник истории — таблица support_messages; кэш нужен только
+# для текущего процесса и live-уведомлений.
 HISTORY_LIMIT = 50
 support_history: dict[int, list[dict]] = {}
 
@@ -163,11 +160,9 @@ async def _rewrite_ticket_notices(user_id: int, bot: Bot, status_text: str) -> N
             )
 
 
-def _append_history(user_id: int, role: str, name: str, text: str) -> None:
-    """Дописать сообщение в историю диалога и подрезать до HISTORY_LIMIT.
-
-    role: "user" (сообщение от пользователя) или "admin" (ответ поддержки).
-    """
+async def _append_history(user_id: int, role: str, name: str, text: str) -> None:
+    """Сохранить сообщение поддержки в БД и кратком runtime-кэше."""
+    await db.append_support_message(user_id, role, name, text)
     support_history.setdefault(user_id, []).append({
         "role": role,
         "name": name,
@@ -422,14 +417,19 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         if err:
             await message.answer(err)
             return
-        # Пишем в историю ДО отправки админам — даже если рассылка упадёт,
-        # сообщение пользователя в логе останется.
-        _append_history(
-            user_id,
-            role="user",
-            name=message.from_user.full_name or str(user_id),
-            text=message.text,
-        )
+        # Сохраняем историю до рассылки, чтобы доставленный в поддержку текст
+        # не потерялся при перезапуске процесса.
+        try:
+            await _append_history(
+                user_id,
+                role="user",
+                name=message.from_user.full_name or str(user_id),
+                text=message.text,
+            )
+        except Exception:
+            logger.exception("Не удалось сохранить сообщение поддержки для user_id=%s", user_id)
+            await message.answer("❌ Не удалось передать сообщение в поддержку. Попробуйте ещё раз.")
+            return
         # Запоминаем сообщение для эскалации: если админ не ответит в течение
         # ESCALATION_TIMEOUT — поллер продублирует текст всем админам.
         _track_support_message(
@@ -1314,12 +1314,16 @@ async def _send_admin_reply(
     # поддержки…» и трейлера «Можете ответить прямо здесь…»), чтобы
     # админу было удобно читать историю.
     history_text = reply_text if is_template else (body or "Без текста")
-    _append_history(
-        user_id,
-        role="admin",
-        name=admin_name,
-        text=history_text,
-    )
+    try:
+        await _append_history(
+            user_id,
+            role="admin",
+            name=admin_name,
+            text=history_text,
+        )
+    except Exception:
+        logger.exception("Не удалось сохранить ответ поддержки для user_id=%s", user_id)
+        return False, "❌ Не удалось сохранить ответ. Попробуйте ещё раз."
     try:
         await message.bot.send_message(user_id, user_message, parse_mode="HTML")
     except TelegramForbiddenError:
@@ -1449,33 +1453,56 @@ def _release_ticket(user_id: int) -> str:
     )
 
 
-def _build_history_text(user_id: int) -> str:
-    """Сформировать текст истории диалога (общая логика для команды и кнопки)."""
-    entries = support_history.get(user_id) or []
+SUPPORT_HISTORY_PAGE_SIZE = 8
+SUPPORT_HISTORY_MESSAGE_LIMIT = 280
+SUPPORT_HISTORY_NAME_LIMIT = 64
+
+
+def _short_support_text(value: str, limit: int) -> str:
+    value = value or "—"
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+async def _build_history_text(user_id: int, page: int = 0) -> tuple[str, int, int, int]:
+    """Сформировать постраничный transcript из постоянной истории поддержки."""
+    total = await db.get_support_message_count(user_id)
+    total_pages = max(1, (total + SUPPORT_HISTORY_PAGE_SIZE - 1) // SUPPORT_HISTORY_PAGE_SIZE)
+    page = min(max(page, 0), total_pages - 1)
+    entries = await db.get_support_messages(
+        user_id,
+        limit=SUPPORT_HISTORY_PAGE_SIZE,
+        offset=page * SUPPORT_HISTORY_PAGE_SIZE,
+    )
     if not entries:
         return (
-            f"ℹ️ История диалога с <code>{user_id}</code> пуста "
-            f"(либо диалога ещё не было, либо процесс был перезапущен)."
+            f"ℹ️ История диалога с <code>{user_id}</code> пока пуста.",
+            total,
+            page,
+            total_pages,
         )
 
-    last = entries[-20:]
     header = (
-        f"🕘 <b>История диалога с {user_id}</b> "
-        f"(показаны последние {len(last)} из {len(entries)}):\n"
+        f"🕘 <b>История диалога с {user_id}</b>\n"
+        f"Сообщения {page * SUPPORT_HISTORY_PAGE_SIZE + 1}–"
+        f"{page * SUPPORT_HISTORY_PAGE_SIZE + len(entries)} из {total} "
+        f"• страница {page + 1}/{total_pages}"
     )
     lines = [header]
-    for e in last:
-        ts = time.strftime("%H:%M:%S", time.localtime(e["ts"]))
-        role = "👤 Юзер" if e["role"] == "user" else "👮 Админ"
-        # Имя и текст экранируем, чтобы HTML в сообщении юзера не ломал карточку.
-        raw_name = e["name"] or "—"
-        safe_name = html.escape(raw_name, quote=False)
-        raw_text = e["text"] if len(e["text"]) <= 200 else e["text"][:200] + "…"
-        safe_text = html.escape(raw_text, quote=False)
-        lines.append(
-            f"<i>{ts}</i> {role} <b>{safe_name}</b>:\n<code>{safe_text}</code>"
+    for entry in entries:
+        role = "👤 Пользователь" if entry["role"] == "user" else "👮 Администратор"
+        safe_name = html.escape(
+            _short_support_text(entry["sender_name"], SUPPORT_HISTORY_NAME_LIMIT),
+            quote=False,
         )
-    return "\n\n".join(lines)
+        safe_text = html.escape(
+            _short_support_text(entry["text"], SUPPORT_HISTORY_MESSAGE_LIMIT),
+            quote=False,
+        )
+        lines.append(
+            f"<i>{format_local_time(entry['created_at'])}</i> {role} "
+            f"<b>{safe_name}</b>:\n<code>{safe_text}</code>"
+        )
+    return "\n\n".join(lines), total, page, total_pages
 
 
 async def support_escalation_loop(bot: Bot):

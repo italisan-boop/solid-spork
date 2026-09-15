@@ -51,14 +51,18 @@ class DropCacheSmokeTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("handlers.admin_commands.is_admin", return_value=True),
             patch("handlers.admin_commands.consume_otp", return_value=True) as consume_otp,
+            patch("handlers.admin_commands.db.clear_support_history", new_callable=AsyncMock) as clear_history,
+            patch("handlers.admin_commands.db.clear_support_active_users", new_callable=AsyncMock) as clear_active,
         ):
             await submit_drop_cache_code(confirmation_message, confirmation_state)
 
         consume_otp.assert_called_once_with(admin_id, ACTION_DROP_CACHE, "654321")
+        clear_history.assert_awaited_once()
+        clear_active.assert_awaited_once()
         self.assertEqual({}, support_claims)
         self.assertEqual(set(), settings.support_pending_users)
         confirmation_state.clear.assert_awaited_once()
-        self.assertIn("Кэш поддержки сброшен", confirmation_message.answer.await_args.args[0])
+        self.assertIn("Кэш и история поддержки сброшены", confirmation_message.answer.await_args.args[0])
 
 
 if __name__ == "__main__":

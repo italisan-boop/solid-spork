@@ -60,6 +60,7 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "user_bonuses",
                 "payment_settings",
                 "stars_settings",
+                "support_messages",
                 "yookassa_payments",
                 "message_templates",
                 "fsm_records",

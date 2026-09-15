@@ -2,7 +2,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from handlers.admin_support import _build_support_menu_markup, _support_reply_markup
+from handlers.admin_support import (
+    _build_support_menu_markup,
+    _support_reply_markup,
+    cb_support_dialog_history,
+    cb_support_dialogs,
+)
 from handlers.user import (
     _rewrite_ticket_notices,
     _ticket_action_markup,
@@ -42,6 +47,9 @@ class SupportKeyboardTests(unittest.TestCase):
     def test_support_menu_has_admin_back_button_even_without_tickets(self):
         self.assertIn("admin_menu", callbacks(_build_support_menu_markup([])))
 
+    def test_support_menu_exposes_all_dialogs_without_active_tickets(self):
+        self.assertIn("support_dialogs:0", callbacks(_build_support_menu_markup([])))
+
     def test_claim_button_changes_to_release_and_back(self):
         self.assertIn("🔒 Взять в работу", labels(_ticket_action_markup(42)))
         support_claims[42] = 7
@@ -51,11 +59,52 @@ class SupportKeyboardTests(unittest.TestCase):
 
 
 class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
+    def callback(self, data, user_id=7):
+        return SimpleNamespace(
+            data=data,
+            from_user=SimpleNamespace(id=user_id),
+            message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
+            answer=AsyncMock(),
+        )
+
     async def asyncTearDown(self):
         support_claims.clear()
         support_forward_msgs.clear()
 
-    async def test_claimed_notice_keeps_reply_actions(self):
+    async def test_all_dialogs_are_history_only(self):
+        callback = self.callback("support_dialogs:0")
+        dialogs = [{
+            "user_id": 42,
+            "user_name": "Покупатель",
+            "last_role": "user",
+            "last_text": "Нужна помощь",
+            "last_created_at": "2026-09-15 10:00:00",
+        }]
+        with (
+            patch("handlers.admin_support.is_admin", return_value=True),
+            patch("handlers.admin_support.db.get_support_dialog_count", new_callable=AsyncMock, return_value=1),
+            patch("handlers.admin_support.db.get_support_dialogs", new_callable=AsyncMock, return_value=dialogs),
+        ):
+            await cb_support_dialogs(callback)
+
+        markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        values = callbacks(markup)
+        self.assertIn("support_dialog_history:42:0:0", values)
+        self.assertFalse(any(value.startswith("support_reply:") for value in values))
+        self.assertFalse(any(value.startswith("support_claim:") for value in values))
+
+    async def test_dialog_history_rejects_outsider_before_database_read(self):
+        callback = self.callback("support_dialog_history:42:0:0", user_id=999)
+        with (
+            patch("handlers.admin_support.is_admin", return_value=False),
+            patch("handlers.admin_support._build_history_text", new_callable=AsyncMock) as history,
+        ):
+            await cb_support_dialog_history(callback)
+
+        history.assert_not_awaited()
+        callback.answer.assert_awaited_once_with("❌ Нет прав", show_alert=True)
+
+
         support_claims[42] = 7
         support_forward_msgs[42] = [(100, 200)]
         bot = SimpleNamespace(edit_message_text=AsyncMock())

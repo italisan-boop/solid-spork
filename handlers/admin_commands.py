@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
 from config import settings
+import db
 from states import CriticalActionState
 from utils.otp_confirm import (
     issue_otp,
@@ -40,10 +41,11 @@ async def _start_drop_cache_flow(admin_id: int, state: FSMContext) -> str:
     await state.set_state(CriticalActionState.waiting_for_code)
     await state.update_data(action=ACTION_DROP_CACHE)
     return (
-        "🗑 <b>Сброс кэша поддержки</b>\n\n"
-        "Будут сброшены:\n"
+        "🗑 <b>Сброс кэша и истории поддержки</b>\n\n"
+        "Будут удалены:\n"
         "• закреплённые тикеты\n"
-        "• активные диалоги поддержки\n\n"
+        "• активные диалоги поддержки\n"
+        "• вся сохранённая история диалогов\n\n"
         + _CODE_TEXT.format(code=code, ttl=OTP_TTL_SECONDS)
     )
 
@@ -101,18 +103,37 @@ async def submit_drop_cache_code(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # ------- execute -------
-    # Чистим живой словарь тикетов (handlers/user.py)
-    from handlers.user import support_claims
+    from handlers.user import (
+        support_claims,
+        support_escalated,
+        support_forward_msgs,
+        support_history,
+        support_last_msg_name,
+        support_last_msg_text,
+        support_last_msg_ts,
+        support_msg_owner,
+        support_escalation_msgs,
+    )
 
+    await db.clear_support_history()
+    await db.clear_support_active_users()
     support_claims.clear()
+    support_history.clear()
+    support_last_msg_ts.clear()
+    support_last_msg_text.clear()
+    support_last_msg_name.clear()
+    support_escalated.clear()
+    support_forward_msgs.clear()
+    support_escalation_msgs.clear()
+    support_msg_owner.clear()
     settings.support_pending_users.clear()
 
     await state.clear()
     await message.answer(
-        "✅ <b>Кэш поддержки сброшен</b>\n\n"
+        "✅ <b>Кэш и история поддержки сброшены</b>\n\n"
         "• закреплённые тикеты отпущены\n"
-        "• активные диалоги сброшены",
+        "• активные диалоги сброшены\n"
+        "• сохранённая история удалена",
         parse_mode="HTML",
     )
 

@@ -25,6 +25,23 @@
             --success: #1f7a3a;
             --radius: 10px;
             --shadow: 0 1px 2px rgba(0,0,0,0.04);
+            --control-bg: #ffffff;
+            --control-fg: #17171a;
+            --control-border: #d9d9de;
+            --control-hover: #f3f3f5;
+            --primary-bg: #17171a;
+            --primary-fg: #ffffff;
+            --primary-hover: #303036;
+            --danger-bg: #fff0ee;
+            --danger-fg: #b42318;
+            --danger-border: #fecdc8;
+            --icon-bg: rgba(255,255,255,0.94);
+            --icon-fg: #17171a;
+            --disabled-bg: #e8e8ec;
+            --disabled-fg: #96969d;
+            --focus-ring: #2563eb;
+            --elevation-1: 0 2px 8px rgba(0,0,0,0.08);
+            --elevation-2: 0 12px 28px rgba(0,0,0,0.13);
 
             /* legacy aliases — minimalist remap so existing rules keep working */
             --card-bg: var(--surface);
@@ -57,6 +74,23 @@
             --danger: #ff6b5b;
             --success: #4cd07d;
             --shadow: 0 1px 2px rgba(0,0,0,0.5);
+            --control-bg: #242427;
+            --control-fg: #f2f2f2;
+            --control-border: #3a3a40;
+            --control-hover: #303035;
+            --primary-bg: #f2f2f2;
+            --primary-fg: #0f0f10;
+            --primary-hover: #ffffff;
+            --danger-bg: #ffb4ab;
+            --danger-fg: #3b0c09;
+            --danger-border: #ffb4ab;
+            --icon-bg: rgba(36,36,39,0.96);
+            --icon-fg: #f2f2f2;
+            --disabled-bg: #2d2d31;
+            --disabled-fg: #83838a;
+            --focus-ring: #8ab4f8;
+            --elevation-1: 0 2px 8px rgba(0,0,0,0.34);
+            --elevation-2: 0 14px 34px rgba(0,0,0,0.55);
         }
 
         body { transition: background-color 0.2s, color 0.2s; }
@@ -77,7 +111,7 @@
 
         .header {
             text-align: center;
-            padding: 20px 0 16px;
+            padding: 80px 0 16px;
             margin-bottom: 16px;
         }
         .header h1 {
@@ -328,10 +362,10 @@
 
         .modal-images {
             width: 100%;
-            height: 320px;
+            height: clamp(260px, 58vh, 520px);
             position: relative;
             overflow: hidden;
-            background: var(--accent);
+            background: var(--surface-alt);
             touch-action: pan-y;
             display: flex;
             align-items: center;
@@ -340,15 +374,24 @@
         .modal-images img {
             width: 100%;
             height: 100%;
-            object-fit: contain;  /* ← Изображение полностью помещается */
+            object-fit: contain;
             object-position: center;
         }
-        .modal-images-slider { display: flex; transition: transform 0.3s ease; height: 100%; }
-        .modal-image-slide { min-width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 120px; }
-        .modal-image-slide img { width: 100%; height: 100%; object-fit: cover; }
+        .modal-images-slider { display: flex; width: 100%; transition: transform 0.3s ease; height: 100%; }
+        .modal-image-slide {
+            min-width: 100%; height: 100%; display: flex; align-items: center;
+            justify-content: center; font-size: clamp(72px, 24vw, 140px);
+            background: var(--surface-alt);
+        }
+        .modal-image-slide img { width: 100%; height: 100%; object-fit: contain; }
         .modal-image-nav { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; }
         .modal-image-dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.5); cursor: pointer; transition: all 0.2s; }
         .modal-image-dot.active { background: white; width: 24px; border-radius: 5px; }
+        .modal-image-swipe-hint {
+            position: absolute; right: 12px; bottom: 10px; padding: 5px 8px;
+            border-radius: 999px; background: rgba(0,0,0,0.58); color: #fff;
+            font-size: 11px; pointer-events: none;
+        }
 
         .modal-body { padding: 24px; }
         .modal-title { font-size: 24px; font-weight: 700; color: var(--primary-green); margin-bottom: 8px; }
@@ -552,26 +595,11 @@
 
         @media (max-width: 480px) {
             .books-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-            .book-cover { height: 160px; }
-            .modal-images { height: 260px; }
-        }
-                /* Адаптивная высота для разных экранов */
-        @media (max-width: 480px) {
-            .book-cover {
-                height: 180px;  /* Чуть меньше на маленьких экранах */
-            }
-            .modal-images {
-                height: 280px;  /* Чуть меньше на маленьких экранах */
-            }
+            .book-cover { height: 180px; }
         }
 
         @media (min-height: 800px) {
-            .book-cover {
-                height: 240px;  /* Больше на высоких экранах */
-            }
-            .modal-images {
-                height: 380px;  /* Больше на высоких экранах */
-            }
+            .book-cover { height: 240px; }
         }
 
         /* === Дашборд админа === */
@@ -621,6 +649,164 @@
         .admin-top-qty { font-size: 13px; font-weight: 700; color: var(--text-dark); }
         .admin-top-rev { font-size: 11px; color: var(--text-light); }
         .admin-empty { font-size: 13px; color: var(--text-light); padding: 8px 0; }
+
+        /* Unified interactive control system */
+        button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
+        button:focus-visible,
+        select:focus-visible,
+        input:focus-visible,
+        .book-card:focus-visible {
+            outline: 3px solid var(--focus-ring);
+            outline-offset: 3px;
+        }
+        .header-btn,
+        .heart-btn,
+        .share-btn-card,
+        .modal-close,
+        .cart-qty-btn {
+            background: var(--icon-bg);
+            color: var(--icon-fg);
+            border: 1px solid var(--control-border);
+            box-shadow: var(--elevation-1);
+            transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+        }
+        .header-btn { border-radius: 14px; }
+        .header-btn.active,
+        .category-tab.active,
+        .book-card .check-mark,
+        .cart-summary,
+        .main-button,
+        .modal-add-btn:not(.in-cart),
+        .cart-checkout-btn,
+        .promo-apply-btn,
+        .copy-btn-small,
+        .payment-confirm-btn {
+            background: var(--primary-bg);
+            color: var(--primary-fg);
+            border-color: var(--primary-bg);
+        }
+        .header-badge,
+        .header-badge.cart-badge,
+        .main-button .badge,
+        .cart-summary .count {
+            background: var(--primary-fg);
+            color: var(--primary-bg);
+            border-color: var(--primary-bg);
+        }
+        .category-tab,
+        .cart-clear-btn,
+        .modal-add-btn.in-cart,
+        .admin-refresh,
+        .admin-export button {
+            background: var(--control-bg);
+            color: var(--control-fg);
+            border-color: var(--control-border);
+            box-shadow: none;
+            transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease;
+        }
+        .cart-remove-btn {
+            width: 36px;
+            height: 36px;
+            background: var(--danger-bg);
+            color: var(--danger-fg);
+            border: 1px solid var(--danger-border);
+            box-shadow: none;
+            transition: transform 160ms ease, background-color 160ms ease;
+        }
+        .cart-qty-btn {
+            width: 36px;
+            height: 36px;
+            font-size: 18px;
+        }
+        .heart-btn,
+        .share-btn-card {
+            width: 36px;
+            height: 36px;
+            color: var(--icon-fg);
+        }
+        .heart-btn.in-wishlist { color: var(--danger-fg); background: var(--danger-bg); border-color: var(--danger-border); }
+        .modal-close { color: var(--icon-fg); }
+        .book-card {
+            border-color: var(--border);
+            box-shadow: var(--elevation-1);
+            transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+        }
+        .book-card.in-cart { border-color: var(--primary-bg); }
+        .modal-image-dot { border: none; padding: 0; }
+        .book-card .check-mark { color: var(--primary-fg); }
+        .modal-content { box-shadow: var(--elevation-2); }
+        .search-clear { background: var(--primary-bg); color: var(--primary-fg); }
+        .payment-method-select,
+        .sort-select,
+        .search-input,
+        .price-input,
+        .promo-input {
+            border-color: var(--control-border);
+            box-shadow: none;
+        }
+        .payment-method-select { background: var(--control-bg); color: var(--control-fg); }
+        .cart-checkout-btn,
+        .cart-clear-btn,
+        .promo-apply-btn,
+        .modal-add-btn,
+        .main-button,
+        .admin-refresh,
+        .admin-export button {
+            min-height: 44px;
+            border-radius: 12px;
+            box-shadow: none;
+            transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease, opacity 160ms ease;
+        }
+        .main-button { box-shadow: 0 -8px 24px rgba(0,0,0,0.18); }
+        .cart-checkout-btn:disabled,
+        .main-button:disabled,
+        .promo-apply-btn:disabled,
+        .payment-confirm-btn:disabled {
+            background: var(--disabled-bg);
+            color: var(--disabled-fg);
+            border-color: var(--disabled-bg);
+            opacity: 1;
+        }
+        @media (hover: hover) {
+            .header-btn:hover,
+            .heart-btn:hover,
+            .share-btn-card:hover,
+            .modal-close:hover,
+            .cart-qty-btn:hover,
+            .category-tab:hover,
+            .cart-clear-btn:hover,
+            .modal-add-btn.in-cart:hover,
+            .admin-refresh:hover,
+            .admin-export button:hover {
+                background: var(--control-hover);
+                border-color: var(--control-fg);
+            }
+            .book-card:hover { transform: translateY(-3px); box-shadow: var(--elevation-2); }
+            .modal-add-btn:not(.in-cart):hover,
+            .cart-checkout-btn:hover,
+            .promo-apply-btn:hover,
+            .copy-btn-small:hover,
+            .payment-confirm-btn:hover,
+            .main-button:not(:disabled):hover { background: var(--primary-hover); }
+            .cart-remove-btn:hover { filter: brightness(1.04); }
+        }
+        .header-btn:active,
+        .heart-btn:active,
+        .share-btn-card:active,
+        .modal-close:active,
+        .cart-qty-btn:active,
+        .cart-remove-btn:active,
+        .category-tab:active,
+        .cart-clear-btn:active,
+        .modal-add-btn:active,
+        .cart-checkout-btn:active,
+        .promo-apply-btn:active,
+        .copy-btn-small:active,
+        .admin-refresh:active,
+        .admin-export button:active { transform: scale(0.96); }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+        }
     </style>
 </head>
 <body>
@@ -630,17 +816,17 @@
     </div>
 
     <div class="header-buttons">
-        <button class="header-btn" id="adminBtn" onclick="openAdminDashboard()" title="Дашборд админа" style="display: none;">
+        <button type="button" class="header-btn" id="adminBtn" onclick="openAdminDashboard()" title="Дашборд админа" aria-label="Открыть дашборд администратора" style="display: none;">
             📊
         </button>
-        <button class="header-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Сменить тему">
+        <button type="button" class="header-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Сменить тему" aria-label="Включить тёмную тему" aria-pressed="false">
             <span id="themeIcon">🌙</span>
         </button>
-        <button class="header-btn" id="wishlistBtn" onclick="toggleWishlistView()">
+        <button type="button" class="header-btn" id="wishlistBtn" onclick="toggleWishlistView()" aria-label="Показать избранное" aria-pressed="false">
             ❤️
             <span class="header-badge" id="wishlistBadge" style="display: none;">0</span>
         </button>
-        <button class="header-btn" id="cartBtn" onclick="openCartModal()">
+        <button type="button" class="header-btn" id="cartBtn" onclick="openCartModal()" aria-label="Открыть корзину">
             🛒
             <span class="header-badge cart-badge" id="cartBadge" style="display: none;">0</span>
         </button>
@@ -649,7 +835,7 @@
     <div class="search-container">
         <span class="search-icon">🔍</span>
         <input type="text" class="search-input" id="searchInput" placeholder="🔍 Поиск по названию, описанию..." autocomplete="off">
-        <button class="search-clear" id="searchClear">✕</button>
+        <button type="button" class="search-clear" id="searchClear" aria-label="Очистить поиск">✕</button>
     </div>
 
     <div class="price-filter">
@@ -688,7 +874,7 @@
     <div class="promo-section" id="promoSection" style="display: none;">
         <div class="promo-input-wrapper">
             <input type="text" class="promo-input" id="promoInput" placeholder="Введите промокод" autocomplete="off">
-            <button class="promo-apply-btn" id="promoApplyBtn">Применить</button>
+            <button type="button" class="promo-apply-btn" id="promoApplyBtn">Применить</button>
         </div>
         <div class="promo-message" id="promoMessage"></div>
         <div class="promo-discount" id="promoDiscount" style="display: none;">
@@ -696,17 +882,18 @@
         </div>
     </div>
 
-    <button class="main-button" id="mainButton" disabled>
+    <button type="button" class="main-button" id="mainButton" disabled>
         <span id="buttonText">Корзина пуста</span>
         <span class="badge" id="buttonBadge" style="display: none;">0</span>
     </button>
 
     <div class="modal-overlay" id="modalOverlay">
         <div class="modal-content">
-            <button class="modal-close" id="modalClose">&times;</button>
+            <button type="button" class="modal-close" id="modalClose" aria-label="Закрыть карточку книги">&times;</button>
             <div class="modal-images" id="modalImages">
                 <div class="modal-images-slider" id="modalImagesSlider"></div>
                 <div class="modal-image-nav" id="modalImageNav"></div>
+                <div class="modal-image-swipe-hint" id="modalImageSwipeHint" style="display: none;">← Свайпните страницы →</div>
             </div>
             <div class="modal-body">
                 <h2 class="modal-title" id="modalTitle"></h2>
@@ -714,7 +901,7 @@
                 <div class="modal-description" id="modalDescription"></div>
                 <div class="modal-price-row">
                     <div class="modal-price" id="modalPrice"></div>
-                    <button class="modal-add-btn" id="modalAddBtn">Добавить в корзину</button>
+                    <button type="button" class="modal-add-btn" id="modalAddBtn" aria-pressed="false">Добавить в корзину</button>
                 </div>
             </div>
         </div>
@@ -722,7 +909,7 @@
 
     <div class="modal-overlay" id="cartOverlay">
         <div class="modal-content">
-            <button class="modal-close" onclick="closeCartModal()">&times;</button>
+            <button type="button" class="modal-close" onclick="closeCartModal()" aria-label="Закрыть корзину">&times;</button>
             <div class="modal-body">
                 <h2 class="modal-title">🛒 Ваша корзина</h2>
                 <div class="cart-items" id="cartItems"></div>
@@ -745,13 +932,13 @@
                     </div>
                 </div>
                 <div class="cart-actions">
-                    <button class="cart-clear-btn" onclick="clearCart()">🗑️ Очистить</button>
-                    <button class="cart-checkout-btn" id="cartCheckoutBtn" onclick="checkoutFromModal()">Оформить заказ</button>
+                    <button type="button" class="cart-clear-btn" onclick="clearCart()">🗑️ Очистить</button>
+                    <button type="button" class="cart-checkout-btn" id="cartCheckoutBtn" onclick="checkoutFromModal()">Оформить заказ</button>
                 </div>
                 <div class="promo-section" id="cartPromoSection">
                     <div class="promo-input-wrapper">
                         <input type="text" class="promo-input" id="cartPromoInput" placeholder="Введите промокод" autocomplete="off">
-                        <button class="promo-apply-btn" id="cartPromoApplyBtn">Применить</button>
+                        <button type="button" class="promo-apply-btn" id="cartPromoApplyBtn">Применить</button>
                     </div>
                     <div class="promo-message" id="cartPromoMessage"></div>
                 </div>
@@ -761,13 +948,13 @@
 
     <div class="modal-overlay" id="adminOverlay">
         <div class="modal-content">
-            <button class="modal-close" onclick="closeAdminDashboard()">&times;</button>
+            <button type="button" class="modal-close" onclick="closeAdminDashboard()" aria-label="Закрыть дашборд">&times;</button>
             <div class="modal-body">
                 <h2 class="modal-title">📊 Дашборд</h2>
-                <button class="admin-refresh" onclick="loadAdminDashboard()">🔄 Обновить</button>
+                <button type="button" class="admin-refresh" onclick="loadAdminDashboard()">🔄 Обновить</button>
                 <div class="admin-export">
-                    <button onclick="exportCSV('orders')">⬇️ Заказы CSV</button>
-                    <button onclick="exportCSV('books')">⬇️ Книги CSV</button>
+                    <button type="button" onclick="exportCSV('orders')">⬇️ Заказы CSV</button>
+                    <button type="button" onclick="exportCSV('books')">⬇️ Книги CSV</button>
                 </div>
                 <div class="admin-periods" id="adminPeriods">
                     <div class="admin-card"><div class="admin-card-label">За день</div><div class="admin-card-value" id="admDayRev">—</div><div class="admin-card-sub" id="admDayOrd"></div></div>
@@ -789,7 +976,7 @@
 
     <div class="modal-overlay" id="paymentOverlay">
         <div class="modal-content">
-            <button class="modal-close" onclick="closePaymentModal()">&times;</button>
+            <button type="button" class="modal-close" onclick="closePaymentModal()" aria-label="Закрыть оплату">&times;</button>
             <div class="modal-body">
                 <h2 class="modal-title">💳 Оплата заказа</h2>
                 <div class="payment-order-info">
@@ -802,7 +989,7 @@
                         <div class="payment-details">
                             <div class="payment-label">Номер карты:</div>
                             <div class="payment-value" id="paymentCardNumber"></div>
-                            <button class="copy-btn-small" onclick="copyToClipboard('paymentCardNumber')">📋 Копировать</button>
+                            <button type="button" class="copy-btn-small" onclick="copyToClipboard('paymentCardNumber')" aria-label="Скопировать номер карты">📋 Копировать</button>
                         </div>
                     </div>
                     <div class="payment-method" id="paymentSBP" style="display: none;">
@@ -810,7 +997,7 @@
                         <div class="payment-details">
                             <div class="payment-label">Телефон:</div>
                             <div class="payment-value" id="paymentSBPPhone"></div>
-                            <button class="copy-btn-small" onclick="copyToClipboard('paymentSBPPhone')">📋 Копировать</button>
+                            <button type="button" class="copy-btn-small" onclick="copyToClipboard('paymentSBPPhone')" aria-label="Скопировать номер телефона для СБП">📋 Копировать</button>
                             <div class="payment-label" style="margin-top: 8px;">Банк:</div>
                             <div class="payment-value" id="paymentSBPBank"></div>
                         </div>
@@ -853,7 +1040,15 @@
         function applyTheme(theme) {
             document.documentElement.setAttribute('data-theme', theme);
             const icon = document.getElementById('themeIcon');
+            const toggle = document.getElementById('themeToggleBtn');
             if (icon) icon.textContent = theme === 'dark' ? '☀️' : '🌙';
+            if (toggle) {
+                toggle.setAttribute('aria-pressed', String(theme === 'dark'));
+                toggle.setAttribute(
+                    'aria-label',
+                    theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'
+                );
+            }
         }
         function initTheme() {
             const saved = localStorage.getItem(THEME_KEY);
@@ -927,22 +1122,21 @@
 
                 if (data.books && data.books.length > 0) {
                     books = data.books.map(b => {
-                        // Парсим галерею фото (images)
-                        let imgs = [];
+                        // Страницы остаются отдельными от обложки: модальное окно
+                        // всегда собирает последовательность «обложка → страницы».
+                        const pages = [];
                         if (b.images && b.images !== '[]' && b.images !== '') {
                             try {
                                 const parsed = JSON.parse(b.images);
-                                if (Array.isArray(parsed) && parsed.length > 0) imgs = parsed;
-                            } catch (e) {}
+                                if (Array.isArray(parsed)) {
+                                    pages.push(...parsed.filter(image => typeof image === 'string' && image.startsWith('http')));
+                                }
+                            } catch (error) {
+                                console.warn('Некорректная галерея книги:', b.id);
+                            }
                         }
 
-                        // Обложка (emoji) — отдельное поле, НЕ смешиваем с images
-                        let cover = b.emoji || '📚';
-
-                        // Если обложка — это URL, используем её как первое фото в галерее
-                        if (cover.startsWith('http') && !imgs.includes(cover)) {
-                            imgs = [cover, ...imgs];
-                        }
+                        const cover = b.emoji || '📚';
 
                         return {
                             id: b.id,
@@ -950,9 +1144,9 @@
                             price: b.price,
                             category: b.category,
                             category_emoji: b.category_emoji || '',
-                            emoji: cover,  // Обложка (эмодзи или URL)
+                            emoji: cover,
                             description: b.description || '',
-                            images: imgs   // Галерея фото (отдельно!)
+                            images: pages
                         };
                     });
                 } else { books = []; }
@@ -1156,8 +1350,8 @@
             const container = document.getElementById('categoriesScroll');
             const cats = getUniqueCategories();
             container.innerHTML = cats.map(cat => `
-                <button class="category-tab ${cat === activeCategory ? 'active' : ''}"
-                        data-category="${cat}" onclick="selectCategory('${cat}')">
+                <button type="button" class="category-tab ${cat === activeCategory ? 'active' : ''}"
+                        data-category="${cat}" aria-pressed="${cat === activeCategory}" onclick="selectCategory('${cat}')">
                     ${getCategoryName(cat)}
                 </button>
             `).join('');
@@ -1205,7 +1399,10 @@
 
         function toggleWishlistView() {
             viewMode = viewMode === 'all' ? 'wishlist' : 'all';
-            document.getElementById('wishlistBtn').classList.toggle('active', viewMode === 'wishlist');
+            const wishlistButton = document.getElementById('wishlistBtn');
+            const wishlistActive = viewMode === 'wishlist';
+            wishlistButton.classList.toggle('active', wishlistActive);
+            wishlistButton.setAttribute('aria-pressed', String(wishlistActive));
 
             const emptyText = document.getElementById('emptyText');
             const emptyEmoji = document.getElementById('emptyEmoji');
@@ -1259,16 +1456,18 @@
         }
 
         function highlightText(text, query) {
-            if (!query || !text) return text;
-            const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-            return text.replace(regex, '<mark style="background: #ffeb3b; padding: 0 2px; border-radius: 3px; color: #000;">$1</mark>');
+            const safeText = escapeHtml(text || '');
+            if (!query) return safeText;
+            const safeQuery = escapeHtml(query);
+            const regex = new RegExp(`(${safeQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+            return safeText.replace(regex, '<mark style="background: #ffeb3b; padding: 0 2px; border-radius: 3px; color: #000;">$1</mark>');
         }
         function renderBookCover(book) {
             const cover = book.emoji || '📚';
 
             // Если обложка — URL, показываем как изображение
             if (cover.startsWith('http')) {
-                return `<img src="${cover}" alt="${book.title}" loading="lazy" onerror="this.outerHTML='📚'">`;
+                return `<img src="${cover}" alt="${escapeHtml(book.title)}" loading="lazy" onerror="this.outerHTML='📚'">`;
             }
 
             // Иначе — это эмодзи
@@ -1292,14 +1491,16 @@
                 const heartIcon = wishlist.includes(book.id) ? '❤️' : '🤍';
                 const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
 
-                const titleHtml = searchQuery ? highlightText(book.title, searchQuery) : book.title;
-                const categoryHtml = searchQuery ? highlightText(categoryDisplay, searchQuery) : categoryDisplay;
+                const safeTitle = escapeHtml(book.title);
+                const safeCategory = escapeHtml(categoryDisplay);
+                const titleHtml = searchQuery ? highlightText(book.title, searchQuery) : safeTitle;
+                const categoryHtml = searchQuery ? highlightText(categoryDisplay, searchQuery) : safeCategory;
 
                 return `
-                    <div class="book-card ${inCartClass}" data-id="${book.id}" onclick="openBookModal(${book.id})">
-                        <button class="heart-btn ${inWishlistClass}" onclick="toggleWishlistItem(${book.id}, event)">${heartIcon}</button>
-                        <button class="share-btn-card" onclick="shareBook(${book.id}, event)" title="Поделиться">📤</button>
-                        <div class="check-mark">✓</div>
+                    <div class="book-card ${inCartClass}" data-id="${book.id}" role="button" tabindex="0" aria-label="Открыть книгу: ${safeTitle}" onclick="openBookModal(${book.id})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openBookModal(${book.id}); }">
+                        <button type="button" class="heart-btn ${inWishlistClass}" aria-label="${wishlist.includes(book.id) ? 'Убрать из избранного' : 'Добавить в избранное'}: ${safeTitle}" aria-pressed="${wishlist.includes(book.id)}" onclick="toggleWishlistItem(${book.id}, event)">${heartIcon}</button>
+                        <button type="button" class="share-btn-card" aria-label="Поделиться книгой: ${safeTitle}" onclick="shareBook(${book.id}, event)" title="Поделиться">📤</button>
+                        <div class="check-mark" aria-hidden="true">✓</div>
                         <div class="book-cover">${renderBookCover(book)}</div>
                         <div class="book-info">
                             <div class="book-title">${titleHtml}</div>
@@ -1405,6 +1606,11 @@
             const isInCart = cart.some(c => c.id === book.id);
             const addBtn = document.getElementById('modalAddBtn');
             addBtn.textContent = isInCart ? '✓ В корзине' : 'Добавить в корзину';
+            addBtn.setAttribute('aria-pressed', String(isInCart));
+            addBtn.setAttribute(
+                'aria-label',
+                isInCart ? `Убрать «${book.title}» из корзины` : `Добавить «${book.title}» в корзину`
+            );
             addBtn.classList.toggle('in-cart', isInCart);
 
             updateModalImages();
@@ -1420,66 +1626,70 @@
             tg.HapticFeedback.impactOccurred('medium');
         }
 
+        function getBookGallery(book) {
+            const cover = book.emoji || '📚';
+            const pages = Array.isArray(book.images) ? book.images : [];
+            return [
+                cover,
+                ...pages.filter(image => typeof image === 'string' && image.startsWith('http') && image !== cover)
+            ];
+        }
+
         function updateModalImages() {
             const slider = document.getElementById('modalImagesSlider');
             const nav = document.getElementById('modalImageNav');
+            const swipeHint = document.getElementById('modalImageSwipeHint');
+            const gallery = getBookGallery(currentModalBook);
+            currentImageIndex = Math.min(currentImageIndex, gallery.length - 1);
 
-            // Используем галерею фото
-            let images = currentModalBook.images || [];
-
-            // Если галерея пустая, используем обложку
-            if (images.length === 0) {
-                const cover = currentModalBook.emoji || '📚';
-                if (cover.startsWith('http')) {
-                    images = [cover];
-                } else {
-                    // Это эмодзи — показываем как текст
-                    slider.innerHTML = `<div class="modal-image-slide">${cover}</div>`;
-                    nav.style.display = 'none';
-                    return;
+            slider.innerHTML = gallery.map((image, index) => {
+                const label = index === 0 ? 'Обложка книги' : `Страница ${index}`;
+                if (typeof image === 'string' && image.startsWith('http')) {
+                    return `<div class="modal-image-slide"><img src="${escapeHtml(image)}" alt="${label}" loading="lazy" onerror="this.parentElement.innerHTML='📚'"></div>`;
                 }
-            }
+                return `<div class="modal-image-slide" role="img" aria-label="${label}">${escapeHtml(String(image))}</div>`;
+            }).join('');
+            slider.style.transform = `translateX(-${currentImageIndex * 100}%)`;
 
-            const imageUrls = images.filter(img => img && img.startsWith('http'));
-
-            if (imageUrls.length > 0) {
-                slider.innerHTML = imageUrls.map((url, index) =>
-                    `<div class="modal-image-slide"><img src="${url}" alt="Photo ${index + 1}" loading="lazy" onerror="this.parentElement.innerHTML='📚'"></div>`
-                ).join('');
-                slider.style.transform = `translateX(-${currentImageIndex * 100}%)`;
-
-                if (imageUrls.length > 1) {
-                    nav.innerHTML = imageUrls.map((_, i) =>
-                        `<div class="modal-image-dot ${i === currentImageIndex ? 'active' : ''}" onclick="goToImage(${i})"></div>`
-                    ).join('');
-                    nav.style.display = 'flex';
-                } else {
-                    nav.style.display = 'none';
-                }
+            if (gallery.length > 1) {
+                nav.innerHTML = gallery.map((_, index) => {
+                    const label = index === 0 ? 'Показать обложку' : `Показать страницу ${index}`;
+                    return `<button type="button" class="modal-image-dot ${index === currentImageIndex ? 'active' : ''}" aria-label="${label}" aria-pressed="${index === currentImageIndex}" onclick="goToImage(${index})"></button>`;
+                }).join('');
+                nav.style.display = 'flex';
+                swipeHint.style.display = 'block';
             } else {
-                const emoji = currentModalBook.emoji || '📚';
-                slider.innerHTML = `<div class="modal-image-slide">${emoji}</div>`;
                 nav.style.display = 'none';
+                swipeHint.style.display = 'none';
             }
         }
 
-        function handleTouchStart(e) { touchStartX = e.changedTouches[0].screenX; }
-        function handleTouchEnd(e) { touchEndX = e.changedTouches[0].screenX; handleSwipe(); }
+        function handleTouchStart(event) {
+            touchStartX = event.changedTouches[0].screenX;
+        }
+
+        function handleTouchEnd(event) {
+            touchEndX = event.changedTouches[0].screenX;
+            handleSwipe();
+        }
+
         function handleSwipe() {
             if (!currentModalBook) return;
-            const imageUrls = (currentModalBook.images || []).filter(img => img && img.startsWith('http'));
-            if (imageUrls.length <= 1) return;
+            const gallery = getBookGallery(currentModalBook);
+            if (gallery.length <= 1) return;
             const diff = touchStartX - touchEndX;
             if (Math.abs(diff) < 50) return;
-            if (diff > 0) currentImageIndex = (currentImageIndex + 1) % imageUrls.length;
-            else currentImageIndex = (currentImageIndex - 1 + imageUrls.length) % imageUrls.length;
+            currentImageIndex = diff > 0
+                ? (currentImageIndex + 1) % gallery.length
+                : (currentImageIndex - 1 + gallery.length) % gallery.length;
             updateModalImages();
             tg.HapticFeedback.impactOccurred('light');
         }
+
         function goToImage(index) {
             if (!currentModalBook) return;
-            const imageUrls = (currentModalBook.images || []).filter(img => img && img.startsWith('http'));
-            if (index < 0 || index >= imageUrls.length) return;
+            const gallery = getBookGallery(currentModalBook);
+            if (index < 0 || index >= gallery.length) return;
             currentImageIndex = index;
             updateModalImages();
             tg.HapticFeedback.impactOccurred('light');
@@ -1504,6 +1714,11 @@
                 const isInCart = cart.some(c => c.id === currentModalBook.id);
                 const addBtn = document.getElementById('modalAddBtn');
                 addBtn.textContent = isInCart ? '✓ В корзине' : 'Добавить в корзину';
+                addBtn.setAttribute('aria-pressed', String(isInCart));
+                addBtn.setAttribute(
+                    'aria-label',
+                    isInCart ? `Убрать «${currentModalBook.title}» из корзины` : `Добавить «${currentModalBook.title}» в корзину`
+                );
                 addBtn.classList.toggle('in-cart', isInCart);
                 applyFiltersAndRender();
             }
@@ -1597,17 +1812,18 @@
             cartItemsEl.innerHTML = cart.map(book => {
                 const qty = book.quantity || 1;
                 const itemTotal = book.price * qty;
+                const safeTitle = escapeHtml(book.title);
                 return `
                     <div class="cart-item">
                         <div class="cart-item-info">
-                            <div class="cart-item-title">${book.title}</div>
+                            <div class="cart-item-title">${safeTitle}</div>
                             <div class="cart-item-price">${book.price} ₽ × ${qty} = ${itemTotal} ₽</div>
                         </div>
                         <div class="cart-item-controls">
-                            <button class="cart-qty-btn" onclick="changeQuantity(${book.id}, -1)">−</button>
-                            <span class="cart-qty">${qty}</span>
-                            <button class="cart-qty-btn" onclick="changeQuantity(${book.id}, 1)">+</button>
-                            <button class="cart-remove-btn" onclick="removeFromCart(${book.id})">×</button>
+                            <button type="button" class="cart-qty-btn" aria-label="Уменьшить количество: ${safeTitle}" onclick="changeQuantity(${book.id}, -1)">−</button>
+                            <span class="cart-qty" aria-label="Количество: ${qty}">${qty}</span>
+                            <button type="button" class="cart-qty-btn" aria-label="Увеличить количество: ${safeTitle}" onclick="changeQuantity(${book.id}, 1)">+</button>
+                            <button type="button" class="cart-remove-btn" aria-label="Удалить из корзины: ${safeTitle}" onclick="removeFromCart(${book.id})">×</button>
                         </div>
                     </div>
                 `;

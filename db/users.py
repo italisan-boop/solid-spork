@@ -73,3 +73,10 @@ async def get_all_support_active_user_ids() -> list:
         )
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
+
+
+async def clear_support_active_users() -> None:
+    """Закрыть все активные диалоги поддержки без удаления пользователей."""
+    async with connection() as db:
+        await db.execute("UPDATE users SET is_support_active = 0 WHERE is_support_active = 1")
+        await db.commit()

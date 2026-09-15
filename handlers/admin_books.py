@@ -17,6 +17,7 @@ from utils.otp_confirm import (
     revoke_otp,
 )
 from states import EditBookState, AddBookState as BookAddState, AdminBooksState
+from html import escape
 import re
 
 logger = setup_logger(__name__)
@@ -129,6 +130,7 @@ async def start_add_book(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(BookAddState.waiting_for_title)
+    await callback.answer()
 
 
 @router.message(BookAddState.waiting_for_title)
@@ -1073,89 +1075,50 @@ async def books_menu(callback: CallbackQuery, state: FSMContext):
     await show_books_list(callback, state, page=0)
 
 
-async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int):
-    """Отображение списка книг с пагинацией, поиском и сортировкой.
+BOOK_BUTTON_TITLE_LIMIT = 48
+BOOK_TEXT_TITLE_LIMIT = 100
 
-    Текущая сортировка и поиск читаются из FSM state, чтобы пагинация
-    и кнопки сортировки/поиска работали согласованно между переходами.
-    """
+
+def _short_book_title(title: str, limit: int) -> str:
+    title = title or "Без названия"
+    return title if len(title) <= limit else title[: limit - 1] + "…"
+
+
+async def _build_books_list_view(state: FSMContext, page: int):
     data = await state.get_data()
     sort_by = data.get("sort_by", "default") or "default"
     search_query = data.get("search_query", "") or ""
     selection_mode = data.get("book_selection_mode")
     selected_book_ids = set(data.get("selected_book_ids", []))
 
-    offset = page * PAGE_SIZE
-    books = await get_all_books_paginated(
-        limit=PAGE_SIZE, offset=offset, sort_by=sort_by, search_query=search_query,
-    )
     total_books = await get_books_count(search_query=search_query)
-    total_pages = (total_books + PAGE_SIZE - 1) // PAGE_SIZE if total_books > 0 else 1
-
-    sort_label, sort_hint = _BOOKS_SORT_LABELS.get(
-        sort_by, _BOOKS_SORT_LABELS["default"]
+    total_pages = max(1, (total_books + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(max(page, 0), total_pages - 1)
+    books = await get_all_books_paginated(
+        limit=PAGE_SIZE,
+        offset=page * PAGE_SIZE,
+        sort_by=sort_by,
+        search_query=search_query,
     )
+    sort_label, _ = _BOOKS_SORT_LABELS.get(sort_by, _BOOKS_SORT_LABELS["default"])
 
     text = "📚 <b>Управление книгами</b>\n\n"
     text += f"🔀 Сортировка: {sort_label}\n"
     if search_query:
-        # Экранируем HTML в подстроке, чтобы бот не упал на «<» или «&».
-        safe_q = (
-            search_query.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
-        text += f"🔎 Поиск: <i>{safe_q}</i>\n"
-    text += f"Страница {page + 1} из {max(total_pages, 1)}\n"
+        text += f"🔎 Поиск: <i>{escape(search_query, quote=False)}</i>\n"
+    text += f"Страница {page + 1} из {total_pages}\n"
     text += f"Всего книг: {total_books}\n\n"
-
     if books:
         for book in books:
-            emoji = book.get('category_emoji') or '📖'
-            text += f"{emoji} <b>{book['title']}</b> - {book['price']} ₽\n"
+            emoji = book.get("category_emoji") or "📖"
+            title = escape(_short_book_title(book["title"], BOOK_TEXT_TITLE_LIMIT), quote=False)
+            text += f"{emoji} <b>{title}</b> — {book['price']} ₽\n"
     elif search_query:
         text += "По этому запросу ничего не найдено."
     else:
         text += "Пока нет добавленных книг."
 
     builder = InlineKeyboardBuilder()
-
-    if books:
-        for book in books:
-            if selection_mode == "archive":
-                selected = book['id'] in selected_book_ids
-                builder.button(
-                    text=f"{'☑️' if selected else '☐'} {book['title']}",
-                    callback_data=f"admin_books_archive_toggle_{book['id']}",
-                )
-            else:
-                builder.button(
-                    text=f"📝 {book['title']}",
-                    callback_data=f"admin_book_edit_{book['id']}",
-                )
-
-    # Навигация между страницами
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(("⬅️ Назад", f"admin_books_page_{page - 1}"))
-    if page < total_pages - 1:
-        nav_buttons.append(("➡️ Вперёд", f"admin_books_page_{page + 1}"))
-    for btn_text, btn_data in nav_buttons:
-        builder.button(text=btn_text, callback_data=btn_data)
-
-    # Поиск
-    builder.button(text="🔎 Поиск по названию", callback_data="admin_books_search")
-    if search_query:
-        builder.button(text="✖ Сбросить поиск", callback_data="admin_books_clear_search")
-
-    # Сортировка — все доступные варианты; текущий помечаем ✅.
-    for key, (label, _hint) in _BOOKS_SORT_LABELS.items():
-        prefix = "✅ " if key == sort_by else ""
-        builder.button(
-            text=f"{prefix}{label}",
-            callback_data=f"admin_books_sort_{key}",
-        )
-
     if selection_mode == "archive":
         builder.button(
             text=f"📥 В архив выбранные ({len(selected_book_ids)})",
@@ -1163,33 +1126,80 @@ async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int)
         )
         builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
     else:
-        builder.button(text="☑️ Выбрать несколько для архива", callback_data="admin_books_archive_select")
         builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
+        builder.button(
+            text="☑️ Выбрать несколько для архива",
+            callback_data="admin_books_archive_select",
+        )
+
+    for book in books:
+        title = _short_book_title(book["title"], BOOK_BUTTON_TITLE_LIMIT)
+        if selection_mode == "archive":
+            selected = book["id"] in selected_book_ids
+            builder.button(
+                text=f"{'☑️' if selected else '☐'} {title}",
+                callback_data=f"admin_books_archive_toggle_{book['id']}",
+            )
+        else:
+            builder.button(
+                text=f"📝 {title}", callback_data=f"admin_book_edit_{book['id']}"
+            )
+
+    nav_count = 0
+    if page > 0:
+        builder.button(text="⬅️ Назад", callback_data=f"admin_books_page_{page - 1}")
+        nav_count += 1
+    if page < total_pages - 1:
+        builder.button(text="➡️ Вперёд", callback_data=f"admin_books_page_{page + 1}")
+        nav_count += 1
+
+    builder.button(text="🔎 Поиск по названию", callback_data="admin_books_search")
+    if search_query:
+        builder.button(text="✖ Сбросить поиск", callback_data="admin_books_clear_search")
+    for key, (label, _hint) in _BOOKS_SORT_LABELS.items():
+        prefix = "✅ " if key == sort_by else ""
+        builder.button(text=f"{prefix}{label}", callback_data=f"admin_books_sort_{key}")
     builder.button(text="🗂 Архив", callback_data="admin_books_archive")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
-    # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
-    # пара на поиск/сброс, пары на сортировку (последний вариант — один), тройка снизу.
-    row_sizes: list[int] = [1] * len(books)
-    nav_count = (1 if page > 0 else 0) + (1 if page < total_pages - 1 else 0)
-    if nav_count == 2:
-        row_sizes.append(2)
-    elif nav_count == 1:
-        row_sizes.append(1)
-    row_sizes.append(2 if search_query else 1)
-    row_sizes.extend([2, 2, 1])
-    row_sizes.append(3)
-    builder.adjust(*row_sizes)
 
+    row_sizes: list[int] = [2]
+    row_sizes.extend([1] * len(books))
+    if nav_count:
+        row_sizes.append(nav_count)
+    row_sizes.append(2 if search_query else 1)
+    row_sizes.extend([2, 2, 1, 2])
+    builder.adjust(*row_sizes)
+    return text, builder.as_markup(), page
+
+
+async def show_books_list(callback: CallbackQuery, state: FSMContext, page: int):
+    """Отобразить текущую страницу управления книгами в callback-сообщении."""
+    text, markup, page = await _build_books_list_view(state, page)
+    await state.update_data(current_page=page)
     try:
         await callback.bot.edit_message_text(
             chat_id=callback.from_user.id,
             message_id=callback.message.message_id,
             text=text,
-            reply_markup=builder.as_markup(),
+            reply_markup=markup,
             parse_mode="HTML",
         )
-    except Exception as e:
-        logger.error(f"Ошибка при редактировании сообщения: {e}")
+    except TelegramBadRequest as error:
+        if "message is not modified" not in str(error):
+            await callback.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        logger.exception("Не удалось отобразить список книг")
+        await callback.message.answer(text, reply_markup=markup, parse_mode="HTML")
+
+
+async def render_books_list_for_message(message: Message, state: FSMContext):
+    """Отправить список книг после ввода поискового запроса."""
+    data = await state.get_data()
+    text, markup, page = await _build_books_list_view(
+        state, data.get("current_page", 0) or 0
+    )
+    await state.update_data(current_page=page)
+    await message.answer(text, reply_markup=markup, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("admin_books_page_"))
@@ -1332,109 +1342,6 @@ async def cancel_book_selection(callback: CallbackQuery, state: FSMContext):
     await state.update_data(book_selection_mode=None, selected_book_ids=[])
     await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
     await callback.answer("Выбор отменён")
-
-    """Рендер списка книг из message-хендлера (после ввода поиска).
-
-    По сути — show_books_list, но шлёт новое сообщение с клавиатурой
-    вместо edit_message_text, потому что у message-хендлера нет callback'а.
-    """
-    data = await state.get_data()
-    sort_by = data.get("sort_by", "default") or "default"
-    search_query = data.get("search_query", "") or ""
-    selection_mode = data.get("book_selection_mode")
-    selected_book_ids = set(data.get("selected_book_ids", []))
-    page = data.get("current_page", 0) or 0
-
-    offset = page * PAGE_SIZE
-    books = await get_all_books_paginated(
-        limit=PAGE_SIZE, offset=offset, sort_by=sort_by, search_query=search_query,
-    )
-    total_books = await get_books_count(search_query=search_query)
-    total_pages = (total_books + PAGE_SIZE - 1) // PAGE_SIZE if total_books > 0 else 1
-    sort_label, _ = _BOOKS_SORT_LABELS.get(sort_by, _BOOKS_SORT_LABELS["default"])
-
-    text = "📚 <b>Управление книгами</b>\n\n"
-    text += f"🔀 Сортировка: {sort_label}\n"
-    if search_query:
-        safe_q = (
-            search_query.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
-        text += f"🔎 Поиск: <i>{safe_q}</i>\n"
-    text += f"Страница {page + 1} из {max(total_pages, 1)}\n"
-    text += f"Всего книг: {total_books}\n\n"
-
-    if books:
-        for book in books:
-            emoji = book.get('category_emoji') or '📖'
-            text += f"{emoji} <b>{book['title']}</b> - {book['price']} ₽\n"
-    elif search_query:
-        text += "По этому запросу ничего не найдено."
-    else:
-        text += "Пока нет добавленных книг."
-
-    builder = InlineKeyboardBuilder()
-    if books:
-        for book in books:
-            if selection_mode == "archive":
-                selected = book['id'] in selected_book_ids
-                builder.button(
-                    text=f"{'☑️' if selected else '☐'} {book['title']}",
-                    callback_data=f"admin_books_archive_toggle_{book['id']}",
-                )
-            else:
-                builder.button(
-                    text=f"📝 {book['title']}",
-                    callback_data=f"admin_book_edit_{book['id']}",
-                )
-
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(("⬅️ Назад", f"admin_books_page_{page - 1}"))
-    if page < total_pages - 1:
-        nav_buttons.append(("➡️ Вперёд", f"admin_books_page_{page + 1}"))
-    for btn_text, btn_data in nav_buttons:
-        builder.button(text=btn_text, callback_data=btn_data)
-
-    builder.button(text="🔎 Поиск по названию", callback_data="admin_books_search")
-    if search_query:
-        builder.button(text="✖ Сбросить поиск", callback_data="admin_books_clear_search")
-    for key, (label, _hint) in _BOOKS_SORT_LABELS.items():
-        prefix = "✅ " if key == sort_by else ""
-        builder.button(
-            text=f"{prefix}{label}",
-            callback_data=f"admin_books_sort_{key}",
-        )
-    if selection_mode == "archive":
-        builder.button(
-            text=f"📥 В архив выбранные ({len(selected_book_ids)})",
-            callback_data="admin_books_archive_review",
-        )
-        builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
-    else:
-        builder.button(text="☑️ Выбрать несколько для архива", callback_data="admin_books_archive_select")
-        builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
-    builder.button(text="🗂 Архив", callback_data="admin_books_archive")
-    builder.button(text="🔙 В меню админа", callback_data="admin_menu")
-    # Ширины рядов: по 1 на каждую книгу (длинные названия), затем пара на навигацию,
-    # пара на поиск/сброс, пары на сортировку (последний вариант — один), тройка снизу.
-    row_sizes: list[int] = [1] * len(books)
-    nav_count = (1 if page > 0 else 0) + (1 if page < total_pages - 1 else 0)
-    if nav_count == 2:
-        row_sizes.append(2)
-    elif nav_count == 1:
-        row_sizes.append(1)
-    row_sizes.append(2 if search_query else 1)
-    row_sizes.extend([2, 2, 1])
-    row_sizes.append(3)
-    builder.adjust(*row_sizes)
-
-    await message.answer(
-        text,
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
 
 
 @router.callback_query(F.data.regexp(r"^admin_book_edit_\d+$"))

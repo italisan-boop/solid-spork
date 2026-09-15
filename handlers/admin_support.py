@@ -31,9 +31,14 @@ from handlers.user import (
     _ticket_action_markup,
 )
 from states import SupportReplyState
+from utils import format_local_time
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+SUPPORT_DIALOGS_PAGE_SIZE = 8
+SUPPORT_DIALOG_NAME_LIMIT = 32
+SUPPORT_DIALOG_PREVIEW_LIMIT = 72
 
 
 def _short_alert(status: str, limit: int = 140) -> str:
@@ -44,6 +49,43 @@ def _short_alert(status: str, limit: int = 140) -> str:
     if len(first) > limit:
         first = first[: limit - 1] + "…"
     return first
+
+
+def _short_text(value: str, limit: int) -> str:
+    value = value or "—"
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def _history_navigation_markup(
+    user_id: int,
+    page: int,
+    total_pages: int,
+    *,
+    dialogs_page: int | None = None,
+):
+    builder = InlineKeyboardBuilder()
+    if page > 0:
+        callback_data = (
+            f"support_dialog_history:{user_id}:{dialogs_page}:{page - 1}"
+            if dialogs_page is not None
+            else f"support_history_page:{user_id}:{page - 1}"
+        )
+        builder.button(text="⬅️ Новее", callback_data=callback_data)
+    if page < total_pages - 1:
+        callback_data = (
+            f"support_dialog_history:{user_id}:{dialogs_page}:{page + 1}"
+            if dialogs_page is not None
+            else f"support_history_page:{user_id}:{page + 1}"
+        )
+        builder.button(text="➡️ Старее", callback_data=callback_data)
+    back_callback = (
+        f"support_dialogs:{dialogs_page}"
+        if dialogs_page is not None
+        else f"support_ticket:{user_id}"
+    )
+    builder.button(text="◀️ Назад", callback_data=back_callback)
+    builder.adjust(2, 1)
+    return builder.as_markup()
 
 
 # ============================================================
@@ -193,15 +235,53 @@ async def deferred_admin_reply(message: Message, state: FSMContext):
 # 3. Кнопка «📜 История»
 # ============================================================
 
-@router.callback_query(F.data.startswith("support_history:"))
+@router.callback_query(F.data.regexp(r"^support_history:\d+$"))
 async def cb_support_history(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
     user_id = int(callback.data.split(":")[1])
     support_msg_owner[(callback.message.chat.id, callback.message.message_id)] = user_id
-    text = _build_history_text(user_id)
-    await callback.message.answer(text, parse_mode="HTML")
+    try:
+        text, _, page, total_pages = await _build_history_text(user_id)
+    except Exception:
+        logger.exception("Не удалось загрузить историю поддержки для user_id=%s", user_id)
+        await callback.answer("❌ Не удалось загрузить историю", show_alert=True)
+        return
+    await callback.message.answer(
+        text,
+        reply_markup=_history_navigation_markup(user_id, page, total_pages),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^support_history_page:\d+:\d+$"))
+async def cb_support_history_page(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    _, raw_user_id, raw_page = callback.data.split(":")
+    user_id = int(raw_user_id)
+    page = int(raw_page)
+    try:
+        text, _, page, total_pages = await _build_history_text(user_id, page)
+    except Exception:
+        logger.exception("Не удалось загрузить историю поддержки для user_id=%s", user_id)
+        await callback.answer("❌ Не удалось загрузить историю", show_alert=True)
+        return
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=_history_navigation_markup(user_id, page, total_pages),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            reply_markup=_history_navigation_markup(user_id, page, total_pages),
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 
@@ -273,9 +353,9 @@ def _build_support_menu_text(user_ids: list[int]) -> str:
 def _build_support_menu_markup(user_ids: list[int]):
     builder = InlineKeyboardBuilder()
     for uid in user_ids:
-        name = support_last_msg_name.get(uid, str(uid))
-        label = f"👤 {name} ({uid})"
-        builder.button(text=label, callback_data=f"support_ticket:{uid}")
+        name = _short_text(support_last_msg_name.get(uid, str(uid)), SUPPORT_DIALOG_NAME_LIMIT)
+        builder.button(text=f"👤 {name} ({uid})", callback_data=f"support_ticket:{uid}")
+    builder.button(text="📚 Все диалоги", callback_data="support_dialogs:0")
     builder.button(text="◀️ В админ-панель", callback_data="admin_menu")
     builder.adjust(1)
     return builder.as_markup()
@@ -297,9 +377,100 @@ async def cb_support_menu(callback: CallbackQuery):
     await callback.answer()
 
 
-# ============================================================
-# 6. Карточка тикета из списка (кнопка «👤 name»)
-# ============================================================
+async def show_support_dialogs(callback: CallbackQuery, page: int) -> None:
+    total = await db.get_support_dialog_count()
+    total_pages = max(1, (total + SUPPORT_DIALOGS_PAGE_SIZE - 1) // SUPPORT_DIALOGS_PAGE_SIZE)
+    page = min(max(page, 0), total_pages - 1)
+    dialogs = await db.get_support_dialogs(
+        SUPPORT_DIALOGS_PAGE_SIZE,
+        offset=page * SUPPORT_DIALOGS_PAGE_SIZE,
+    )
+
+    lines = [
+        "📚 <b>Все диалоги поддержки</b>",
+        f"Новые сверху • страница {page + 1}/{total_pages} • всего {total}",
+    ]
+    if dialogs:
+        for dialog in dialogs:
+            name = html.escape(
+                _short_text(dialog["user_name"] or str(dialog["user_id"]), SUPPORT_DIALOG_NAME_LIMIT),
+                quote=False,
+            )
+            preview = html.escape(
+                _short_text(dialog["last_text"], SUPPORT_DIALOG_PREVIEW_LIMIT),
+                quote=False,
+            )
+            role = "👤" if dialog["last_role"] == "user" else "👮"
+            lines.append(
+                f"{role} <b>{name}</b> (ID <code>{dialog['user_id']}</code>) "
+                f"• <i>{format_local_time(dialog['last_created_at'])}</i>\n"
+                f"<code>{preview}</code>"
+            )
+    else:
+        lines.append("Пока нет сохранённых диалогов. Новая история начнёт собираться после обновления.")
+
+    builder = InlineKeyboardBuilder()
+    for dialog in dialogs:
+        name = _short_text(dialog["user_name"] or str(dialog["user_id"]), SUPPORT_DIALOG_NAME_LIMIT)
+        builder.button(
+            text=f"👤 {name} ({dialog['user_id']})",
+            callback_data=f"support_dialog_history:{dialog['user_id']}:{page}:0",
+        )
+    if page > 0:
+        builder.button(text="⬅️ Новее", callback_data=f"support_dialogs:{page - 1}")
+    if page < total_pages - 1:
+        builder.button(text="➡️ Старее", callback_data=f"support_dialogs:{page + 1}")
+    builder.button(text="◀️ К поддержке", callback_data="admin_support_menu")
+    builder.adjust(*([1] * len(dialogs)), 2, 1)
+    try:
+        await callback.message.edit_text(
+            "\n\n".join(lines), reply_markup=builder.as_markup(), parse_mode="HTML"
+        )
+    except Exception:
+        await callback.message.answer(
+            "\n\n".join(lines), reply_markup=builder.as_markup(), parse_mode="HTML"
+        )
+
+
+@router.callback_query(F.data.regexp(r"^support_dialogs:\d+$"))
+async def cb_support_dialogs(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    page = int(callback.data.split(":")[1])
+    try:
+        await show_support_dialogs(callback, page)
+    except Exception:
+        logger.exception("Не удалось загрузить список диалогов поддержки")
+        await callback.answer("❌ Не удалось загрузить диалоги", show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^support_dialog_history:\d+:\d+:\d+$"))
+async def cb_support_dialog_history(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    _, raw_user_id, raw_dialogs_page, raw_history_page = callback.data.split(":")
+    user_id = int(raw_user_id)
+    dialogs_page = int(raw_dialogs_page)
+    history_page = int(raw_history_page)
+    try:
+        text, _, history_page, total_pages = await _build_history_text(user_id, history_page)
+    except Exception:
+        logger.exception("Не удалось загрузить историю поддержки для user_id=%s", user_id)
+        await callback.answer("❌ Не удалось загрузить историю", show_alert=True)
+        return
+    markup = _history_navigation_markup(
+        user_id, history_page, total_pages, dialogs_page=dialogs_page
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    await callback.answer()
+
 
 @router.callback_query(F.data.startswith("support_ticket:"))
 async def cb_support_ticket(callback: CallbackQuery):
