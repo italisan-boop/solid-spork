@@ -6,7 +6,13 @@ import uuid
 from pathlib import Path
 
 from controlplane.schema import connect
-from controlplane.tenants import Tenant, get_tenant
+from controlplane.secret_store import (
+    EnvironmentSecretStore,
+    SecretResolutionError,
+    SecretStore,
+    validate_secret_reference,
+)
+from controlplane.tenants import Tenant, get_tenant, secret_references
 
 
 _REQUIRED_SECRETS = {"telegram_bot_token", "telegram_webhook_secret"}
@@ -54,16 +60,34 @@ def _audit(
     )
 
 
-def _secret_kinds(control_database_path: str | Path, tenant_id: str) -> set[str]:
-    database = connect(control_database_path)
+def _preflight_secrets(
+    control_database_path: str | Path,
+    tenant_id: str,
+    secret_store: SecretStore,
+) -> None:
+    references = secret_references(control_database_path, tenant_id)
+    missing = sorted(_REQUIRED_SECRETS - set(references))
+    if missing:
+        raise ProvisioningError("required secret references are missing")
+    for secret_kind in _REQUIRED_SECRETS:
+        try:
+            validate_secret_reference(references[secret_kind])
+            secret_store.resolve(references[secret_kind])
+        except SecretResolutionError as exc:
+            raise ProvisioningError(f"required {secret_kind} is unavailable") from exc
+    yookassa_reference = references.get("yookassa_credentials")
+    if not yookassa_reference:
+        return
     try:
-        rows = database.execute(
-            "SELECT secret_kind FROM tenant_secret_references WHERE tenant_id = ?",
-            (tenant_id,),
-        ).fetchall()
-        return {row[0] for row in rows}
-    finally:
-        database.close()
+        validate_secret_reference(yookassa_reference)
+        credentials = json.loads(secret_store.resolve(yookassa_reference))
+    except (SecretResolutionError, json.JSONDecodeError) as exc:
+        raise ProvisioningError("configured yookassa_credentials are unavailable") from exc
+    if not isinstance(credentials, dict) or not all(
+        isinstance(credentials.get(name), str) and credentials[name]
+        for name in ("shop_id", "secret_key")
+    ):
+        raise ProvisioningError("configured yookassa_credentials are invalid")
 
 
 def provision_tenant(
@@ -71,15 +95,18 @@ def provision_tenant(
     *,
     tenant_id: str,
     actor_telegram_id: int,
+    secret_store: SecretStore | None = None,
 ) -> Tenant:
     tenant = get_tenant(control_database_path, tenant_id)
     if tenant is None:
         raise ProvisioningError("tenant not found")
     if tenant.lifecycle_state not in {"draft", "migration_failed"}:
         raise ProvisioningError("tenant is not ready for provisioning")
-    missing = sorted(_REQUIRED_SECRETS - _secret_kinds(control_database_path, tenant_id))
-    if missing:
-        raise ProvisioningError("required secret references are missing")
+    _preflight_secrets(
+        control_database_path,
+        tenant_id,
+        secret_store or EnvironmentSecretStore(),
+    )
 
     job_id = str(uuid.uuid4())
     control = connect(control_database_path)

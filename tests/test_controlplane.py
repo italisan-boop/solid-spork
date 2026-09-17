@@ -1,11 +1,13 @@
 import hashlib
 import hmac
 import json
+import os
 import sqlite3
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 from controlplane.gateway import TenantHostGateway
@@ -39,6 +41,11 @@ def signed_headers(user_id: int, token: str = TOKEN) -> dict[str, str]:
 
 class ControlPlaneApiTests(unittest.TestCase):
     def setUp(self):
+        self._environment_patch = patch.dict(os.environ, {
+            "CONTROLPLANE_TEST_TENANT_BOT_TOKEN": "234567:controlplane-tenant-token",
+            "CONTROLPLANE_TEST_TENANT_WEBHOOK_SECRET": "controlplane-tenant-webhook-secret",
+        })
+        self._environment_patch.start()
         self._temporary_directory = tempfile.TemporaryDirectory()
         root = Path(self._temporary_directory.name)
         self.settings = ControlPlaneSettings(
@@ -73,6 +80,7 @@ class ControlPlaneApiTests(unittest.TestCase):
 
     def tearDown(self):
         self._temporary_directory.cleanup()
+        self._environment_patch.stop()
 
     def create_tenant(self, *, plan="business"):
         response = self.client.post(
@@ -89,14 +97,18 @@ class ControlPlaneApiTests(unittest.TestCase):
         return response.get_json()
 
     def configure_required_secret_references(self, tenant_id: str):
-        for kind in ("telegram_bot_token", "telegram_webhook_secret"):
+        references = {
+            "telegram_bot_token": "env:CONTROLPLANE_TEST_TENANT_BOT_TOKEN",
+            "telegram_webhook_secret": "env:CONTROLPLANE_TEST_TENANT_WEBHOOK_SECRET",
+        }
+        for kind, reference in references.items():
             response = self.client.put(
                 f"/api/platform/tenants/{tenant_id}/secret-references/{kind}",
                 headers=signed_headers(PLATFORM_ADMIN_ID),
-                json={"reference": f"vault:tenants/{tenant_id}/{kind}", "version": "v1"},
+                json={"reference": reference, "version": "v1"},
             )
             self.assertEqual(200, response.status_code)
-            self.assertNotIn("vault:", response.get_data(as_text=True))
+            self.assertNotIn(reference, response.get_data(as_text=True))
 
     def record_owner_claim(self, tenant_id: str, telegram_user_id: int):
         tenant = get_tenant(self.settings.database_path, tenant_id)
@@ -150,7 +162,7 @@ class ControlPlaneApiTests(unittest.TestCase):
         response = self.client.put(
             f"/api/platform/tenants/{tenant['id']}/secret-references/telegram_bot_token",
             headers=signed_headers(PLATFORM_ADMIN_ID),
-            json={"reference": "vault:tenants/rotated/token", "version": "v2"},
+            json={"reference": "env:CONTROLPLANE_TEST_TENANT_BOT_TOKEN", "version": "v2"},
         )
         self.assertEqual(200, response.status_code)
         after = get_tenant(self.settings.database_path, tenant["id"])
@@ -302,6 +314,125 @@ class ControlPlaneApiTests(unittest.TestCase):
                 self.settings.database_path, "books.client.example"
             ).tenant_id,
         )
+
+    def test_atomic_configuration_and_secret_batch_are_safe(self):
+        tenant = self.create_tenant(plan=Plan.START)
+        before = self.client.get(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).get_json()
+        changed = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/configuration",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={
+                "plan": "business",
+                "feature_overrides": {"campaigns": True},
+                "limit_overrides": {"books": 1_234},
+            },
+        )
+        self.assertEqual(200, changed.status_code)
+        configured = changed.get_json()
+        self.assertEqual("business", configured["plan"])
+        self.assertIn("campaigns", configured["entitlements"]["features"])
+        self.assertEqual(1_234, configured["entitlements"]["limits"]["books"])
+        self.assertEqual(before["runtime_generation"] + 1, configured["runtime_generation"])
+        self.assertEqual(before["entitlement_version"] + 1, configured["entitlement_version"])
+
+        rejected = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/configuration",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={
+                "plan": "pro",
+                "feature_overrides": {"not-a-feature": True},
+                "limit_overrides": {},
+            },
+        )
+        self.assertEqual(400, rejected.status_code)
+        after_rejected = self.client.get(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).get_json()
+        self.assertEqual(configured["plan"], after_rejected["plan"])
+        self.assertEqual(configured["runtime_generation"], after_rejected["runtime_generation"])
+
+        reference_name = "env:CONTROLPLANE_TEST_TENANT_BOT_TOKEN"
+        saved = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/secret-references",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"references": {
+                "telegram_bot_token": {"reference": reference_name, "version": "v1"},
+                "telegram_webhook_secret": {
+                    "reference": "env:CONTROLPLANE_TEST_TENANT_WEBHOOK_SECRET",
+                    "version": "v1",
+                },
+            }},
+        )
+        self.assertEqual(200, saved.status_code)
+        saved_payload = saved.get_json()
+        self.assertEqual(after_rejected["runtime_generation"] + 1, saved_payload["runtime_generation"])
+        self.assertEqual(
+            ["telegram_bot_token", "telegram_webhook_secret"],
+            saved_payload["configured_secret_kinds"],
+        )
+        self.assertNotIn(reference_name, saved.get_data(as_text=True))
+
+        invalid = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/secret-references",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"references": {
+                "telegram_bot_token": {"reference": "123456:raw-token", "version": "v2"},
+                "yookassa_credentials": {"reference": "vault:unsupported", "version": "v1"},
+            }},
+        )
+        self.assertEqual(400, invalid.status_code)
+        unchanged = self.client.get(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).get_json()
+        self.assertEqual(saved_payload["runtime_generation"], unchanged["runtime_generation"])
+        self.assertEqual(saved_payload["configured_secret_kinds"], unchanged["configured_secret_kinds"])
+
+    def test_provision_preflight_keeps_draft_without_usable_references(self):
+        tenant = self.create_tenant()
+        response = self.client.post(
+            f"/api/platform/tenants/{tenant['id']}/provision",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        )
+        self.assertEqual(409, response.status_code)
+        self.assertIn("required secret references", response.get_json()["error"])
+        stored = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertEqual("draft", stored.lifecycle_state)
+        self.assertFalse(stored.database_path.exists())
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            self.assertEqual(0, connection.execute(
+                "SELECT COUNT(*) FROM tenant_provisioning_jobs WHERE tenant_id = ?",
+                (tenant["id"],),
+            ).fetchone()[0])
+        finally:
+            connection.close()
+
+    def test_provision_preflight_keeps_draft_when_reference_value_is_unavailable(self):
+        tenant = self.create_tenant()
+        saved = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/secret-references",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"references": {
+                "telegram_bot_token": {"reference": "env:CONTROLPLANE_TEST_MISSING_BOT", "version": "v1"},
+                "telegram_webhook_secret": {"reference": "env:CONTROLPLANE_TEST_TENANT_WEBHOOK_SECRET", "version": "v1"},
+            }},
+        )
+        self.assertEqual(200, saved.status_code)
+        response = self.client.post(
+            f"/api/platform/tenants/{tenant['id']}/provision",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        )
+        self.assertEqual(409, response.status_code)
+        self.assertIn("telegram_bot_token", response.get_json()["error"])
+        self.assertNotIn("CONTROLPLANE_TEST_MISSING_BOT", response.get_data(as_text=True))
+        stored = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertEqual("draft", stored.lifecycle_state)
+        self.assertFalse(stored.database_path.exists())
 
     def test_console_payload_exposes_plan_defaults_domains_and_safe_secret_statuses(self):
         tenant = self.create_tenant(plan=Plan.START)

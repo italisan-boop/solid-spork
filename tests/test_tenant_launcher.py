@@ -44,11 +44,15 @@ class TenantLauncherTests(unittest.TestCase):
             version="v1",
             actor_telegram_id=101,
         )
-        provision_tenant(
-            self.control_database,
-            tenant_id=self.tenant.id,
-            actor_telegram_id=101,
-        )
+        with patch.dict(os.environ, {
+            "TENANT_BOT_TOKEN_VALUE": "234567:tenant-token",
+            "TENANT_WEBHOOK_SECRET_VALUE": "tenant-webhook-secret",
+        }, clear=False):
+            provision_tenant(
+                self.control_database,
+                tenant_id=self.tenant.id,
+                actor_telegram_id=101,
+            )
 
     def tearDown(self):
         self._temporary_directory.cleanup()

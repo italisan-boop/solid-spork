@@ -17,12 +17,17 @@ class SecretStore(Protocol):
         ...
 
 
+def validate_secret_reference(reference: object) -> str:
+    if not isinstance(reference, str) or not _ENV_REFERENCE.fullmatch(reference):
+        raise SecretResolutionError("unsupported secret reference")
+    return reference
+
+
 class EnvironmentSecretStore:
     def resolve(self, reference: str) -> str:
-        match = _ENV_REFERENCE.fullmatch(reference)
-        if not match:
-            raise SecretResolutionError("unsupported secret reference provider")
-        value = os.getenv(match.group(1), "")
+        validated = validate_secret_reference(reference)
+        variable_name = _ENV_REFERENCE.fullmatch(validated).group(1)
+        value = os.getenv(variable_name, "")
         if not value:
             raise SecretResolutionError("secret is unavailable")
         return value

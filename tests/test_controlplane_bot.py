@@ -189,8 +189,15 @@ class PlatformConsoleHtmlTests(unittest.TestCase):
         self.assertIn("data-domain-verify", page)
         self.assertIn("data-delete-slug", page)
         self.assertIn("confirm_slug:slug", page)
-        self.assertIn("YooKassa, необязательно", page)
+        self.assertIn("optional ? ', необязательно'", page)
         self.assertIn("Тестовый магазин: порядок", page)
+        self.assertIn("/configuration", page)
+        self.assertIn("/secret-references`, {method:'PUT'", page)
+        self.assertIn("Введите хотя бы одну ссылку", page)
+        self.assertIn("function upsertTenantCard", page)
+        self.assertIn("button.is-loading", page)
+        self.assertIn("aria-busy", page)
+        self.assertNotIn("status(state, error.message, 'error'); await loadTenants();", page)
 
 
 if __name__ == "__main__":

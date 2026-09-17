@@ -13,14 +13,15 @@ h1 { margin:0; font-size:30px; } h2 { margin:0 0 14px; font-size:20px; } h3 { ma
 .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:22px; align-items:start; }
 .card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:20px; box-shadow:0 2px 10px #15241a0a; }
 form { display:grid; gap:12px; } label { display:grid; gap:5px; font-weight:650; } input, select { min-height:42px; width:100%; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--ink); padding:9px 10px; font:inherit; }
-button { min-height:42px; border:0; border-radius:9px; padding:9px 13px; background:var(--brand); color:var(--brand-ink); font:inherit; font-weight:700; cursor:pointer; } button.secondary { background:#eef3ee; color:var(--ink); } button.danger { background:var(--danger); } button:disabled { opacity:.55; cursor:default; }
-.status { min-height:22px; color:var(--muted); } .status.error { color:var(--danger); } .status.warning { color:var(--warning); }
+button { min-height:42px; border:0; border-radius:9px; padding:9px 13px; background:var(--brand); color:var(--brand-ink); font:inherit; font-weight:700; cursor:pointer; transition:transform .12s ease,filter .12s ease,opacity .12s ease; } button:not(:disabled):active { transform:translateY(1px) scale(.985); filter:brightness(.92); } button.secondary { background:#eef3ee; color:var(--ink); } button.danger { background:var(--danger); } button:disabled { opacity:.55; cursor:default; } button.is-loading { position:relative; padding-left:38px; } button.is-loading::before { content:""; position:absolute; left:14px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .7s linear infinite; } @keyframes spin { to { transform:rotate(360deg); } }
+.status { min-height:22px; color:var(--muted); font-weight:600; } .status.success { color:var(--brand); } .status.error { color:var(--danger); } .status.warning { color:var(--warning); }
 .tenants { display:grid; gap:12px; } .tenant { border:1px solid var(--line); border-radius:12px; padding:14px; display:grid; gap:12px; } .tenant-head { display:flex; justify-content:space-between; gap:12px; align-items:start; } .tenant-name { font-size:17px; font-weight:750; } .pill { border-radius:999px; background:#edf5ee; color:#23643c; padding:3px 8px; font-size:12px; font-weight:700; white-space:nowrap; } .meta { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
 .actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .features { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; } .feature { display:flex; align-items:center; gap:7px; color:var(--ink); font-size:13px; } .feature input { width:16px; min-height:16px; margin:0; }
 .secret-form { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:10px; border-top:1px solid var(--line); } .secret-form > p { grid-column:1/-1; margin:0; font-size:13px; }
 .domains { display:grid; gap:7px; } .domain { display:flex; flex-wrap:wrap; align-items:center; gap:7px; border:1px solid var(--line); border-radius:9px; padding:8px; } .domain-host { overflow-wrap:anywhere; font-size:13px; font-weight:650; } .domain-state { color:var(--muted); font-size:12px; } .domain button { min-height:32px; padding:5px 9px; font-size:12px; }
 .danger-zone { display:grid; gap:9px; padding-top:12px; border-top:1px solid #f0ccc8; } .danger-zone p { margin:0; color:var(--danger); font-size:13px; }
 .steps { margin:0; padding-left:20px; display:grid; gap:7px; color:var(--muted); }
+@media (prefers-reduced-motion:reduce) { button { transition:none; } button.is-loading::before { animation:none; } }
 @media (max-width:720px) { main { width:min(100% - 20px,1120px); margin-top:20px; } .grid { grid-template-columns:1fr; } .features, .actions, .secret-form { grid-template-columns:1fr; } }
 </style>
 </head>
@@ -28,7 +29,7 @@ button { min-height:42px; border:0; border-radius:9px; padding:9px 13px; backgro
 <main>
   <header>
     <h1>Управление магазинами</h1>
-    <p>Создавайте изолированные витрины, назначайте тарифы и включайте модули. Секреты задаются только безопасными ссылками на хранилище секретов.</p>
+    <p>Создавайте изолированные витрины, назначайте тарифы и включайте модули. Console принимает только ссылки <code>env:ИМЯ_ПЕРЕМЕННОЙ</code>, а не реальные токены и ключи.</p>
   </header>
   <div class="grid">
     <section class="card">
@@ -40,22 +41,22 @@ button { min-height:42px; border:0; border-radius:9px; padding:9px 13px; backgro
         <label>Тариф<select id="plan"><option value="start">Старт</option><option value="business">Бизнес</option><option value="pro">Pro</option></select></label>
         <button type="submit">Создать черновик</button>
       </form>
-      <div class="status" id="createStatus"></div>
+      <div class="status" id="createStatus" role="status" aria-live="polite"></div>
     </section>
     <section class="card">
       <h2>Тестовый магазин: порядок</h2>
       <ol class="steps">
         <li>Создайте отдельного Telegram test-бота и выберите тестового владельца.</li>
         <li>Создайте уникальный черновик с <code>test-*</code> поддоменом.</li>
-        <li>Сохраните Bot Token и Webhook Secret references; YooKassa и custom domain пока не нужны.</li>
+        <li>Задайте переменные окружения на сервере, затем сохраните только ссылки <code>env:...</code> на Bot Token и Webhook Secret.</li>
         <li>Подготовьте runtime, запустите worker, откройте canonical <code>/setup</code>, подтвердите владельца и активируйте магазин.</li>
-        <li>Проверьте каталог и checkout; после теста остановите worker и удалите tenant из этой панели.</li>
+        <li>YooKassa и custom domain можно добавить позже; после изменения secret reference перезапустите worker.</li>
       </ol>
     </section>
   </div>
   <section class="card" style="margin-top:18px">
     <h2>Магазины</h2>
-    <div class="status" id="listStatus">Загрузка…</div>
+    <div class="status" id="listStatus" role="status" aria-live="polite">Загрузка…</div>
     <div class="tenants" id="tenants"></div>
   </section>
 </main>
@@ -66,7 +67,6 @@ const initData = tg?.initData || '';
 if (tg) { tg.ready(); tg.expand(); }
 const features = ['catalog','orders','branding','store_settings','staff','inventory','book_import','analytics','campaigns','broadcast'];
 const labels = {catalog:'Каталог',orders:'Заказы',branding:'Бренд',store_settings:'Настройки',staff:'Сотрудники',inventory:'Склад',book_import:'Импорт',analytics:'Аналитика',campaigns:'Кампании',broadcast:'Рассылки'};
-const secretLabels = {telegram_bot_token:'Bot Token',telegram_webhook_secret:'Webhook Secret',yookassa_credentials:'YooKassa'};
 let planDefaults = {};
 let tenantRecords = new Map();
 function headers(extra = {}) { return initData ? {...extra, 'X-Telegram-Init-Data': initData} : extra; }
@@ -76,11 +76,12 @@ async function api(path, options = {}) {
   if (!response.ok) throw new Error(payload.error || 'Запрос не выполнен');
   return payload;
 }
-function status(element, text, error = false) { element.textContent = text; element.classList.toggle('error', error); }
+function status(element, text, kind = '') { element.textContent = text; element.className = `status ${kind}`.trim(); }
 function escapeHtml(value) { const node = document.createElement('span'); node.textContent = String(value); return node.innerHTML; }
 function domainState(state) { return {pending:'ожидает подтверждения',verified:'проверен',disabled:'отключён'}[state] || state; }
 function renderLimits(limits) { return Object.entries(limits).map(([name, value]) => `${escapeHtml(name)}: ${escapeHtml(value)}`).join(' · '); }
-function domainCard(tenant, domain) {
+function referenceName(tenant, suffix) { return `env:TENANT_${tenant.slug.replaceAll('-', '_').toUpperCase()}_${suffix}`; }
+function domainCard(domain) {
   const action = domain.is_canonical ? '' : domain.verification_state === 'pending'
     ? '<button type="button" class="secondary" data-domain-verify>Подтвердить DNS и routing</button>'
     : domain.verification_state === 'verified'
@@ -89,10 +90,13 @@ function domainCard(tenant, domain) {
   return `<div class="domain" data-domain-host="${escapeHtml(domain.host)}"><span class="domain-host">${escapeHtml(domain.host)}</span><span class="domain-state">${domain.is_canonical ? 'canonical' : domainState(domain.verification_state)}</span>${action}</div>`;
 }
 function secretStatus(tenant, kind) { return tenant.configured_secret_kinds.includes(kind) ? 'Настроено' : 'Не настроено'; }
+function referenceInput(tenant, kind, title, suffix, optional = false) {
+  return `<label>${title}${optional ? ', необязательно' : ''} (${secretStatus(tenant, kind)})<input data-secret="${kind}" pattern="env:[A-Z][A-Z0-9_]{1,127}" title="Только env:ИМЯ_ПЕРЕМЕННОЙ" placeholder="${referenceName(tenant, suffix)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`;
+}
 function tenantCard(tenant) {
   const featureSet = new Set(tenant.entitlements.features);
   const checks = features.map(feature => `<label class="feature"><input type="checkbox" data-feature="${feature}" ${featureSet.has(feature) ? 'checked' : ''}>${labels[feature]}</label>`).join('');
-  const domains = tenant.domains.map(domain => domainCard(tenant, domain)).join('');
+  const domains = tenant.domains.map(domainCard).join('');
   const canProvision = tenant.lifecycle_state === 'draft' || tenant.lifecycle_state === 'migration_failed';
   const canDelete = tenant.lifecycle_state !== 'provisioning';
   return `<article class="tenant" data-tenant="${tenant.id}">
@@ -103,10 +107,25 @@ function tenantCard(tenant) {
     <div class="actions"><button type="button" data-save>Сохранить тариф и модули</button><button type="button" class="secondary" data-provision ${canProvision ? '' : 'disabled'}>Подготовить runtime</button>${tenant.lifecycle_state === 'awaiting_owner_claim' ? '<button type="button" class="secondary" data-activate>Активировать магазин</button>' : ''}</div>
     <div class="domains">${domains}</div>
     <form class="secret-form" data-domain><p>Custom domain появляется как pending. Подтвердите его только после проверки DNS и Caddy routing.</p><label>Пользовательский домен<input name="host" placeholder="store.example.com"></label><button type="submit" class="secondary">Добавить домен</button></form>
-    <form class="secret-form" data-secrets><p><b>Bot Token</b> и <b>Webhook Secret</b> обязательны до provisioning. <b>YooKassa</b> необязательна и её можно добавить после запуска; после сохранения потребуется restart tenant worker.</p><label>Bot Token (${secretStatus(tenant, 'telegram_bot_token')})<input data-secret="telegram_bot_token" placeholder="env:CLIENT_BOT_TOKEN"></label><label>Webhook Secret (${secretStatus(tenant, 'telegram_webhook_secret')})<input data-secret="telegram_webhook_secret" placeholder="env:CLIENT_WEBHOOK_SECRET"></label><label>YooKassa, необязательно (${secretStatus(tenant, 'yookassa_credentials')})<input data-secret="yookassa_credentials" placeholder="env:CLIENT_YOOKASSA_SECRET"></label><button type="submit" class="secondary">Сохранить ссылки</button></form>
+    <form class="secret-form" data-secrets><p><b>Bot Token</b> и <b>Webhook Secret</b> обязательны до provisioning. Вводите только <code>env:ИМЯ_ПЕРЕМЕННОЙ</code>; реальные секреты Console не принимает. <b>YooKassa</b> необязательна.</p>${referenceInput(tenant, 'telegram_bot_token', 'Bot Token', 'BOT_TOKEN')}${referenceInput(tenant, 'telegram_webhook_secret', 'Webhook Secret', 'WEBHOOK_SECRET')}${referenceInput(tenant, 'yookassa_credentials', 'YooKassa', 'YOOKASSA_JSON', true)}<button type="submit" class="secondary">Сохранить ссылки</button></form>
     ${canDelete ? `<div class="danger-zone"><h3>Удаление магазина</h3><p>Витрина и domains отключатся сразу. База, media, backups и audit history сохранятся; остановите worker вручную. Для подтверждения введите slug <b>${escapeHtml(tenant.slug)}</b>.</p><input data-delete-slug placeholder="${escapeHtml(tenant.slug)}"><button type="button" class="danger" data-delete disabled>Удалить магазин</button></div>` : '<div class="meta">Удаление недоступно, пока provisioning выполняется.</div>'}
-    <div class="status" data-status></div>
+    <div class="status" data-status role="status" aria-live="polite"></div>
   </article>`;
+}
+function renderTenantCard(tenant) {
+  const target = document.querySelector(`[data-tenant="${CSS.escape(tenant.id)}"]`);
+  if (target) target.outerHTML = tenantCard(tenant);
+  else document.getElementById('tenants').insertAdjacentHTML('afterbegin', tenantCard(tenant));
+}
+function upsertTenantCard(tenant, message = '', kind = 'success') {
+  tenantRecords.set(tenant.id, tenant);
+  renderTenantCard(tenant);
+  if (message) status(document.querySelector(`[data-tenant="${CSS.escape(tenant.id)}"] [data-status]`), message, kind);
+}
+async function refreshTenant(id, message = '', kind = 'success') {
+  const tenant = await api(`/api/platform/tenants/${id}`);
+  upsertTenantCard(tenant, message, kind);
+  return tenant;
 }
 async function loadTenants() {
   const target = document.getElementById('tenants'); const state = document.getElementById('listStatus');
@@ -116,7 +135,7 @@ async function loadTenants() {
     tenantRecords = new Map(payload.tenants.map(tenant => [tenant.id, tenant]));
     target.innerHTML = payload.tenants.map(tenantCard).join('') || '<p>Магазинов пока нет.</p>';
     status(state, '');
-  } catch (error) { status(state, initData ? error.message : 'Откройте console через платформенного Telegram-бота.', true); }
+  } catch (error) { status(state, initData ? error.message : 'Откройте console через платформенного Telegram-бота.', 'error'); }
 }
 function applyPlan(card, plan) {
   const defaults = planDefaults[plan];
@@ -124,69 +143,78 @@ function applyPlan(card, plan) {
   const selectedFeatures = new Set(defaults.features);
   for (const input of card.querySelectorAll('[data-feature]')) input.checked = selectedFeatures.has(input.dataset.feature);
   card.querySelector('[data-limits]').innerHTML = `Лимиты: ${renderLimits(defaults.limits)}`;
-  status(card.querySelector('[data-status]'), 'Изменения не сохранены.');
+  status(card.querySelector('[data-status]'), 'Изменения не сохранены.', 'warning');
+}
+function beginOperation(button, pending) {
+  const originalText = button.textContent;
+  button.disabled = true; button.classList.add('is-loading'); button.setAttribute('aria-busy', 'true'); button.textContent = pending;
+  return () => { if (button.isConnected) { button.disabled = false; button.classList.remove('is-loading'); button.removeAttribute('aria-busy'); button.textContent = originalText; } };
 }
 async function confirmAction(text) {
   if (tg?.showConfirm) return new Promise(resolve => tg.showConfirm(text, resolve));
   return window.confirm(text);
 }
 document.getElementById('createTenantForm').addEventListener('submit', async event => {
-  event.preventDefault(); const form = event.currentTarget; const state = document.getElementById('createStatus'); status(state, 'Создаём…');
+  event.preventDefault(); const form = event.currentTarget; const button = event.submitter || form.querySelector('button[type="submit"]'); const state = document.getElementById('createStatus'); const end = beginOperation(button, 'Создаём…'); status(state, 'Создаём черновик…', 'warning');
   try {
-    await api('/api/platform/tenants', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name:document.getElementById('displayName').value.trim(),slug:document.getElementById('slug').value.trim(),owner_telegram_id:Number(document.getElementById('ownerId').value),plan:document.getElementById('plan').value})});
-    form.reset(); status(state, 'Черновик магазина создан. Сохраните две обязательные secret references и подготовьте runtime.'); await loadTenants();
-  } catch (error) { status(state, error.message, true); }
+    const tenant = await api('/api/platform/tenants', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name:document.getElementById('displayName').value.trim(),slug:document.getElementById('slug').value.trim(),owner_telegram_id:Number(document.getElementById('ownerId').value),plan:document.getElementById('plan').value})});
+    form.reset(); await loadTenants(); status(state, `Черновик ${tenant.slug} создан. Сохраните две обязательные ссылки и подготовьте runtime.`, 'success');
+  } catch (error) { status(state, error.message, 'error'); } finally { end(); }
 });
 document.getElementById('tenants').addEventListener('change', event => {
   const card = event.target.closest('[data-tenant]');
-  if (card && event.target.matches('[data-plan]')) applyPlan(card, event.target.value);
-  if (card && event.target.matches('[data-delete-slug]')) card.querySelector('[data-delete]').disabled = event.target.value.trim() !== tenantRecords.get(card.dataset.tenant).slug;
+  if (!card) return;
+  if (event.target.matches('[data-plan]')) applyPlan(card, event.target.value);
+  if (event.target.matches('[data-feature]')) status(card.querySelector('[data-status]'), 'Изменения не сохранены.', 'warning');
+  if (event.target.matches('[data-delete-slug]')) card.querySelector('[data-delete]').disabled = event.target.value.trim() !== tenantRecords.get(card.dataset.tenant).slug;
 });
 document.getElementById('tenants').addEventListener('click', async event => {
   const card = event.target.closest('[data-tenant]'); if (!card) return;
-  const id = card.dataset.tenant; const state = card.querySelector('[data-status]'); const tenant = tenantRecords.get(id);
+  const id = card.dataset.tenant; const state = card.querySelector('[data-status]'); const tenant = tenantRecords.get(id); const button = event.target.closest('button');
   try {
     if (event.target.matches('[data-save]')) {
-      const button = event.target; const plan = card.querySelector('[data-plan]').value; const defaults = new Set(planDefaults[plan].features);
+      const plan = card.querySelector('[data-plan]').value; const defaults = new Set(planDefaults[plan].features);
       const featureOverrides = Object.fromEntries([...card.querySelectorAll('[data-feature]')].filter(input => input.checked !== defaults.has(input.dataset.feature)).map(input => [input.dataset.feature, input.checked]));
-      button.disabled = true; status(state, 'Сохраняем…');
-      await api(`/api/platform/tenants/${id}/plan`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan})});
-      await api(`/api/platform/tenants/${id}/entitlements`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_overrides:featureOverrides,limit_overrides:tenant.entitlement_overrides.limit_overrides})});
-      await loadTenants();
+      const end = beginOperation(button, 'Сохраняем…'); status(state, 'Сохраняем тариф и модули…', 'warning');
+      try { const updated = await api(`/api/platform/tenants/${id}/configuration`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan,feature_overrides:featureOverrides,limit_overrides:tenant.entitlement_overrides.limit_overrides})}); upsertTenantCard(updated, 'Тариф и модули сохранены.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      return;
     }
-    if (event.target.matches('[data-provision]')) { status(state,'Подготавливаем isolated runtime…'); await api(`/api/platform/tenants/${id}/provision`, {method:'POST'}); await loadTenants(); }
-    if (event.target.matches('[data-activate]')) { status(state,'Проверяем подтверждение владельца…'); await api(`/api/platform/tenants/${id}/activate`, {method:'POST'}); await loadTenants(); }
+    if (event.target.matches('[data-provision]')) {
+      const end = beginOperation(button, 'Подготавливаем…'); status(state, 'Подготавливаем isolated runtime…', 'warning');
+      try { const updated = await api(`/api/platform/tenants/${id}/provision`, {method:'POST'}); upsertTenantCard(updated, 'Runtime подготовлен. Запустите tenant worker и откройте /setup.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      return;
+    }
+    if (event.target.matches('[data-activate]')) {
+      const end = beginOperation(button, 'Активируем…'); status(state, 'Проверяем подтверждение владельца…', 'warning');
+      try { const updated = await api(`/api/platform/tenants/${id}/activate`, {method:'POST'}); upsertTenantCard(updated, 'Магазин активирован.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      return;
+    }
     if (event.target.matches('[data-domain-verify], [data-domain-disable]')) {
-      const domain = event.target.closest('[data-domain-host]').dataset.domainHost;
-      const verified = event.target.matches('[data-domain-verify]');
+      const domain = event.target.closest('[data-domain-host]').dataset.domainHost; const verified = event.target.matches('[data-domain-verify]');
       if (!await confirmAction(verified ? `Подтвердить DNS и Caddy routing для ${domain}?` : `Отключить ${domain}?`)) return;
-      await api(`/api/platform/tenants/${id}/domains/${encodeURIComponent(domain)}/verification`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:verified ? 'verified' : 'disabled'})});
-      await loadTenants();
+      const end = beginOperation(button, verified ? 'Подтверждаем…' : 'Отключаем…'); status(state, 'Сохраняем состояние домена…', 'warning');
+      try { await api(`/api/platform/tenants/${id}/domains/${encodeURIComponent(domain)}/verification`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:verified ? 'verified' : 'disabled'})}); await refreshTenant(id, verified ? 'Домен подтверждён.' : 'Домен отключён.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      return;
     }
     if (event.target.matches('[data-delete]')) {
-      const slug = card.querySelector('[data-delete-slug]').value.trim();
-      if (slug !== tenant.slug) return;
-      event.target.disabled = true; status(state, 'Удаляем магазин и отключаем routing…');
-      await api(`/api/platform/tenants/${id}`, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_slug:slug})});
-      await loadTenants();
+      const slug = card.querySelector('[data-delete-slug]').value.trim(); if (slug !== tenant.slug) return;
+      const end = beginOperation(button, 'Удаляем…'); status(state, 'Удаляем магазин и отключаем routing…', 'warning');
+      try { await api(`/api/platform/tenants/${id}`, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_slug:slug})}); await loadTenants(); status(document.getElementById('listStatus'), 'Магазин удалён. Если worker был запущен, остановите его вручную.', 'success'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
     }
-  } catch (error) { status(state,error.message,true); await loadTenants(); }
+  } catch (error) { status(state, error.message, 'error'); }
 });
 document.getElementById('tenants').addEventListener('submit', async event => {
   if (!event.target.matches('[data-secrets], [data-domain]')) return;
-  event.preventDefault(); const form = event.target; const card = form.closest('[data-tenant]'); const state = card.querySelector('[data-status]');
-  try {
-    if (form.matches('[data-domain]')) {
-      const host = form.elements.host.value.trim();
-      await api(`/api/platform/tenants/${card.dataset.tenant}/domains`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host})});
-      form.reset(); status(state,'Домен ожидает подтверждения DNS и Caddy routing.'); await loadTenants(); return;
-    }
-    for (const input of form.querySelectorAll('[data-secret]')) {
-      if (!input.value.trim()) continue;
-      await api(`/api/platform/tenants/${card.dataset.tenant}/secret-references/${input.dataset.secret}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:input.value.trim(),version:'v1'})});
-    }
-    form.reset(); status(state,'Secret references сохранены. Если добавлена YooKassa, перезапустите tenant worker.'); await loadTenants();
-  } catch (error) { status(state,error.message,true); }
+  event.preventDefault(); const form = event.target; const card = form.closest('[data-tenant]'); const id = card.dataset.tenant; const state = card.querySelector('[data-status]'); const button = event.submitter || form.querySelector('button[type="submit"]');
+  if (form.matches('[data-domain]')) {
+    const end = beginOperation(button, 'Добавляем…'); status(state, 'Добавляем домен…', 'warning');
+    try { const host = form.elements.host.value.trim(); await api(`/api/platform/tenants/${id}/domains`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host})}); form.reset(); await refreshTenant(id, 'Домен ожидает подтверждения DNS и Caddy routing.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+    return;
+  }
+  const references = Object.fromEntries([...form.querySelectorAll('[data-secret]')].filter(input => input.value.trim()).map(input => [input.dataset.secret, {reference:input.value.trim(), version:'v1'}]));
+  if (!Object.keys(references).length) { status(state, 'Введите хотя бы одну ссылку на переменную окружения.', 'error'); return; }
+  const end = beginOperation(button, 'Сохраняем…'); status(state, 'Сохраняем secret references…', 'warning');
+  try { const updated = await api(`/api/platform/tenants/${id}/secret-references`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({references})}); upsertTenantCard(updated, 'Secret references сохранены. Если worker уже запущен, перезапустите его.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
 });
 loadTenants();
 </script>

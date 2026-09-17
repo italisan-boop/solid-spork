@@ -9,11 +9,11 @@ from pathlib import Path
 
 from controlplane.plan_policy import Entitlements, Plan, effective_entitlements, parse_plan
 from controlplane.schema import connect, resolve_path
+from controlplane.secret_store import SecretResolutionError, validate_secret_reference
 
 
 _SLUG_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?\Z")
 _HOST_PATTERN = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
-_SECRET_REFERENCE_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{1,31}:[^\s]{1,240}\Z")
 _SECRET_KINDS = {
     "telegram_bot_token",
     "telegram_webhook_secret",
@@ -242,13 +242,20 @@ def configured_secret_kinds(control_database_path: str | Path, tenant_id: str) -
     try:
         rows = database.execute(
             """
-            SELECT secret_kind FROM tenant_secret_references
+            SELECT secret_kind, reference FROM tenant_secret_references
             WHERE tenant_id = ?
             ORDER BY secret_kind ASC
             """,
             (tenant_id,),
         ).fetchall()
-        return [row[0] for row in rows]
+        configured = []
+        for secret_kind, reference in rows:
+            try:
+                validate_secret_reference(reference)
+            except SecretResolutionError:
+                continue
+            configured.append(secret_kind)
+        return configured
     finally:
         database.close()
 
@@ -533,6 +540,70 @@ def update_plan(
         database.close()
 
 
+def update_tenant_configuration(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    plan: Plan | str,
+    feature_overrides: dict[str, object],
+    limit_overrides: dict[str, object],
+    actor_telegram_id: int,
+) -> Tenant:
+    target_plan = parse_plan(plan)
+    if not isinstance(feature_overrides, dict) or not isinstance(limit_overrides, dict):
+        raise ValueError("entitlement overrides must be objects")
+    entitlements = effective_entitlements(
+        target_plan,
+        feature_overrides=feature_overrides,
+        limit_overrides=limit_overrides,
+    )
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        _ensure_mutable_tenant(database, tenant_id)
+        database.execute(
+            """
+            UPDATE platform_tenants
+            SET plan = ?, entitlement_version = entitlement_version + 1,
+                runtime_generation = runtime_generation + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (target_plan.value, tenant_id),
+        )
+        database.execute(
+            """
+            UPDATE tenant_entitlement_overrides
+            SET feature_overrides_json = ?, limit_overrides_json = ?,
+                updated_by_platform_admin_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE tenant_id = ?
+            """,
+            (
+                json.dumps(feature_overrides, separators=(",", ":")),
+                json.dumps(limit_overrides, separators=(",", ":")),
+                actor_telegram_id,
+                tenant_id,
+            ),
+        )
+        _audit(
+            database,
+            actor_telegram_id=actor_telegram_id,
+            action="tenant.configuration.updated",
+            tenant_id=tenant_id,
+            details={"plan": entitlements.plan.value},
+        )
+        row = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        database.commit()
+        return _tenant(row)
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
 def secret_references(
     control_database_path: str | Path, tenant_id: str
 ) -> dict[str, str]:
@@ -550,39 +621,50 @@ def secret_references(
         database.close()
 
 
-def set_secret_reference(
+def set_secret_references(
     control_database_path: str | Path,
     *,
     tenant_id: str,
-    secret_kind: str,
-    reference: str,
-    version: str,
+    references: dict[str, dict[str, object]],
     actor_telegram_id: int,
-) -> None:
-    if secret_kind not in _SECRET_KINDS:
-        raise ValueError("unsupported secret kind")
-    if not isinstance(reference, str) or not _SECRET_REFERENCE_PATTERN.fullmatch(reference):
-        raise ValueError("invalid secret reference")
-    if not isinstance(version, str) or len(version) > 80:
-        raise ValueError("invalid secret version")
+) -> Tenant:
+    if not references:
+        raise ValueError("at least one secret reference is required")
+    normalized: dict[str, tuple[str, str]] = {}
+    for secret_kind, configuration in references.items():
+        if secret_kind not in _SECRET_KINDS:
+            raise ValueError("unsupported secret kind")
+        if not isinstance(configuration, dict) or set(configuration) != {"reference", "version"}:
+            raise ValueError("invalid secret reference configuration")
+        reference = configuration["reference"]
+        version = configuration["version"]
+        try:
+            validated_reference = validate_secret_reference(reference)
+        except SecretResolutionError as exc:
+            raise ValueError("invalid secret reference") from exc
+        if not isinstance(version, str) or len(version) > 80:
+            raise ValueError("invalid secret version")
+        normalized[secret_kind] = (validated_reference, version)
+
     database = connect(control_database_path)
     database.row_factory = sqlite3.Row
     try:
         database.execute("BEGIN IMMEDIATE")
         _ensure_mutable_tenant(database, tenant_id)
-        database.execute(
-            """
-            INSERT INTO tenant_secret_references (
-                tenant_id, secret_kind, reference, version, configured_by_platform_admin_id
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(tenant_id, secret_kind) DO UPDATE SET
-                reference = excluded.reference,
-                version = excluded.version,
-                configured_at = CURRENT_TIMESTAMP,
-                configured_by_platform_admin_id = excluded.configured_by_platform_admin_id
-            """,
-            (tenant_id, secret_kind, reference, version, actor_telegram_id),
-        )
+        for secret_kind, (reference, version) in normalized.items():
+            database.execute(
+                """
+                INSERT INTO tenant_secret_references (
+                    tenant_id, secret_kind, reference, version, configured_by_platform_admin_id
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, secret_kind) DO UPDATE SET
+                    reference = excluded.reference,
+                    version = excluded.version,
+                    configured_at = CURRENT_TIMESTAMP,
+                    configured_by_platform_admin_id = excluded.configured_by_platform_admin_id
+                """,
+                (tenant_id, secret_kind, reference, version, actor_telegram_id),
+            )
         database.execute(
             """
             UPDATE platform_tenants
@@ -594,16 +676,37 @@ def set_secret_reference(
         _audit(
             database,
             actor_telegram_id=actor_telegram_id,
-            action="tenant.secret_reference.updated",
+            action="tenant.secret_references.updated",
             tenant_id=tenant_id,
-            details={"kind": secret_kind},
+            details={"kinds": sorted(normalized)},
         )
+        row = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
         database.commit()
+        return _tenant(row)
     except Exception:
         database.rollback()
         raise
     finally:
         database.close()
+
+
+def set_secret_reference(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    secret_kind: str,
+    reference: str,
+    version: str,
+    actor_telegram_id: int,
+) -> None:
+    set_secret_references(
+        control_database_path,
+        tenant_id=tenant_id,
+        references={secret_kind: {"reference": reference, "version": version}},
+        actor_telegram_id=actor_telegram_id,
+    )
 
 
 def activate_after_owner_claim(

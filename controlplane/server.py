@@ -21,10 +21,12 @@ from controlplane.tenants import (
     set_custom_domain_verification,
     set_lifecycle_state,
     set_secret_reference,
+    set_secret_references,
     soft_delete_tenant,
     tenant_domains,
     update_entitlements,
     update_plan,
+    update_tenant_configuration,
 )
 from telegram_auth import TelegramInitDataError, validate_telegram_init_data
 
@@ -193,6 +195,33 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
             selected, effective_tenant_entitlements(settings.database_path, selected.id)
         ))
 
+    @app.put("/api/platform/tenants/<tenant_id>/configuration")
+    @require_platform_admin
+    def tenant_configuration(tenant_id: str):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {
+            "plan", "feature_overrides", "limit_overrides"
+        }:
+            return jsonify({
+                "error": "plan, feature_overrides and limit_overrides are required"
+            }), 400
+        try:
+            selected = update_tenant_configuration(
+                settings.database_path,
+                tenant_id=tenant_id,
+                plan=payload["plan"],
+                feature_overrides=payload["feature_overrides"],
+                limit_overrides=payload["limit_overrides"],
+                actor_telegram_id=g.platform_admin_id,
+            )
+        except ValueError as error:
+            status = 404 if str(error) == "tenant not found" else 400
+            return jsonify({"error": str(error)}), status
+        return jsonify(_tenant_payload(
+            settings.database_path,
+            selected, effective_tenant_entitlements(settings.database_path, selected.id)
+        ))
+
     @app.put("/api/platform/tenants/<tenant_id>/entitlements")
     @require_platform_admin
     def tenant_entitlements(tenant_id: str):
@@ -217,6 +246,29 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
             "features": sorted(entitlements.features),
             "limits": dict(entitlements.limits),
         })
+
+    @app.put("/api/platform/tenants/<tenant_id>/secret-references")
+    @require_platform_admin
+    def secret_references_batch(tenant_id: str):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {"references"}:
+            return jsonify({"error": "references is required"}), 400
+        if not isinstance(payload["references"], dict):
+            return jsonify({"error": "references must be an object"}), 400
+        try:
+            selected = set_secret_references(
+                settings.database_path,
+                tenant_id=tenant_id,
+                references=payload["references"],
+                actor_telegram_id=g.platform_admin_id,
+            )
+        except ValueError as error:
+            status = 404 if str(error) == "tenant not found" else 400
+            return jsonify({"error": str(error)}), status
+        return jsonify(_tenant_payload(
+            settings.database_path,
+            selected, effective_tenant_entitlements(settings.database_path, selected.id)
+        ))
 
     @app.put("/api/platform/tenants/<tenant_id>/secret-references/<secret_kind>")
     @require_platform_admin

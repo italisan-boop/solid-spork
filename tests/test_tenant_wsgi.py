@@ -1,8 +1,10 @@
 import io
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from controlplane.plan_policy import Plan
 from controlplane.provisioning import provision_tenant
@@ -18,6 +20,11 @@ from runtime.tenant_wsgi import create_tenant_wsgi_app
 
 class TenantWsgiTests(unittest.TestCase):
     def setUp(self):
+        self._environment_patch = patch.dict(os.environ, {
+            "TENANT_WSGI_TEST_BOT_TOKEN": "234567:tenant-wsgi-token",
+            "TENANT_WSGI_TEST_WEBHOOK_SECRET": "tenant-wsgi-webhook-secret",
+        })
+        self._environment_patch.start()
         self._temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary_directory.name)
         self.control_database = self.root / "control.sqlite"
@@ -25,6 +32,7 @@ class TenantWsgiTests(unittest.TestCase):
 
     def tearDown(self):
         self._temporary_directory.cleanup()
+        self._environment_patch.stop()
 
     def create_tenant(self, slug: str):
         tenant = create_tenant(
@@ -38,12 +46,16 @@ class TenantWsgiTests(unittest.TestCase):
             tenant_base_domain="shops.example.test",
             actor_telegram_id=101,
         )
-        for kind in ("telegram_bot_token", "telegram_webhook_secret"):
+        references = {
+            "telegram_bot_token": "env:TENANT_WSGI_TEST_BOT_TOKEN",
+            "telegram_webhook_secret": "env:TENANT_WSGI_TEST_WEBHOOK_SECRET",
+        }
+        for kind, reference in references.items():
             set_secret_reference(
                 self.control_database,
                 tenant_id=tenant.id,
                 secret_kind=kind,
-                reference=f"vault:tenants/{tenant.id}/{kind}",
+                reference=reference,
                 version="v1",
                 actor_telegram_id=101,
             )
