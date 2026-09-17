@@ -68,6 +68,7 @@ class TenantLauncherTests(unittest.TestCase):
             "TENANT_RUNTIME_ID": self.tenant.id,
             "TENANT_BOT_TOKEN_VALUE": "234567:tenant-token",
             "TENANT_WEBHOOK_SECRET_VALUE": "tenant-webhook-secret",
+            "BOT_PROXY_URL": "http://proxy-user:proxy-password@203.0.113.10:3128",
         }
         with patch.dict(os.environ, environment, clear=False):
             tenant, context = configure_tenant_environment()
@@ -76,6 +77,7 @@ class TenantLauncherTests(unittest.TestCase):
             self.assertEqual(str(self.tenant.database_path), os.environ["DATABASE_PATH"])
             self.assertEqual("234567:tenant-token", os.environ["BOT_TOKEN"])
             self.assertEqual("tenant-webhook-secret", os.environ["WEBHOOK_SECRET"])
+            self.assertEqual("http://proxy-user:proxy-password@203.0.113.10:3128", os.environ["BOT_PROXY_URL"])
             self.assertEqual("202", os.environ["OWNER_TELEGRAM_ID"])
             self.assertEqual("https://runtime-store.shops.example.test", os.environ["WEBAPP_URL"])
 

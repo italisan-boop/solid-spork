@@ -5,9 +5,35 @@
 import os
 from dotenv import load_dotenv
 from typing import List
+from urllib.parse import urlparse
 
 # Загружаем переменные окружения
 load_dotenv()
+
+
+def _bot_proxy_url(value: str) -> str | None:
+    if not value:
+        return None
+    if any(character.isspace() for character in value):
+        raise ValueError("BOT_PROXY_URL must be an HTTP proxy URL")
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("BOT_PROXY_URL must be an HTTP proxy URL") from exc
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or not parsed.username
+        or not parsed.password
+        or port is None
+        or not 1 <= port <= 65535
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("BOT_PROXY_URL must be an HTTP proxy URL")
+    return value.rstrip("/")
 
 
 class Settings:
@@ -16,7 +42,8 @@ class Settings:
     def __init__(self):
         # Токен бота
         self.BOT_TOKEN = os.getenv("BOT_TOKEN")
-        
+        self.BOT_PROXY_URL = _bot_proxy_url(os.getenv("BOT_PROXY_URL", "").strip())
+
         # URL веб-приложения
         self.WEBAPP_URL = os.getenv("WEBAPP_URL", "https://example.com")
         

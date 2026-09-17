@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from aiohttp import web
 from aiogram import BaseMiddleware, Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import CallbackQuery, Update
 
 from config import settings
@@ -44,7 +45,14 @@ RUNTIME_STARTED_KEY = web.AppKey("runtime_started", bool)
 logger = setup_logger(__name__)
 logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
-bot = Bot(token=settings.BOT_TOKEN)
+
+def create_bot(token: str | None, proxy_url: str | None = None) -> Bot:
+    if proxy_url:
+        return Bot(token=token, session=AiohttpSession(proxy=proxy_url))
+    return Bot(token=token)
+
+
+bot = create_bot(settings.BOT_TOKEN, settings.BOT_PROXY_URL)
 storage = SQLiteStorage()
 dp = Dispatcher(storage=storage)
 

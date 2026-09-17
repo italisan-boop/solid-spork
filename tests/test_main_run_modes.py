@@ -1,14 +1,66 @@
+import os
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from config.settings import Settings
 import main
 import server
 
 
 class RunModeDispatchTests(TestCase):
+    def test_bot_proxy_url_is_optional_and_strictly_validated(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(Settings().BOT_PROXY_URL)
+
+        proxy_url = "http://proxy-user:proxy-password@203.0.113.10:3128/"
+        with patch.dict(os.environ, {"BOT_PROXY_URL": proxy_url}, clear=True):
+            self.assertEqual(
+                "http://proxy-user:proxy-password@203.0.113.10:3128",
+                Settings().BOT_PROXY_URL,
+            )
+
+        for invalid_proxy_url in (
+            "https://proxy-user:proxy-password@203.0.113.10:3128",
+            "http://203.0.113.10:3128",
+            "http://proxy-user@203.0.113.10:3128",
+            "http://proxy-user:proxy-password@203.0.113.10",
+            "http://proxy-user:proxy-password@203.0.113.10:99999",
+            "http://proxy-user:proxy-password@203.0.113.10/proxy",
+            "http://proxy-user:proxy-password@203.0.113.10:3128?mode=test",
+            "http://proxy user:proxy-password@203.0.113.10:3128",
+        ):
+            with self.subTest(proxy_url=invalid_proxy_url), patch.dict(
+                os.environ, {"BOT_PROXY_URL": invalid_proxy_url}, clear=True
+            ):
+                with self.assertRaisesRegex(ValueError, "BOT_PROXY_URL"):
+                    Settings()
+
+    def test_create_bot_uses_proxy_only_when_configured(self):
+        proxy_url = "http://proxy-user:proxy-password@203.0.113.10:3128"
+        proxied_session = object()
+        proxied_bot = object()
+        with (
+            patch("main.AiohttpSession", return_value=proxied_session) as session_factory,
+            patch("main.Bot", return_value=proxied_bot) as bot_factory,
+        ):
+            self.assertIs(proxied_bot, main.create_bot("123456:test-token", proxy_url))
+        session_factory.assert_called_once_with(proxy=proxy_url)
+        bot_factory.assert_called_once_with(
+            token="123456:test-token", session=proxied_session
+        )
+
+        direct_bot = object()
+        with (
+            patch("main.AiohttpSession") as session_factory,
+            patch("main.Bot", return_value=direct_bot) as bot_factory,
+        ):
+            self.assertIs(direct_bot, main.create_bot("123456:test-token"))
+        session_factory.assert_not_called()
+        bot_factory.assert_called_once_with(token="123456:test-token")
+
     def test_webhook_configuration_requires_explicit_secure_values(self):
         with patch.multiple(
             main.settings,
