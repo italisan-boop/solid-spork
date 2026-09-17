@@ -182,6 +182,8 @@ class PlatformConsoleHtmlTests(unittest.TestCase):
             page.index("telegram-web-app.js"),
             page.index("const tg = window.Telegram?.WebApp"),
         )
+        self.assertIn("const form = event.currentTarget", page)
+        self.assertNotIn("event.currentTarget.reset()", page)
 
 
 if __name__ == "__main__":

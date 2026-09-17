@@ -87,8 +87,8 @@ async function loadTenants() {
   try { const payload = await api('/api/platform/tenants'); target.innerHTML = payload.tenants.map(tenantCard).join('') || '<p>Магазинов пока нет.</p>'; status(state, ''); } catch (error) { status(state, initData ? error.message : 'Откройте console через платформенного Telegram-бота.', true); }
 }
 document.getElementById('createTenantForm').addEventListener('submit', async event => {
-  event.preventDefault(); const state = document.getElementById('createStatus'); status(state, 'Создаём…');
-  try { await api('/api/platform/tenants', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name:document.getElementById('displayName').value.trim(),slug:document.getElementById('slug').value.trim(),owner_telegram_id:Number(document.getElementById('ownerId').value),plan:document.getElementById('plan').value})}); event.currentTarget.reset(); status(state, 'Черновик магазина создан. Добавьте ссылки на секреты и подготовьте runtime.'); await loadTenants(); } catch (error) { status(state, error.message, true); }
+  event.preventDefault(); const form = event.currentTarget; const state = document.getElementById('createStatus'); status(state, 'Создаём…');
+  try { await api('/api/platform/tenants', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name:document.getElementById('displayName').value.trim(),slug:document.getElementById('slug').value.trim(),owner_telegram_id:Number(document.getElementById('ownerId').value),plan:document.getElementById('plan').value})}); form.reset(); status(state, 'Черновик магазина создан. Добавьте ссылки на секреты и подготовьте runtime.'); await loadTenants(); } catch (error) { status(state, error.message, true); }
 });
 document.getElementById('tenants').addEventListener('click', async event => {
   const card = event.target.closest('[data-tenant]'); if (!card) return; const id = card.dataset.tenant; const state = card.querySelector('[data-status]');
