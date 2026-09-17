@@ -9,7 +9,12 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from controlplane.gateway import TenantHostGateway
-from controlplane.plan_policy import FEATURE_ANALYTICS, FEATURE_BROADCAST, Plan
+from controlplane.plan_policy import (
+    FEATURE_ANALYTICS,
+    FEATURE_BROADCAST,
+    Plan,
+    plan_defaults,
+)
 from controlplane.server import create_controlplane_app
 from controlplane.settings import ControlPlaneSettings
 from controlplane.tenants import effective_tenant_entitlements, get_tenant
@@ -297,6 +302,170 @@ class ControlPlaneApiTests(unittest.TestCase):
                 self.settings.database_path, "books.client.example"
             ).tenant_id,
         )
+
+    def test_console_payload_exposes_plan_defaults_domains_and_safe_secret_statuses(self):
+        tenant = self.create_tenant(plan=Plan.START)
+        listed = self.client.get(
+            "/api/platform/tenants", headers=signed_headers(PLATFORM_ADMIN_ID)
+        )
+        self.assertEqual(200, listed.status_code)
+        payload = listed.get_json()
+        self.assertEqual(plan_defaults(), payload["plan_defaults"])
+        item = payload["tenants"][0]
+        self.assertEqual({}, item["entitlement_overrides"]["feature_overrides"])
+        self.assertEqual({}, item["entitlement_overrides"]["limit_overrides"])
+        self.assertEqual([], item["configured_secret_kinds"])
+        self.assertEqual(
+            [{
+                "host": tenant["canonical_host"],
+                "verification_state": "verified",
+                "is_canonical": True,
+                "created_at": item["domains"][0]["created_at"],
+                "verified_at": item["domains"][0]["verified_at"],
+            }],
+            item["domains"],
+        )
+
+        self.configure_required_secret_references(tenant["id"])
+        provisioned = self.client.post(
+            f"/api/platform/tenants/{tenant['id']}/provision",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        )
+        self.assertEqual(200, provisioned.status_code)
+        self.assertNotIn("yookassa_credentials", provisioned.get_json()["configured_secret_kinds"])
+        before = provisioned.get_json()["runtime_generation"]
+        yookassa = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/secret-references/yookassa_credentials",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"reference": "env:TEST_YOOKASSA_JSON", "version": "v1"},
+        )
+        self.assertEqual(200, yookassa.status_code)
+        details = self.client.get(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).get_json()
+        self.assertIn("yookassa_credentials", details["configured_secret_kinds"])
+        self.assertEqual(before + 1, details["runtime_generation"])
+        self.assertNotIn("TEST_YOOKASSA_JSON", json.dumps(details))
+
+    def test_custom_domain_states_are_visible_and_can_be_disabled(self):
+        tenant = self.create_tenant()
+        requested = self.client.post(
+            f"/api/platform/tenants/{tenant['id']}/domains",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"host": "books.client.example"},
+        )
+        self.assertEqual(201, requested.status_code)
+        details = self.client.get(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).get_json()
+        pending = next(domain for domain in details["domains"] if not domain["is_canonical"])
+        self.assertEqual("pending", pending["verification_state"])
+        verified = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/domains/books.client.example/verification",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"state": "verified"},
+        )
+        self.assertEqual(200, verified.status_code)
+        disabled = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/domains/books.client.example/verification",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"state": "disabled"},
+        )
+        self.assertEqual(200, disabled.status_code)
+        details = self.client.get(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).get_json()
+        self.assertEqual(
+            "disabled",
+            next(domain for domain in details["domains"] if not domain["is_canonical"])["verification_state"],
+        )
+
+    def test_soft_delete_requires_typed_slug_and_preserves_tenant_data(self):
+        tenant = self.create_tenant()
+        self.assertEqual(403, self.client.delete(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(999),
+            json={"confirm_slug": tenant["slug"]},
+        ).status_code)
+        self.assertEqual(400, self.client.delete(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"confirm_slug": "wrong-slug"},
+        ).status_code)
+        self.configure_required_secret_references(tenant["id"])
+        self.assertEqual(200, self.client.post(
+            f"/api/platform/tenants/{tenant['id']}/provision",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).status_code)
+        self.record_owner_claim(tenant["id"], tenant["owner_telegram_id"])
+        self.assertEqual(200, self.client.post(
+            f"/api/platform/tenants/{tenant['id']}/activate",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).status_code)
+        stored = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertTrue(stored.database_path.is_file())
+        self.assertTrue(stored.media_root.is_dir())
+        self.assertTrue(stored.backup_root.is_dir())
+
+        deleted = self.client.delete(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"confirm_slug": tenant["slug"]},
+        )
+        self.assertEqual(200, deleted.status_code)
+        self.assertTrue(deleted.get_json()["deleted"])
+        self.assertEqual("deleted", get_tenant(self.settings.database_path, tenant["id"]).lifecycle_state)
+        self.assertTrue(stored.database_path.is_file())
+        self.assertTrue(stored.media_root.is_dir())
+        self.assertTrue(stored.backup_root.is_dir())
+        listed = self.client.get(
+            "/api/platform/tenants", headers=signed_headers(PLATFORM_ADMIN_ID)
+        ).get_json()
+        self.assertEqual([], listed["tenants"])
+        with self.assertRaises(TenantResolutionError):
+            tenant_context_for_host(self.settings.database_path, tenant["canonical_host"])
+        self.assertEqual(400, self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/plan",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"plan": "pro"},
+        ).status_code)
+        repeated = self.client.delete(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"confirm_slug": tenant["slug"]},
+        )
+        self.assertEqual(200, repeated.status_code)
+        self.assertFalse(repeated.get_json()["deleted"])
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            events = connection.execute(
+                "SELECT action FROM platform_audit_events WHERE tenant_id = ?",
+                (tenant["id"],),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual(1, sum(action == "tenant.deleted" for action, in events))
+
+    def test_soft_delete_rejects_provisioning_tenant(self):
+        tenant = self.create_tenant()
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            connection.execute(
+                "UPDATE platform_tenants SET lifecycle_state = 'provisioning' WHERE id = ?",
+                (tenant["id"],),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        response = self.client.delete(
+            f"/api/platform/tenants/{tenant['id']}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"confirm_slug": tenant["slug"]},
+        )
+        self.assertEqual(409, response.status_code)
 
     def test_platform_audit_log_is_immutable(self):
         self.create_tenant()

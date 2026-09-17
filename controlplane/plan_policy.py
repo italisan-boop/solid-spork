@@ -108,6 +108,17 @@ _PLAN_ENTITLEMENTS: dict[Plan, Entitlements] = {
 }
 
 
+def plan_defaults() -> dict[str, dict[str, object]]:
+    return {
+        plan.value: {
+            "policy_version": entitlements.policy_version,
+            "features": sorted(entitlements.features),
+            "limits": dict(entitlements.limits),
+        }
+        for plan, entitlements in _PLAN_ENTITLEMENTS.items()
+    }
+
+
 def parse_plan(value: object) -> Plan:
     try:
         return Plan(str(value))

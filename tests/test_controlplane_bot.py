@@ -184,6 +184,13 @@ class PlatformConsoleHtmlTests(unittest.TestCase):
         )
         self.assertIn("const form = event.currentTarget", page)
         self.assertNotIn("event.currentTarget.reset()", page)
+        self.assertIn("plan_defaults", page)
+        self.assertIn("applyPlan(card, event.target.value)", page)
+        self.assertIn("data-domain-verify", page)
+        self.assertIn("data-delete-slug", page)
+        self.assertIn("confirm_slug:slug", page)
+        self.assertIn("YooKassa, необязательно", page)
+        self.assertIn("Тестовый магазин: порядок", page)
 
 
 if __name__ == "__main__":

@@ -5,27 +5,31 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, make_response, request, send_from_directory
 
-from controlplane.plan_policy import effective_entitlements
+from controlplane.plan_policy import effective_entitlements, plan_defaults
 from controlplane.provisioning import ProvisioningError, provision_tenant
 from controlplane.settings import ControlPlaneSettings
 from controlplane.schema import initialize
 from controlplane.tenants import (
-    create_tenant,
     activate_after_owner_claim,
+    configured_secret_kinds,
+    create_tenant,
     effective_tenant_entitlements,
+    entitlement_overrides,
     get_tenant,
     list_tenants,
     request_custom_domain,
     set_custom_domain_verification,
     set_lifecycle_state,
     set_secret_reference,
+    soft_delete_tenant,
+    tenant_domains,
     update_entitlements,
     update_plan,
 )
 from telegram_auth import TelegramInitDataError, validate_telegram_init_data
 
 
-def _tenant_payload(tenant, entitlements=None) -> dict:
+def _tenant_payload(control_database_path: str | Path, tenant, entitlements=None) -> dict:
     result = {
         "id": tenant.id,
         "slug": tenant.slug,
@@ -36,6 +40,9 @@ def _tenant_payload(tenant, entitlements=None) -> dict:
         "canonical_host": tenant.canonical_host,
         "runtime_generation": tenant.runtime_generation,
         "entitlement_version": tenant.entitlement_version,
+        "domains": tenant_domains(control_database_path, tenant.id),
+        "configured_secret_kinds": configured_secret_kinds(control_database_path, tenant.id),
+        "entitlement_overrides": entitlement_overrides(control_database_path, tenant.id),
     }
     if entitlements is not None:
         result["entitlements"] = {
@@ -83,8 +90,10 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
     def tenants():
         if request.method == "GET":
             return jsonify({
+                "plan_defaults": plan_defaults(),
                 "tenants": [
                     _tenant_payload(
+                        settings.database_path,
                         tenant,
                         effective_tenant_entitlements(settings.database_path, tenant.id),
                     )
@@ -111,6 +120,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
         except (ValueError, TypeError) as error:
             return jsonify({"error": str(error)}), 400
         return jsonify(_tenant_payload(
+            settings.database_path,
             tenant, effective_tenant_entitlements(settings.database_path, tenant.id)
         )), 201
 
@@ -121,6 +131,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
         if selected is None:
             return jsonify({"error": "tenant not found"}), 404
         return jsonify(_tenant_payload(
+            settings.database_path,
             selected, effective_tenant_entitlements(settings.database_path, selected.id)
         ))
 
@@ -178,6 +189,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
             status = 404 if str(error) == "tenant not found" else 400
             return jsonify({"error": str(error)}), status
         return jsonify(_tenant_payload(
+            settings.database_path,
             selected, effective_tenant_entitlements(settings.database_path, selected.id)
         ))
 
@@ -240,6 +252,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
         except ProvisioningError as error:
             return jsonify({"error": str(error)}), 409
         return jsonify(_tenant_payload(
+            settings.database_path,
             selected, effective_tenant_entitlements(settings.database_path, selected.id)
         ))
 
@@ -258,6 +271,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
             status = 404 if str(error) == "tenant not found" else 409
             return jsonify({"error": str(error)}), status
         return jsonify(_tenant_payload(
+            settings.database_path,
             selected, effective_tenant_entitlements(settings.database_path, selected.id)
         ))
 
@@ -278,7 +292,28 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
             status = 404 if str(error) == "tenant not found" else 400
             return jsonify({"error": str(error)}), status
         return jsonify(_tenant_payload(
+            settings.database_path,
             selected, effective_tenant_entitlements(settings.database_path, selected.id)
         ))
+
+    @app.delete("/api/platform/tenants/<tenant_id>")
+    @require_platform_admin
+    def delete_tenant(tenant_id: str):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {"confirm_slug"}:
+            return jsonify({"error": "confirm_slug is required"}), 400
+        try:
+            deleted = soft_delete_tenant(
+                settings.database_path,
+                tenant_id=tenant_id,
+                confirm_slug=payload["confirm_slug"],
+                actor_telegram_id=g.platform_admin_id,
+            )
+        except RuntimeError as error:
+            return jsonify({"error": str(error)}), 409
+        except ValueError as error:
+            status = 404 if str(error) == "tenant not found" else 400
+            return jsonify({"error": str(error)}), status
+        return jsonify({"deleted": deleted})
 
     return app

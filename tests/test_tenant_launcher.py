@@ -75,6 +75,32 @@ class TenantLauncherTests(unittest.TestCase):
             self.assertEqual("202", os.environ["OWNER_TELEGRAM_ID"])
             self.assertEqual("https://runtime-store.shops.example.test", os.environ["WEBAPP_URL"])
 
+    def test_launcher_resolves_yookassa_added_after_provisioning(self):
+        set_secret_reference(
+            self.control_database,
+            tenant_id=self.tenant.id,
+            secret_kind="yookassa_credentials",
+            reference="env:TENANT_YOOKASSA_JSON",
+            version="v1",
+            actor_telegram_id=101,
+        )
+        environment = {
+            "PLATFORM_DATABASE_PATH": str(self.control_database),
+            "PLATFORM_TENANT_DATA_ROOT": str(self.root / "tenants"),
+            "PLATFORM_TENANT_BACKUP_ROOT": str(self.root / "backups"),
+            "PLATFORM_TENANT_BASE_DOMAIN": "shops.example.test",
+            "PLATFORM_BOT_TOKEN": "123456:platform-token",
+            "PLATFORM_ADMIN_TELEGRAM_IDS": "101",
+            "TENANT_RUNTIME_ID": self.tenant.id,
+            "TENANT_BOT_TOKEN_VALUE": "234567:tenant-token",
+            "TENANT_WEBHOOK_SECRET_VALUE": "tenant-webhook-secret",
+            "TENANT_YOOKASSA_JSON": '{"shop_id":"test-shop","secret_key":"test-key"}',
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            configure_tenant_environment()
+            self.assertEqual("test-shop", os.environ["YOOKASSA_SHOP_ID"])
+            self.assertEqual("test-key", os.environ["YOOKASSA_SECRET_KEY"])
+
 
 if __name__ == "__main__":
     unittest.main()

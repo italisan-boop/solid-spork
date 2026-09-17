@@ -199,11 +199,92 @@ def list_tenants(control_database_path: str | Path) -> list[Tenant]:
     database.row_factory = sqlite3.Row
     try:
         rows = database.execute(
-            "SELECT * FROM platform_tenants ORDER BY created_at DESC, id DESC"
+            """
+            SELECT * FROM platform_tenants
+            WHERE lifecycle_state != 'deleted'
+            ORDER BY created_at DESC, id DESC
+            """
         ).fetchall()
         return [_tenant(row) for row in rows]
     finally:
         database.close()
+
+
+def tenant_domains(control_database_path: str | Path, tenant_id: str) -> list[dict[str, object]]:
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        rows = database.execute(
+            """
+            SELECT host, verification_state, is_canonical, created_at, verified_at
+            FROM tenant_domains
+            WHERE tenant_id = ?
+            ORDER BY is_canonical DESC, host ASC
+            """,
+            (tenant_id,),
+        ).fetchall()
+        return [
+            {
+                "host": row["host"],
+                "verification_state": row["verification_state"],
+                "is_canonical": bool(row["is_canonical"]),
+                "created_at": row["created_at"],
+                "verified_at": row["verified_at"],
+            }
+            for row in rows
+        ]
+    finally:
+        database.close()
+
+
+def configured_secret_kinds(control_database_path: str | Path, tenant_id: str) -> list[str]:
+    database = connect(control_database_path)
+    try:
+        rows = database.execute(
+            """
+            SELECT secret_kind FROM tenant_secret_references
+            WHERE tenant_id = ?
+            ORDER BY secret_kind ASC
+            """,
+            (tenant_id,),
+        ).fetchall()
+        return [row[0] for row in rows]
+    finally:
+        database.close()
+
+
+def entitlement_overrides(
+    control_database_path: str | Path, tenant_id: str
+) -> dict[str, dict[str, object]]:
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        row = database.execute(
+            """
+            SELECT feature_overrides_json, limit_overrides_json
+            FROM tenant_entitlement_overrides WHERE tenant_id = ?
+            """,
+            (tenant_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("tenant not found")
+        return {
+            "feature_overrides": json.loads(row["feature_overrides_json"]),
+            "limit_overrides": json.loads(row["limit_overrides_json"]),
+        }
+    finally:
+        database.close()
+
+
+def _ensure_mutable_tenant(database: sqlite3.Connection, tenant_id: str) -> sqlite3.Row:
+    row = database.execute(
+        "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("tenant not found")
+    if row["lifecycle_state"] in {"deleting", "deleted"}:
+        raise ValueError("tenant has been deleted")
+    return row
 
 
 def request_custom_domain(
@@ -215,12 +296,10 @@ def request_custom_domain(
 ) -> str:
     normalized_host = normalize_host(host)
     database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
     try:
         database.execute("BEGIN IMMEDIATE")
-        if not database.execute(
-            "SELECT 1 FROM platform_tenants WHERE id = ?", (tenant_id,)
-        ).fetchone():
-            raise ValueError("tenant not found")
+        _ensure_mutable_tenant(database, tenant_id)
         database.execute(
             """
             INSERT INTO tenant_domains (host, tenant_id, verification_state, is_canonical)
@@ -259,8 +338,10 @@ def set_custom_domain_verification(
         raise ValueError("invalid domain verification state")
     normalized_host = normalize_host(host)
     database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
     try:
         database.execute("BEGIN IMMEDIATE")
+        _ensure_mutable_tenant(database, tenant_id)
         cursor = database.execute(
             """
             UPDATE tenant_domains
@@ -365,11 +446,7 @@ def update_entitlements(
     database.row_factory = sqlite3.Row
     try:
         database.execute("BEGIN IMMEDIATE")
-        tenant = database.execute(
-            "SELECT plan FROM platform_tenants WHERE id = ?", (tenant_id,)
-        ).fetchone()
-        if not tenant:
-            raise ValueError("tenant not found")
+        tenant = _ensure_mutable_tenant(database, tenant_id)
         entitlements = effective_entitlements(
             tenant["plan"],
             feature_overrides=feature_overrides,
@@ -425,6 +502,7 @@ def update_plan(
     database.row_factory = sqlite3.Row
     try:
         database.execute("BEGIN IMMEDIATE")
+        _ensure_mutable_tenant(database, tenant_id)
         cursor = database.execute(
             """
             UPDATE platform_tenants
@@ -488,12 +566,10 @@ def set_secret_reference(
     if not isinstance(version, str) or len(version) > 80:
         raise ValueError("invalid secret version")
     database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
     try:
         database.execute("BEGIN IMMEDIATE")
-        if not database.execute(
-            "SELECT 1 FROM platform_tenants WHERE id = ?", (tenant_id,)
-        ).fetchone():
-            raise ValueError("tenant not found")
+        _ensure_mutable_tenant(database, tenant_id)
         database.execute(
             """
             INSERT INTO tenant_secret_references (
@@ -585,6 +661,62 @@ def activate_after_owner_claim(
         ).fetchone()
         database.commit()
         return _tenant(activated)
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def soft_delete_tenant(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    confirm_slug: str,
+    actor_telegram_id: int,
+) -> bool:
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        row = database.execute(
+            "SELECT slug, lifecycle_state FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("tenant not found")
+        if not isinstance(confirm_slug, str) or confirm_slug != row["slug"]:
+            raise ValueError("tenant slug confirmation does not match")
+        if row["lifecycle_state"] == "deleted":
+            database.commit()
+            return False
+        if row["lifecycle_state"] == "provisioning":
+            raise RuntimeError("tenant provisioning is in progress")
+        database.execute(
+            """
+            UPDATE platform_tenants
+            SET lifecycle_state = 'deleted', runtime_generation = runtime_generation + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (tenant_id,),
+        )
+        database.execute(
+            """
+            UPDATE tenant_domains
+            SET verification_state = 'disabled', verified_at = NULL
+            WHERE tenant_id = ?
+            """,
+            (tenant_id,),
+        )
+        _audit(
+            database,
+            actor_telegram_id=actor_telegram_id,
+            action="tenant.deleted",
+            tenant_id=tenant_id,
+            details={"previous_state": row["lifecycle_state"], "slug": row["slug"]},
+        )
+        database.commit()
+        return True
     except Exception:
         database.rollback()
         raise
