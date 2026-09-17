@@ -27,11 +27,16 @@ def _resolve_database_path(value: str | Path | None) -> Path:
     return path.resolve()
 
 
-DB_PATH = _resolve_database_path(settings.DATABASE_PATH)
+DB_PATH: Path | None = (
+    _resolve_database_path(settings.DATABASE_PATH)
+    if settings.DATABASE_PATH
+    else None
+)
 
 
 def current_database_path() -> Path:
-    return _CURRENT_DATABASE_PATH.get() or DB_PATH
+    contextual_path = _CURRENT_DATABASE_PATH.get()
+    return contextual_path if contextual_path is not None else _resolve_database_path(DB_PATH)
 
 
 @contextmanager

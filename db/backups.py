@@ -50,7 +50,9 @@ def _backup_directory(
     if not raw_path.is_absolute():
         raise ValueError("BACKUP_DIR must be an absolute path")
     backup_dir = raw_path.resolve()
-    source = Path(source_path or schema.DB_PATH).expanduser().resolve()
+    source = Path(
+        source_path if source_path is not None else schema.current_database_path()
+    ).expanduser().resolve()
     database_dir = source.parent
     if backup_dir == database_dir or database_dir in backup_dir.parents:
         raise ValueError("BACKUP_DIR must be outside the database directory")
@@ -89,7 +91,9 @@ def backup_database(
     source_path: str | Path | None = None,
     backup_directory: str | Path | None = None,
 ) -> Path:
-    source = Path(source_path or schema.DB_PATH).expanduser().resolve()
+    source = Path(
+        source_path if source_path is not None else schema.current_database_path()
+    ).expanduser().resolve()
     if not source.exists():
         raise FileNotFoundError(source)
     backup_dir = _backup_directory(backup_directory, source)

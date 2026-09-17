@@ -291,6 +291,16 @@ class OperationsTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             backup_database(self.database_path, self.database_path.parent)
+
+    def test_backup_uses_active_tenant_context_without_legacy_default(self):
+        with (
+            patch.object(schema, "DB_PATH", None),
+            schema.database_context(self.database_path),
+            patch.object(server.settings, "BACKUP_DIR", str(self.backup_directory)),
+        ):
+            target = backup_database(backup_directory=self.backup_directory)
+        self.assertTrue(target.is_file())
+
     def test_inventory_movements_are_lazy_and_cursor_paginated(self):
         self._execute("UPDATE books SET stock_quantity = 0 WHERE id = 1")
         with patch.object(server, "ADMIN_IDS", [101]):

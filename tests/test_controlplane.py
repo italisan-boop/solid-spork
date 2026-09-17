@@ -130,10 +130,11 @@ class ControlPlaneApiTests(unittest.TestCase):
     def test_platform_admin_provisions_a_blank_isolated_tenant_database(self):
         tenant = self.create_tenant()
         self.configure_required_secret_references(tenant["id"])
-        provisioned = self.client.post(
-            f"/api/platform/tenants/{tenant['id']}/provision",
-            headers=signed_headers(PLATFORM_ADMIN_ID),
-        )
+        with patch("db.schema.DB_PATH", None):
+            provisioned = self.client.post(
+                f"/api/platform/tenants/{tenant['id']}/provision",
+                headers=signed_headers(PLATFORM_ADMIN_ID),
+            )
         self.assertEqual(200, provisioned.status_code)
         self.assertEqual("awaiting_owner_claim", provisioned.get_json()["lifecycle_state"])
 
@@ -391,6 +392,36 @@ class ControlPlaneApiTests(unittest.TestCase):
         ).get_json()
         self.assertEqual(saved_payload["runtime_generation"], unchanged["runtime_generation"])
         self.assertEqual(saved_payload["configured_secret_kinds"], unchanged["configured_secret_kinds"])
+
+    def test_provision_failure_records_only_safe_stage_and_type(self):
+        tenant = self.create_tenant()
+        self.configure_required_secret_references(tenant["id"])
+        with patch("db.schema.initialize_database", side_effect=RuntimeError("SECRET_SENTINEL")):
+            response = self.client.post(
+                f"/api/platform/tenants/{tenant['id']}/provision",
+                headers=signed_headers(PLATFORM_ADMIN_ID),
+            )
+        self.assertEqual(409, response.status_code)
+        self.assertEqual("tenant provisioning failed", response.get_json()["error"])
+        self.assertNotIn("SECRET_SENTINEL", response.get_data(as_text=True))
+        stored = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertEqual("migration_failed", stored.lifecycle_state)
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            outcome = connection.execute(
+                """
+                SELECT outcome_json FROM tenant_provisioning_jobs
+                WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1
+                """,
+                (tenant["id"],),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(
+            {"stage": "tenant_schema_initialization", "error_type": "RuntimeError"},
+            json.loads(outcome),
+        )
+        self.assertNotIn("SECRET_SENTINEL", outcome)
 
     def test_provision_preflight_keeps_draft_without_usable_references(self):
         tenant = self.create_tenant()

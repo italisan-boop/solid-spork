@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -16,6 +17,7 @@ from controlplane.tenants import Tenant, get_tenant, secret_references
 
 
 _REQUIRED_SECRETS = {"telegram_bot_token", "telegram_webhook_secret"}
+logger = logging.getLogger(__name__)
 
 
 class ProvisioningError(ValueError):
@@ -138,14 +140,18 @@ def provision_tenant(
     finally:
         control.close()
 
+    stage = "tenant_schema_import"
     try:
         from db.schema import connect as connect_tenant_database
         from db.schema import initialize_database
 
+        stage = "tenant_directory_creation"
         tenant.database_path.parent.mkdir(parents=True, exist_ok=True)
         tenant.media_root.mkdir(parents=True, exist_ok=True)
         tenant.backup_root.mkdir(parents=True, exist_ok=True)
+        stage = "tenant_schema_initialization"
         initialize_database(tenant.database_path, seed_catalog=False)
+        stage = "tenant_runtime_metadata"
         tenant_database = connect_tenant_database(tenant.database_path)
         try:
             tenant_database.execute("BEGIN IMMEDIATE")
@@ -176,6 +182,14 @@ def provision_tenant(
         finally:
             tenant_database.close()
     except Exception as exc:
+        error_type = type(exc).__name__
+        logger.error(
+            "tenant provisioning failed tenant_id=%s job_id=%s stage=%s error_type=%s",
+            tenant_id,
+            job_id,
+            stage,
+            error_type,
+        )
         control = connect(control_database_path)
         try:
             control.execute("BEGIN IMMEDIATE")
@@ -187,13 +201,14 @@ def provision_tenant(
                 """,
                 (tenant_id,),
             )
-            _update_job(control, job_id, "failed", {"reason": type(exc).__name__})
+            outcome = {"stage": stage, "error_type": error_type}
+            _update_job(control, job_id, "failed", outcome)
             _audit(
                 control,
                 actor_telegram_id,
                 "tenant.provision.failed",
                 tenant_id,
-                {"reason": type(exc).__name__},
+                outcome,
             )
             control.commit()
         except Exception:

@@ -32,6 +32,24 @@ class SharedDatabaseIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             schema._resolve_database_path("relative.sqlite")
 
+    def test_explicit_database_path_does_not_need_legacy_default(self):
+        explicit_path = Path(self._temporary_directory.name) / "explicit.sqlite"
+        with patch.object(schema, "DB_PATH", None):
+            schema.initialize_database(explicit_path, seed_catalog=False)
+            database = schema.connect(explicit_path)
+            try:
+                self.assertEqual(
+                    1,
+                    database.execute(
+                        "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
+                        (schema.SCHEMA_VERSION,),
+                    ).fetchone()[0],
+                )
+            finally:
+                database.close()
+            with self.assertRaisesRegex(RuntimeError, "DATABASE_PATH must point"):
+                schema.connect()
+
     async def test_sync_flask_async_repository_and_fsm_share_one_database(self):
         self.assertEqual(6, len(server.get_books_sync()))
 
