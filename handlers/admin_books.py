@@ -5,9 +5,21 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncio
 import json
+from authz import has_permission_sync
 from config.settings import settings
 from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, archive_books, restore_book, get_archived_books, get_archived_books_count, classify_archived_book_ids, purge_archived_books, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
 from db.categories import get_all_categories, add_category, get_category_by_id, category_display, NO_CATEGORY_NAME
+from db.inventory import InventoryUnavailableError, adjust_stock
+from runtime.features import QuotaExceededError
+from storage.book_media import (
+    BookMediaError,
+    attach_telegram_media,
+    clear_book_media_sync,
+    delete_book_media_sync,
+    list_book_media_sync,
+    media_variants_for_book_sync,
+    next_page_position_sync,
+)
 from utils import parseBookImages, setup_logger
 from utils.otp_confirm import (
     ACTION_PURGE_ARCHIVED_BOOKS,
@@ -61,8 +73,8 @@ PAGE_PHOTOS_LIMIT_NOTE = (
 
 
 def is_admin(user_id: int) -> bool:
-    """Проверяет, является ли пользователь администратором"""
-    return user_id in settings.ADMIN_IDS
+    """Catalog mutations remain owner-only."""
+    return has_permission_sync(user_id, "catalog.manage")
 
 
 class AdminBooksMiddleware(BaseMiddleware):
@@ -103,11 +115,8 @@ def is_url(text: str) -> bool:
 
 
 async def get_telegram_file_url(bot: Bot, file_id: str) -> str:
-    """Строит публичный URL файла на api.telegram.org по его file_id.
-    file_unique_id — это стабильный идентификатор, его НЕЛЬЗЯ подставлять
-    в путь; нужен реальный file_path, который возвращает get_file()."""
-    file = await bot.get_file(file_id)
-    return f"https://api.telegram.org/file/bot{bot.token}/{file.file_path}"
+    """Return a private upload marker; never persist a Bot API download URL."""
+    return f"telegram-file:{file_id}"
 
 
 @router.callback_query(F.data == "admin_add_book")
@@ -331,29 +340,44 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
         if await _maybe_render_after_edit(message, state, bot):
             return
 
-        # Получаем категории
-        categories = await get_all_categories()
-
         builder = InlineKeyboardBuilder()
-        # Шаблон «Без категории» — админ может добавить книгу без категории,
-        # тогда карточка покажется с плейсхолдером.
-        builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
-        for cat in categories:
-            builder.button(text=f"📁 {cat['name']}", callback_data=f"admin_book_cat_{cat['id']}")
-        builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
+        builder.button(text="⬅️ Назад", callback_data="admin_book_back_description")
         builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
-        builder.adjust(2)
-
+        builder.adjust(1)
         await message.answer(
-            "📂 Выберите категорию для книги:",
-            reply_markup=builder.as_markup()
+            "📦 Введите остаток книги: целое число от 0 или «безлимит» для неограниченного наличия.",
+            reply_markup=builder.as_markup(),
         )
-        await state.set_state(BookAddState.waiting_for_category)
+        await state.set_state(BookAddState.waiting_for_stock)
     except (ValueError, TypeError):
         await message.answer("❌ Введите корректную цену (положительное число):")
 
 
-@router.callback_query(F.data == "admin_book_back_price")
+@router.message(BookAddState.waiting_for_stock)
+async def process_stock(message: Message, state: FSMContext):
+    value = (message.text or "").strip().lower()
+    if value in {"безлимит", "безлимита", "unlimited", "∞"}:
+        stock_quantity = None
+    else:
+        try:
+            stock_quantity = int(value)
+            if stock_quantity < 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Введите неотрицательное целое число или «безлимит».")
+            return
+    await state.update_data(stock_quantity=stock_quantity)
+    categories = await get_all_categories()
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📦 Без категории", callback_data="admin_book_cat_none")
+    for category in categories:
+        builder.button(text=f"📁 {category['name']}", callback_data=f"admin_book_cat_{category['id']}")
+    builder.button(text="⬅️ Назад", callback_data="admin_book_back_price")
+    builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
+    builder.adjust(2)
+    await message.answer("📂 Выберите категорию для книги:", reply_markup=builder.as_markup())
+    await state.set_state(BookAddState.waiting_for_category)
+
 async def back_to_price(callback: CallbackQuery, state: FSMContext):
     """Возврат к вводу цены"""
     data = await state.get_data()
@@ -412,8 +436,7 @@ async def process_category(callback: CallbackQuery, state: FSMContext, bot: Bot)
         message_id=callback.message.message_id,
         text=
         "📸 <b>Отправьте обложку книги</b>\n\n"
-        "Можно прикрепить фото Telegram-сообщением или прислать ссылку "
-        "(http://… или https://…). Это главное изображение в каталоге.",
+        "Прикрепите фото Telegram-сообщением. Это главное изображение в каталоге.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -480,8 +503,7 @@ async def process_cover_photo(message: Message, state: FSMContext, bot: Bot):
         # Без URL обложка всё равно будет работать в боте (через file_id),
         # но в Mini App может не отображаться. Сообщаем админу.
         await message.answer(
-            "⚠️ Не удалось получить ссылку на фото. Попробуйте отправить "
-            "обложку ещё раз или пришлите URL изображения."
+            "⚠️ Не удалось сохранить обложку. Отправьте фото Telegram ещё раз."
         )
         return
     await state.update_data(cover_photo=file_url, cover_photo_id=file_id, step=6)
@@ -513,38 +535,10 @@ async def process_cover_photo(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(BookAddState.waiting_for_cover_photo)
 async def process_cover_photo_url(message: Message, state: FSMContext, bot: Bot):
-    """Обработка URL обложки"""
-    text = message.text.strip() if message.text else ""
-    if is_url(text):
-        await state.update_data(cover_photo=text, step=6)
-
-        # В режиме правки из карточки — возвращаемся на неё, не уходим
-        # на шаг фото страниц.
-        data = await state.get_data()
-        if data.get('editing'):
-            await state.update_data(editing=False)
-            await render_book_confirmation(message, state, bot)
-            return
-
-        builder = InlineKeyboardBuilder()
-        builder.button(text="➕ Добавить фото страниц", callback_data="admin_book_add_pages")
-        builder.button(text="⏭️ Пропустить", callback_data="admin_book_skip_pages")
-        builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
-        builder.button(text="❌ Отмена", callback_data="admin_books_cancel")
-        builder.adjust(2)
-
-        await message.answer(
-            "📸 <b>URL обложки принят!</b>\n\n"
-            "Хотите добавить фото страниц книги?\n"
-            "Это поможет покупателям лучше рассмотреть товар.",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
-        await state.set_state(BookAddState.waiting_for_page_photos)
-    else:
-        await message.answer(
-            "❌ Это не похоже на valid URL. Пожалуйста, отправьте фото или введите корректный URL:"
-        )
+    """Reject remote URLs so every new cover uses the safe media pipeline."""
+    await message.answer(
+        "❌ Ссылки на изображения не поддерживаются. Отправьте фото Telegram, чтобы бот безопасно обработал его."
+    )
 
 
 @router.callback_query(F.data == "admin_book_back_cover")
@@ -560,8 +554,7 @@ async def back_to_cover(callback: CallbackQuery, state: FSMContext):
         message_id=callback.message.message_id,
         text=
         "📸 <b>Отправьте обложку книги</b>\n\n"
-        "Можно прикрепить фото Telegram-сообщением или прислать ссылку "
-        "(http://… или https://…). Это главное изображение в каталоге.",
+        "Прикрепите фото Telegram-сообщением. Это главное изображение в каталоге.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -592,7 +585,12 @@ async def start_add_pages(callback: CallbackQuery, state: FSMContext):
 # Не держим в FSMStorage, потому что сообщения одного альбома приходят
 # быстрее, чем FSMStorage успевает среагировать — проще ждать в памяти.
 _album_buffers: dict = {}
-_ALBUM_FLUSH_SECONDS = 0.7  # Telegram отдаёт альбом за <100 мс; 0.7 — с запасом
+_album_locks: dict[int, asyncio.Lock] = {}
+_ALBUM_FLUSH_SECONDS = 0.7
+
+
+def _album_lock(user_id: int) -> asyncio.Lock:
+    return _album_locks.setdefault(user_id, asyncio.Lock())
 
 
 async def _save_page_photo_url(bot: Bot, photo) -> str | None:
@@ -613,24 +611,25 @@ async def _flush_album(user_id: int, media_group_id: str, state: FSMContext, bot
     if not entry:
         return
 
-    messages = entry['messages']
-    page_photos = (await state.get_data()).get('page_photos', [])
-    added = 0
-    skipped_big = 0
-    for m in messages:
-        if len(page_photos) >= MAX_PAGE_PHOTOS:
-            break
-        photo = m.photo[-1] if m.photo else None
-        if not photo:
-            continue
-        file_url = await _save_page_photo_url(bot, photo)
-        if file_url is None:
-            if photo.file_size and photo.file_size > MAX_PHOTO_FILE_BYTES:
-                skipped_big += 1
-            continue
-        page_photos.append(file_url)
-        added += 1
-    await state.update_data(page_photos=page_photos)
+    async with _album_lock(user_id):
+        messages = entry['messages']
+        page_photos = list((await state.get_data()).get('page_photos', []))
+        added = 0
+        skipped_big = 0
+        for message in messages:
+            if len(page_photos) >= MAX_PAGE_PHOTOS:
+                break
+            photo = message.photo[-1] if message.photo else None
+            if not photo:
+                continue
+            file_marker = await _save_page_photo_url(bot, photo)
+            if file_marker is None:
+                if photo.file_size and photo.file_size > MAX_PHOTO_FILE_BYTES:
+                    skipped_big += 1
+                continue
+            page_photos.append(file_marker)
+            added += 1
+        await state.update_data(page_photos=page_photos)
 
     count = len(page_photos)
     builder = InlineKeyboardBuilder()
@@ -644,7 +643,7 @@ async def _flush_album(user_id: int, media_group_id: str, state: FSMContext, bot
     if skipped_big:
         note = f"\n\n⚠️ {skipped_big} фото пропущены: больше 9 МБ."
     if added == 0 and not skipped_big:
-        return  # ничего не добавили и не отфильтровали — молчим
+        return
 
     await messages[-1].answer(
         f"📥 <b>Альбом принят: +{added} фото</b>\n\n"
@@ -655,7 +654,22 @@ async def _flush_album(user_id: int, media_group_id: str, state: FSMContext, bot
     )
 
 
-@router.message(BookAddState.waiting_for_page_photos, F.media_group_id, F.photo)
+async def _flush_pending_albums(user_id: int, state: FSMContext, bot: Bot) -> None:
+    entries = [
+        (media_group_id, entry)
+        for (owner_id, media_group_id), entry in _album_buffers.items()
+        if owner_id == user_id
+    ]
+    for _, entry in entries:
+        task = entry.get("task")
+        if task and not task.done():
+            task.cancel()
+    await asyncio.gather(
+        *(entry["task"] for _, entry in entries if entry.get("task")),
+        return_exceptions=True,
+    )
+    for media_group_id, _ in entries:
+        await _flush_album(user_id, media_group_id, state, bot)
 async def collect_album_photo(message: Message, state: FSMContext, bot: Bot):
     """Собрать фото из Telegram-альбома и одним пакетом добавить в состояние."""
     user_id = message.from_user.id
@@ -664,19 +678,18 @@ async def collect_album_photo(message: Message, state: FSMContext, bot: Bot):
 
     entry = _album_buffers.setdefault(key, {'messages': [], 'task': None})
     entry['messages'].append(message)
+    previous_task = entry.get('task')
+    if previous_task and not previous_task.done():
+        previous_task.cancel()
 
-    # Первое фото в альбоме — запускаем таймер флаша. Последующие фото
-    # той же группы добавятся в entry['messages'] до истечения таймера.
-    if entry['task'] is None or entry['task'].done():
-        async def _schedule_flush():
-            try:
-                await asyncio.sleep(_ALBUM_FLUSH_SECONDS)
-                await _flush_album(user_id, media_group_id, state, bot)
-            except asyncio.CancelledError:
-                # Бот ушёл в рестарт во время сбора альбома — молча выходим
-                return
+    async def _schedule_flush():
+        try:
+            await asyncio.sleep(_ALBUM_FLUSH_SECONDS)
+            await _flush_album(user_id, media_group_id, state, bot)
+        except asyncio.CancelledError:
+            return
 
-        entry['task'] = asyncio.create_task(_schedule_flush())
+    entry['task'] = asyncio.create_task(_schedule_flush())
 
 
 @router.message(BookAddState.waiting_for_page_photos, F.photo, ~F.media_group_id)
@@ -687,39 +700,38 @@ async def process_page_photo(message: Message, state: FSMContext, bot: Bot):
     ждём ~0.7с, пока Telegram дошлёт все фото в группе, и добавляем их
     одним пакетом, чтобы админ мог прислать сразу 5–10 страниц.
     """
-    data = await state.get_data()
-    page_photos = data.get('page_photos', [])
+    async with _album_lock(message.from_user.id):
+        data = await state.get_data()
+        page_photos = list(data.get('page_photos', []))
+        if len(page_photos) >= MAX_PAGE_PHOTOS:
+            await message.answer(
+                "❌ Уже загружено максимум фото страниц."
+                + PAGE_PHOTOS_LIMIT_NOTE.format(current=len(page_photos))
+                + "\n\nНажмите «✅ Готово» чтобы продолжить."
+            )
+            return
 
-    if len(page_photos) >= MAX_PAGE_PHOTOS:
-        await message.answer(
-            "❌ Уже загружено максимум фото страниц."
-            + PAGE_PHOTOS_LIMIT_NOTE.format(current=len(page_photos))
-            + "\n\nНажмите «✅ Готово» чтобы продолжить."
-        )
-        return
+        photo = message.photo[-1]
+        if photo.file_size and photo.file_size > MAX_PHOTO_FILE_BYTES:
+            size_mb = round(photo.file_size / (1024 * 1024), 1)
+            await message.answer(
+                f"❌ Фото слишком большое ({size_mb} МБ). "
+                f"Telegram Bot API принимает файлы до 10 МБ; "
+                f"сожмите изображение и отправьте его ещё раз."
+            )
+            return
+        try:
+            file_marker = await get_telegram_file_url(bot, photo.file_id)
+        except Exception as error:
+            logger.error(f"Не удалось сохранить фото страницы: {error}")
+            await message.answer(
+                "⚠️ Не удалось сохранить фото страницы. Попробуйте отправить его ещё раз."
+            )
+            return
+        page_photos.append(file_marker)
+        await state.update_data(page_photos=page_photos)
+        count = len(page_photos)
 
-    photo = message.photo[-1]
-    if photo.file_size and photo.file_size > MAX_PHOTO_FILE_BYTES:
-        size_mb = round(photo.file_size / (1024 * 1024), 1)
-        await message.answer(
-            f"❌ Фото слишком большое ({size_mb} МБ). "
-            f"Telegram Bot API принимает файлы до 10 МБ; "
-            f"сожмите изображение или пришлите URL."
-        )
-        return
-    try:
-        file_url = await get_telegram_file_url(bot, photo.file_id)
-    except Exception as e:
-        logger.error(f"Не удалось получить file_path для фото страницы: {e}")
-        await message.answer(
-            "⚠️ Не удалось сохранить фото страницы. Попробуйте ещё раз или пришлите URL."
-        )
-        return
-    page_photos.append(file_url)
-    await state.update_data(page_photos=page_photos)
-    
-    count = len(page_photos)
-    
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Готово", callback_data="admin_book_pages_done")
     builder.button(text="➕ Еще фото", callback_data="admin_book_add_more_pages")
@@ -737,40 +749,10 @@ async def process_page_photo(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(BookAddState.waiting_for_page_photos)
 async def process_page_photo_url(message: Message, state: FSMContext):
-    """Обработка URL фото страницы"""
-    text = message.text.strip() if message.text else ""
-    if is_url(text):
-        data = await state.get_data()
-        page_photos = data.get('page_photos', [])
-        if len(page_photos) >= MAX_PAGE_PHOTOS:
-            await message.answer(
-                "❌ Уже загружено максимум фото страниц."
-                + PAGE_PHOTOS_LIMIT_NOTE.format(current=len(page_photos))
-                + "\n\nНажмите «✅ Готово» чтобы продолжить."
-            )
-            return
-        page_photos.append(text)
-        await state.update_data(page_photos=page_photos)
-        
-        count = len(page_photos)
-        
-        builder = InlineKeyboardBuilder()
-        builder.button(text="✅ Готово", callback_data="admin_book_pages_done")
-        builder.button(text="➕ Еще фото", callback_data="admin_book_add_more_pages")
-        builder.button(text="⬅️ Назад", callback_data="admin_book_back_cover")
-        builder.adjust(2)
-        
-        await message.answer(
-            f"✅ <b>URL фото #{count} добавлен!</b>\n\n"
-            f"Всего фото страниц: {count}\n\n"
-            "Добавить еще или завершить?",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
-    else:
-        await message.answer(
-            "❌ Это не похоже на valid URL. Пожалуйста, отправьте фото или введите корректный URL:"
-        )
+    """Reject remote URLs so every new page uses the safe media pipeline."""
+    await message.answer(
+        "❌ Ссылки на изображения не поддерживаются. Отправьте фото Telegram, чтобы бот безопасно обработал его."
+    )
 
 
 @router.callback_query(F.data == "admin_book_add_more_pages")
@@ -796,19 +778,7 @@ async def add_more_pages(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "admin_book_pages_done")
 async def finish_pages(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Завершение добавления фото и переход к подтверждению"""
-    data = await state.get_data()
-    page_photos = data.get('page_photos', [])
-
-    # Формируем итоговое сообщение
-    cover_photo_id = data.get('cover_photo_id')
-    cover_photo_url = data.get('cover_photo')
-    has_cover = bool(cover_photo_id or cover_photo_url)
-    title = data.get('title')
-    author = data.get('author')
-    description = data.get('description')
-    price = data.get('price')
-    category_id = data.get('category_id')
-
+    await _flush_pending_albums(callback.from_user.id, state, bot)
     await render_book_confirmation(callback, state, callback.bot)
 
 
@@ -828,6 +798,7 @@ async def render_book_confirmation(target, state: FSMContext, bot: Bot):
     author = data.get('author') or '—'
     description = data.get('description') or ''
     price = data.get('price')
+    stock_quantity = data.get('stock_quantity')
     category_id = data.get('category_id')
 
     cat = await get_category_by_id(category_id) if category_id else None
@@ -841,7 +812,8 @@ async def render_book_confirmation(target, state: FSMContext, bot: Bot):
         f"📖 <b>{title}</b>\n"
         f"✍️ {author}\n"
         f"📂 {cat_label}\n"
-        f"💰 {price} ₽\n\n"
+        f"💰 {price} ₽\n"
+        f"📦 Остаток: {'безлимит' if stock_quantity is None else f'{stock_quantity} шт.'}\n\n"
         f"{desc_preview or '<i>Без описания</i>'}\n\n"
         f"📸 Обложка: {'✅' if has_cover else '❌'}\n"
         f"📄 Фото страниц: {len(page_photos)} шт.\n\n"
@@ -933,7 +905,7 @@ _EDIT_FIELD_PROMPTS = {
     "admin_book_edit_price": (BookAddState.waiting_for_price, "💰 Введите новую цену (в рублях):"),
     "admin_book_edit_category": (BookAddState.waiting_for_category, "📂 Выберите новую категорию:"),
     "admin_book_edit_description": (BookAddState.waiting_for_description, "📄 Введите новое описание книги:"),
-    "admin_book_edit_cover": (BookAddState.waiting_for_cover_photo, "📸 Пришлите новую обложку (фото или URL):"),
+    "admin_book_edit_cover": (BookAddState.waiting_for_cover_photo, "📸 Пришлите новую обложку Telegram-фото:"),
     "admin_book_edit_pages": (BookAddState.waiting_for_page_photos, "📸 Пришлите новые фото страниц (или нажмите «Готово»):"),
 }
 
@@ -995,50 +967,70 @@ async def back_to_confirmation(callback: CallbackQuery, state: FSMContext, bot: 
 
 @router.callback_query(F.data == "admin_book_confirm_add")
 async def confirm_add_book(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение и добавление книги в БД"""
+    """Создаёт книгу, затем независимо обрабатывает staged Telegram media."""
     data = await state.get_data()
-
     try:
-        # Добавляем книгу в БД
         book_id = await add_book(
             title=data['title'],
             author=data['author'],
             description=data['description'],
             price=data['price'],
             category_id=data['category_id'],
-            cover_photo=data.get('cover_photo'),  # URL или None
-            page_photos=data.get('page_photos', [])
+            stock_quantity=data.get('stock_quantity'),
         )
-
-        logger.info(f"Книга '{data['title']}' добавлена админом {callback.from_user.id}")
+    except QuotaExceededError as error:
+        result_text = (
+            f"❌ <b>Лимит каталога исчерпан</b>\n\n"
+            f"Максимум книг по текущему тарифу: {error.limit}."
+        )
+    except Exception as error:
+        logger.error(f"Ошибка при создании книги: {error}")
+        result_text = "❌ <b>Не удалось создать книгу.</b>"
+    else:
+        staged = []
+        cover_file_id = data.get('cover_photo_id')
+        if isinstance(cover_file_id, str) and cover_file_id:
+            staged.append(("cover", 0, cover_file_id))
+        staged.extend(
+            ("page", position, marker.removeprefix("telegram-file:"))
+            for position, marker in enumerate(data.get("page_photos", []))
+            if isinstance(marker, str) and marker.startswith("telegram-file:")
+        )
+        saved_media = 0
+        failed_media = 0
+        for role, position, file_id in staged:
+            try:
+                await attach_telegram_media(callback.bot, book_id, role, position, file_id)
+                saved_media += 1
+            except Exception as error:
+                failed_media += 1
+                logger.warning(
+                    "Не удалось сохранить %s фото книги %s: %s", role, book_id, type(error).__name__
+                )
+        logger.info("Книга '%s' добавлена админом %s", data['title'], callback.from_user.id)
+        media_note = (
+            f"\n\n⚠️ Сохранено фото: {saved_media}; не удалось: {failed_media}. "
+            "Откройте редактирование книги и повторите загрузку неудачных фото."
+            if failed_media else ""
+        )
         result_text = (
             f"✅ <b>Книга успешно добавлена!</b>\n\n"
             f"ID: {book_id}\n"
             f"Название: {data['title']}"
-        )
-    except Exception as e:
-        logger.error(f"Ошибка при добавлении книги: {e}")
-        result_text = (
-            f"❌ <b>Ошибка при добавлении книги</b>\n\n"
-            f"{str(e)}"
+            + media_note
         )
 
-    # Удаляем сообщение с формой подтверждения, чтобы оно не висело в чате
-    # (могло быть как текстом, так и фото с подписью — delete работает в обоих случаях).
     try:
         await callback.message.delete()
-    except Exception as e:
-        logger.warning(f"Не удалось удалить сообщение подтверждения: {e}")
-
-    # Отправляем итоговое сообщение с кнопкой возврата в админ-панель
+    except Exception as error:
+        logger.warning(f"Не удалось удалить сообщение подтверждения: {error}")
     builder = InlineKeyboardBuilder()
     builder.button(text="🔙 В админ-панель", callback_data="admin_menu")
     await callback.message.answer(
         result_text,
         reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
-
     await state.clear()
     await callback.answer()
 
@@ -1112,7 +1104,8 @@ async def _build_books_list_view(state: FSMContext, page: int):
         for book in books:
             emoji = book.get("category_emoji") or "📖"
             title = escape(_short_book_title(book["title"], BOOK_TEXT_TITLE_LIMIT), quote=False)
-            text += f"{emoji} <b>{title}</b> — {book['price']} ₽\n"
+            stock_label = "∞" if book.get("stock_quantity") is None else f"{book['stock_quantity']} шт."
+            text += f"{emoji} <b>{title}</b> — {book['price']} ₽ · {stock_label}\n"
     elif search_query:
         text += "По этому запросу ничего не найдено."
     else:
@@ -1617,6 +1610,8 @@ async def start_change_book(callback: CallbackQuery, state: FSMContext):
     builder.button(text="✏️ Автор", callback_data=f"admin_book_edit_author_{book_id}")
     builder.button(text="✏️ Описание", callback_data=f"admin_book_edit_desc_{book_id}")
     builder.button(text="✏️ Цена", callback_data=f"admin_book_edit_price_{book_id}")
+    stock_label = "безлимит" if book.get("stock_quantity") is None else f"{book['stock_quantity']} шт."
+    builder.button(text=f"📦 Остаток: {stock_label}", callback_data=f"admin_book_edit_stock_{book_id}")
     builder.button(text="🖼 Обложка", callback_data=f"admin_book_edit_cover_{book_id}")
     builder.button(text="📄 Страницы", callback_data=f"admin_book_edit_pages_{book_id}")
     builder.button(text="📂 Категория", callback_data=f"admin_book_change_category_{book_id}")
@@ -1820,65 +1815,78 @@ async def process_new_price(message: Message, state: FSMContext):
         await message.answer("❌ Введите корректную цену (положительное число):")
 
 
-# ============================================
-# РЕДАКТИРОВАНИЕ ОБЛОЖКИ
-# ============================================
+@router.callback_query(F.data.regexp(r"^admin_book_edit_stock_\d+$"))
+async def edit_book_stock(callback: CallbackQuery, state: FSMContext):
+    book_id = int(callback.data.split("_")[-1])
+    await state.update_data(edit_book_id=book_id)
+    await state.set_state(EditBookState.waiting_for_new_stock)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data=f"admin_book_edit_{book_id}")
+    await callback.message.edit_text(
+        "📦 Введите остаток: целое число от 0 или «безлимит».",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.message(EditBookState.waiting_for_new_stock)
+async def process_new_stock(message: Message, state: FSMContext):
+    value = (message.text or "").strip().lower()
+    if value in {"безлимит", "безлимита", "unlimited", "∞"}:
+        stock_quantity = None
+    else:
+        try:
+            stock_quantity = int(value)
+            if stock_quantity < 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Введите неотрицательное число или «безлимит».")
+            return
+    data = await state.get_data()
+    book_id = data.get("edit_book_id")
+    try:
+        changed = await adjust_stock(
+            book_id, stock_quantity, message.from_user.id, "admin stock adjustment"
+        )
+    except InventoryUnavailableError:
+        await message.answer("❌ Остаток нельзя сделать меньше уже зарезервированных экземпляров.")
+        return
+    if not changed:
+        await message.answer("❌ Книга не найдена.")
+        return
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Назад к книге", callback_data=f"admin_book_edit_{book_id}")
+    label = "безлимит" if stock_quantity is None else f"{stock_quantity} шт."
+    await message.answer(f"✅ Остаток изменён: {label}", reply_markup=builder.as_markup())
+    await state.clear()
 
 @router.callback_query(F.data.regexp(r"^admin_book_edit_cover_\d+$"))
 async def edit_book_cover(callback: CallbackQuery, state: FSMContext):
-    """Показывает текущую обложку и предлагает прислать новую."""
+    """Показывает native обложку и предлагает прислать новую."""
     book_id = int(callback.data.split("_")[-1])
     book = await get_book(book_id)
-
     if not book:
         await callback.answer("❌ Книга не найдена", show_alert=True)
         return
 
     await state.update_data(edit_book_id=book_id)
     await state.set_state(EditBookState.waiting_for_new_cover)
-
-    current = book.get("cover_photo") or book.get("emoji") or ""
-    if current.startswith("http"):
-        preview_text = "🖼 <b>Текущая обложка:</b> картинка по ссылке"
-    elif current:
-        preview_text = f"🖼 <b>Текущая обложка:</b> {current}"
-    else:
-        preview_text = "🖼 <b>Текущая обложка:</b> не задана"
-
+    has_cover = media_variants_for_book_sync(book_id)["cover"] is not None
+    preview_text = "🖼 <b>Текущая обложка:</b> задана" if has_cover else "🖼 <b>Текущая обложка:</b> не задана"
     builder = InlineKeyboardBuilder()
-    builder.button(text="🗑 Удалить обложку", callback_data=f"admin_book_clear_cover_{book_id}")
+    if has_cover:
+        builder.button(text="🗑 Удалить обложку", callback_data=f"admin_book_clear_cover_{book_id}")
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
     builder.adjust(1)
-
     try:
         await callback.message.delete()
-        if current.startswith("http"):
-            await callback.message.answer_photo(
-                photo=current,
-                caption=(
-                    f"{preview_text}\n\n"
-                    "📸 <b>Пришлите новую обложку</b>\n\n"
-                    "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…"
-                ),
-                reply_markup=builder.as_markup(),
-                parse_mode="HTML",
-            )
-        else:
-            await callback.message.answer(
-                f"{preview_text}\n\n"
-                "📸 <b>Пришлите новую обложку</b>\n\n"
-                "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…",
-                reply_markup=builder.as_markup(),
-                parse_mode="HTML",
-            )
-    except Exception as e:
-        logger.error(f"Ошибка при показе обложки: {e}")
-        await callback.message.answer(
-            "📸 <b>Пришлите новую обложку</b>\n\n"
-            "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML",
-        )
+    except Exception:
+        pass
+    await callback.message.answer(
+        f"{preview_text}\n\n📸 <b>Пришлите новую обложку Telegram-фото</b>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
     await callback.answer()
 
 
@@ -1894,17 +1902,12 @@ async def process_new_cover_photo(message: Message, state: FSMContext, bot: Bot)
 
     photo = message.photo[-1]
     try:
-        file_url = await get_telegram_file_url(bot, photo.file_id)
-    except Exception as e:
-        logger.error(f"Не удалось получить file_path для обложки: {e}")
-        await message.answer(
-            "⚠️ Не удалось сохранить фото. Попробуйте ещё раз или пришлите URL."
-        )
+        await attach_telegram_media(bot, book_id, "cover", 0, photo.file_id)
+    except BookMediaError:
+        await message.answer("⚠️ Не удалось сохранить фото. Пришлите другое изображение.")
         return
 
-    # cover_photo хранит URL для БД; emoji — поле, которое читает
-    # Mini App / catalog.py для отрисовки обложки. Держим их в синхроне.
-    await update_book_full(book_id, cover_photo=file_url, emoji=file_url)
+    await update_book_full(book_id, cover_photo="", emoji="")
 
     builder = InlineKeyboardBuilder()
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
@@ -1922,25 +1925,15 @@ async def process_new_cover_url(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    text = (message.text or "").strip()
-    if not is_url(text):
-        await message.answer(
-            "❌ Это не похоже на ссылку. Пришлите файл-фото или URL вида https://…"
-        )
-        return
-
-    await update_book_full(book_id, cover_photo=text, emoji=text)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    await message.answer("✅ Обложка обновлена!", reply_markup=builder.as_markup())
-    await state.clear()
+    await message.answer("❌ Внешние ссылки на изображения больше не поддерживаются. Пришлите фото в Telegram.")
+    return
 
 
 @router.callback_query(F.data.regexp(r"^admin_book_clear_cover_\d+$"))
 async def clear_book_cover(callback: CallbackQuery, state: FSMContext):
     """Сбрасывает обложку книги."""
     book_id = int(callback.data.split("_")[-1])
+    clear_book_media_sync(book_id, "cover")
     await update_book_full(book_id, cover_photo="", emoji="")
     await state.clear()
 
@@ -1956,40 +1949,27 @@ async def clear_book_cover(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.regexp(r"^admin_book_edit_pages_\d+$"))
 async def edit_book_pages(callback: CallbackQuery, state: FSMContext):
-    """Список фото страниц с кнопками удалить / добавить / очистить."""
+    """Список native фото страниц с кнопками удалить / добавить / очистить."""
     book_id = int(callback.data.split("_")[-1])
     book = await get_book(book_id)
-
     if not book:
         await callback.answer("❌ Книга не найдена", show_alert=True)
         return
 
-    images = parseBookImages(book.get("images") or "[]")
-
+    pages = [item for item in list_book_media_sync(book_id) if item["role"] == "page"]
     text_lines = [f"📄 <b>Фото страниц книги</b> «{book['title']}»", ""]
-    if images:
-        text_lines.append(f"Сейчас: {len(images)} шт.")
-    else:
-        text_lines.append("Пока ни одного фото.")
-
+    text_lines.append(f"Сейчас: {len(pages)} шт." if pages else "Пока ни одного фото.")
     builder = InlineKeyboardBuilder()
-    if images:
-        for idx in range(len(images)):
-            builder.button(
-                text=f"🗑 Удалить #{idx + 1}",
-                callback_data=f"admin_book_page_del_{book_id}_{idx}",
-            )
+    for page in pages:
+        builder.button(
+            text=f"🗑 Удалить #{page['position'] + 1}",
+            callback_data=f"admin_book_page_del_{book_id}_{page['asset_id']}",
+        )
     builder.button(text="➕ Добавить фото", callback_data=f"admin_book_page_add_{book_id}")
-    if images:
+    if pages:
         builder.button(text="🧹 Очистить все", callback_data=f"admin_book_pages_clear_{book_id}")
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    # По одной кнопке на фото (чтобы было понятно, какое удаляешь),
-    # затем пара «Добавить/Очистить», затем «Назад» отдельно.
-    row_sizes: list[int] = [1] * len(images)
-    row_sizes.append(2 if images else 1)
-    row_sizes.append(1)
-    builder.adjust(*row_sizes)
-
+    builder.adjust(*([1] * len(pages)), 2 if pages else 1, 1)
     try:
         await callback.message.delete()
     except Exception:
@@ -2010,7 +1990,7 @@ async def add_page_start(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         "📄 <b>Пришлите фото страницы</b>\n\n"
-        "Можно приложить фото Telegram-сообщением или прислать ссылку http(s)://…",
+        "Прикрепите фото Telegram-сообщением.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
     )
@@ -2028,17 +2008,12 @@ async def process_new_page_photo(message: Message, state: FSMContext, bot: Bot):
         return
 
     photo = message.photo[-1]
+    position = next_page_position_sync(book_id)
     try:
-        file_url = await get_telegram_file_url(bot, photo.file_id)
-    except Exception as e:
-        logger.error(f"Не удалось получить file_path для фото страницы: {e}")
-        await message.answer("⚠️ Не удалось сохранить фото. Попробуйте ещё раз или пришлите URL.")
+        await attach_telegram_media(bot, book_id, "page", position, photo.file_id)
+    except BookMediaError:
+        await message.answer("⚠️ Не удалось сохранить фото. Пришлите другое изображение.")
         return
-
-    book = await get_book(book_id)
-    current_images = parseBookImages(book.get("images") or "[]")
-    current_images.append(file_url)
-    await update_book_full(book_id, images=json.dumps(current_images))
 
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Ещё фото", callback_data=f"admin_book_page_add_{book_id}")
@@ -2046,7 +2021,7 @@ async def process_new_page_photo(message: Message, state: FSMContext, bot: Bot):
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
     builder.adjust(2, 1)
     await message.answer(
-        f"✅ Фото #{len(current_images)} добавлено. Всего: {len(current_images)}.",
+        f"✅ Фото #{position + 1} добавлено. Всего: {position + 1}.",
         reply_markup=builder.as_markup(),
     )
     # Состояние оставляем — пользователь может добавить ещё или нажать кнопку.
@@ -2062,93 +2037,32 @@ async def process_new_page_url(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    text = (message.text or "").strip()
-    if not is_url(text):
-        await message.answer(
-            "❌ Это не похоже на ссылку. Пришлите фото или URL вида https://…"
-        )
-        return
-
-    book = await get_book(book_id)
-    current_images = parseBookImages(book.get("images") or "[]")
-    current_images.append(text)
-    await update_book_full(book_id, images=json.dumps(current_images))
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Ещё фото", callback_data=f"admin_book_page_add_{book_id}")
-    builder.button(text="📄 К списку фото", callback_data=f"admin_book_edit_pages_{book_id}")
-    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    builder.adjust(2, 1)
-    await message.answer(
-        f"✅ Фото #{len(current_images)} добавлено. Всего: {len(current_images)}.",
-        reply_markup=builder.as_markup(),
-    )
+    await message.answer("❌ Внешние ссылки на изображения больше не поддерживаются. Пришлите фото в Telegram.")
+    return
 
 
-@router.callback_query(F.data.regexp(r"^admin_book_page_del_\d+_\d+$"))
+@router.callback_query(F.data.regexp(r"^admin_book_page_del_\d+_[0-9a-f]{32}$"))
 async def delete_book_page(callback: CallbackQuery, state: FSMContext):
-    """Удаляет одну фото страницы по индексу."""
+    """Удаляет native фото страницы по opaque asset id."""
     parts = callback.data.split("_")
-    # admin_book_page_del_{book_id}_{idx}
     book_id = int(parts[-2])
-    idx = int(parts[-1])
-
-    book = await get_book(book_id)
-    if not book:
-        await callback.answer("❌ Книга не найдена", show_alert=True)
+    asset_id = parts[-1]
+    if not delete_book_media_sync(book_id, asset_id):
+        await callback.answer("❌ Фото не найдено", show_alert=True)
         return
-
-    images = parseBookImages(book.get("images") or "[]")
-    if 0 <= idx < len(images):
-        images.pop(idx)
-        await update_book_full(book_id, images=json.dumps(images))
-        await callback.answer("✅ Удалено")
-    else:
-        await callback.answer("❌ Не найдено", show_alert=True)
-        return
-
-    # Перерисовываем список фото
-    text_lines = [f"📄 <b>Фото страниц книги</b> «{book['title']}»", ""]
-    if images:
-        text_lines.append(f"Сейчас: {len(images)} шт.")
-    else:
-        text_lines.append("Пока ни одного фото.")
-
-    builder = InlineKeyboardBuilder()
-    if images:
-        for i in range(len(images)):
-            builder.button(
-                text=f"🗑 Удалить #{i + 1}",
-                callback_data=f"admin_book_page_del_{book_id}_{i}",
-            )
-    builder.button(text="➕ Добавить фото", callback_data=f"admin_book_page_add_{book_id}")
-    if images:
-        builder.button(text="🧹 Очистить все", callback_data=f"admin_book_pages_clear_{book_id}")
-    builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")
-    # По одной кнопке на фото (чтобы было понятно, какое удаляешь),
-    # затем пара «Добавить/Очистить», затем «Назад» отдельно.
-    row_sizes: list[int] = [1] * len(images)
-    row_sizes.append(2 if images else 1)
-    row_sizes.append(1)
-    builder.adjust(*row_sizes)
-
-    try:
-        await callback.message.edit_text("\n".join(text_lines), reply_markup=builder.as_markup(), parse_mode="HTML")
-    except Exception:
-        await callback.message.answer("\n".join(text_lines), reply_markup=builder.as_markup(), parse_mode="HTML")
+    await callback.answer("✅ Удалено")
+    await edit_book_pages(callback, state)
 
 
 @router.callback_query(F.data.regexp(r"^admin_book_pages_clear_\d+$"))
 async def clear_book_pages(callback: CallbackQuery, state: FSMContext):
-    """Очищает все фото страниц."""
+    """Очищает все native фото страниц."""
     book_id = int(callback.data.split("_")[-1])
-    await update_book_full(book_id, images="[]")
+    clear_book_media_sync(book_id, "page")
     await state.clear()
     await callback.answer("🧹 Очищено")
-
     book = await get_book(book_id)
     title = book['title'] if book else ""
-
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить фото", callback_data=f"admin_book_page_add_{book_id}")
     builder.button(text="◀️ Назад к книге", callback_data=f"admin_book_edit_{book_id}")

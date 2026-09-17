@@ -6,6 +6,7 @@ class AddBookState(StatesGroup):
     waiting_for_author = State()
     waiting_for_description = State()
     waiting_for_price = State()
+    waiting_for_stock = State()
     waiting_for_category = State()
     waiting_for_emoji = State()
     waiting_for_inner_images = State()
@@ -24,6 +25,7 @@ class EditBookState(StatesGroup):
     waiting_for_new_title = State()
     waiting_for_new_author = State()
     waiting_for_new_price = State()
+    waiting_for_new_stock = State()
     waiting_for_new_description = State()
     waiting_for_new_cover = State()    # обложка (фото или URL) из admin_books
     waiting_for_new_page = State()     # фото страницы (фото или URL) из admin_books
@@ -82,3 +84,15 @@ class TextSettingsState(StatesGroup):
 class SupportReplyState(StatesGroup):
     """Админ нажал «⚡ Ответить» на тикет — ждём текст ответа."""
     waiting_for_text = State()
+
+
+class DeliveryAdminState(StatesGroup):
+    """Администратор вводит трек-номер выбранной доставки."""
+    waiting_for_tracking_number = State()
+
+
+class DeliverySettingsState(StatesGroup):
+    waiting_for_price = State()
+    waiting_for_self_pickup_location = State()
+    waiting_for_self_pickup_schedule = State()
+    waiting_for_self_pickup_instructions = State()

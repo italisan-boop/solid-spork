@@ -4,15 +4,25 @@ from unittest.mock import AsyncMock, patch
 
 from config import settings
 from handlers.admin_books import AdminBooksMiddleware
-from handlers.admin_broadcast import process_broadcast_code, process_message
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import EditMessageText
+from handlers.admin_broadcast import cancel_broadcast, process_broadcast_code, process_message
 from handlers.admin_commands import cmd_drop_cache, submit_drop_cache_code
-from handlers.admin_orders import cancel_order, confirm_order
+from handlers.admin_orders import (
+    cancel_order,
+    confirm_order,
+    delivery_details,
+    delivery_status_update,
+    notify_confirmed_order,
+)
 from handlers.admin_promo import admin_promo_create
 from handlers.admin_support import cb_support_reply, deferred_admin_reply
 from handlers.admin_texts import admin_texts, save_template_value
 from handlers.categories import category_add_start
 from handlers.payments import (
+    admin_delivery_settings,
     admin_yookassa_settings,
+    delivery_toggle,
     pay_toggle_enabled,
     process_card,
     process_instructions,
@@ -129,6 +139,21 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         state.update_data.assert_awaited_once_with(message_text="hello")
         state.set_state.assert_awaited_once()
 
+    async def test_cancel_broadcast_tolerates_noop_edit_and_opens_admin_menu(self):
+        callback = self.callback("admin_broadcast_cancel", ADMIN_ID)
+        state = self.state()
+        callback.bot.edit_message_text.side_effect = TelegramBadRequest(
+            method=EditMessageText(text=""), message="message is not modified"
+        )
+        with patch("handlers.admin_broadcast.revoke_otp") as revoke_otp:
+            await cancel_broadcast(callback, state)
+
+        state.clear.assert_awaited_once()
+        revoke_otp.assert_called_once()
+        callback.answer.assert_awaited_once()
+        markup = callback.bot.edit_message_text.await_args.kwargs["reply_markup"]
+        self.assertEqual("admin_menu", markup.inline_keyboard[0][0].callback_data)
+
     async def test_template_callback_and_forged_writer_are_denied(self):
         callback = self.callback("admin_texts")
         message = self.message(text="<b>new</b>")
@@ -167,7 +192,40 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         update_order.assert_not_awaited()
         callback.answer.assert_awaited_once_with("❌ Нет прав", show_alert=True)
 
-    async def test_admin_order_callback_allows_pending_order_only(self):
+    async def test_non_admin_delivery_callbacks_cannot_read_or_update_order(self):
+        details_callback = self.callback("delivery_details:44")
+        status_callback = self.callback("delivery_status:44:delivered")
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("handlers.admin_orders.db.get_order_full", new_callable=AsyncMock) as get_order,
+            patch("handlers.admin_orders.db.complete_delivery_and_order", new_callable=AsyncMock) as complete,
+        ):
+            await delivery_details(details_callback, bot)
+            await delivery_status_update(status_callback, bot)
+
+        get_order.assert_not_awaited()
+        complete.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+
+    async def test_delivered_callback_uses_atomic_repository_operation(self):
+        callback = self.callback("delivery_status:44:delivered", ADMIN_ID)
+        bot = SimpleNamespace(send_message=AsyncMock())
+        order = {
+            "id": 44,
+            "user_id": 1,
+            "status": "confirmed",
+            "delivery": {"shipment_status": "ready_for_pickup"},
+        }
+        with (
+            patch("handlers.admin_orders.db.get_order_full", new_callable=AsyncMock, return_value=order),
+            patch("handlers.admin_orders.db.complete_delivery_and_order", new_callable=AsyncMock, return_value=True) as complete,
+            patch("handlers.admin_orders.order_detail", new_callable=AsyncMock),
+        ):
+            await delivery_status_update(callback, bot)
+
+        complete.assert_awaited_once_with(44, ADMIN_ID)
+        bot.send_message.assert_awaited_once()
+
         callback = self.callback("confirm_44", ADMIN_ID)
         order = {"id": 44, "user_id": 1, "status": "new"}
         with (
@@ -177,7 +235,9 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         ):
             await confirm_order(callback, callback.bot)
 
-        update_order.assert_awaited_once_with(44, "confirmed")
+        update_order.assert_awaited_once_with(
+            44, "confirmed", expected_statuses=("new", "payment_pending", "paid")
+        )
 
     async def test_admin_order_callback_rejects_stale_transition(self):
         callback = self.callback("confirm_44", ADMIN_ID)
@@ -200,7 +260,9 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         ):
             await confirm_order(callback, callback.bot)
 
-        update_order.assert_awaited_once_with(44, "confirmed")
+        update_order.assert_awaited_once_with(
+            44, "confirmed", expected_statuses=("new", "payment_pending", "paid")
+        )
 
     async def test_admin_cannot_cancel_verified_provider_payment(self):
         callback = self.callback("cancel_order_44", ADMIN_ID)
@@ -323,7 +385,73 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         set_payment.assert_not_awaited()
         set_stars.assert_not_awaited()
 
-    async def test_yookassa_callbacks_are_denied_to_non_admin(self):
+    async def test_delivery_settings_show_pickup_values_and_return_to_admin_menu(self):
+        callback = self.callback("payment_settings:delivery", ADMIN_ID)
+        values = {
+            "delivery_enabled": "1",
+            "delivery_sdek_pickup_enabled": "1",
+            "delivery_sdek_pickup_price_rub": "500",
+            "delivery_russian_post_pickup_enabled": "1",
+            "delivery_russian_post_pickup_price_rub": "500",
+            "delivery_self_pickup_enabled": "1",
+            "delivery_self_pickup_price_rub": "0",
+            "delivery_self_pickup_location": "Москва <склад>",
+            "delivery_self_pickup_schedule": "Пн–Пт 10:00–18:00",
+            "delivery_self_pickup_instructions": "Назовите номер заказа",
+        }
+        with (
+            patch("handlers.payments.db.get_all_payment_settings", new_callable=AsyncMock, return_value=values),
+            patch("handlers.payments.delivery_encryption_is_available", return_value=True),
+        ):
+            await admin_delivery_settings(callback)
+
+        text = callback.message.edit_text.await_args.args[0]
+        markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        buttons = [
+            (button.text, button.callback_data)
+            for row in markup.inline_keyboard
+            for button in row
+        ]
+        self.assertIn("📍 Адрес: Москва &lt;склад&gt;", text)
+        self.assertIn("🕒 График: Пн–Пт 10:00–18:00", text)
+        self.assertIn("📝 Инструкция: Назовите номер заказа", text)
+        self.assertIn(("◀️ В меню", "admin_menu"), buttons)
+
+        outsider = self.callback("delivery_toggle")
+        admin = self.callback("delivery_toggle", ADMIN_ID)
+        with (
+            patch("handlers.payments.db.get_payment_setting", new_callable=AsyncMock) as get_setting,
+            patch("handlers.payments.db.set_payment_setting", new_callable=AsyncMock) as set_setting,
+        ):
+            await delivery_toggle(outsider)
+
+        get_setting.assert_not_awaited()
+        set_setting.assert_not_awaited()
+
+        with (
+            patch("handlers.payments.db.get_payment_setting", new_callable=AsyncMock, return_value="0"),
+            patch("handlers.payments.db.set_payment_setting", new_callable=AsyncMock) as set_setting,
+            patch("handlers.payments.delivery_encryption_is_available", return_value=False),
+        ):
+            await delivery_toggle(admin)
+
+        set_setting.assert_not_awaited()
+        admin.answer.assert_awaited_once_with(
+            "Сначала настройте шифрование доставки в .env.", show_alert=True
+        )
+
+    async def test_admin_can_disable_delivery_without_reading_keyring(self):
+        callback = self.callback("delivery_toggle", ADMIN_ID)
+        with (
+            patch("handlers.payments.db.get_payment_setting", new_callable=AsyncMock, return_value="1"),
+            patch("handlers.payments.db.set_payment_setting", new_callable=AsyncMock) as set_setting,
+            patch("handlers.payments.admin_delivery_settings", new_callable=AsyncMock),
+        ):
+            await delivery_toggle(callback)
+
+        set_setting.assert_awaited_once_with("delivery_enabled", "0")
+
+
         callback = self.callback("payment_settings:yookassa")
         toggle_callback = self.callback("yookassa_toggle")
         with patch("handlers.payments.db.set_payment_setting", new_callable=AsyncMock) as set_payment:

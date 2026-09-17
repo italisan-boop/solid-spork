@@ -1,10 +1,14 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import logging
-from config.settings import settings
+from authz import has_permission_sync
+from controlplane.plan_policy import LIMIT_BROADCAST_RECIPIENTS_PER_DAY
+from runtime.features import QuotaExceededError
+from runtime.quota import reserve_daily_quota_sync
 from db.users import get_all_users
 from utils import sanitize_telegram_html
 from utils.otp_confirm import (
@@ -20,7 +24,7 @@ router = Router()
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in settings.ADMIN_IDS
+    return has_permission_sync(user_id, "broadcast.send")
 
 
 class BroadcastState(StatesGroup):
@@ -263,6 +267,17 @@ async def process_broadcast_code(message: Message, state: FSMContext):
         return
 
     users = await get_all_users()
+    user_count = len(users)
+    try:
+        reserve_daily_quota_sync(
+            LIMIT_BROADCAST_RECIPIENTS_PER_DAY, user_count
+        )
+    except QuotaExceededError as error:
+        await message.answer(
+            f"❌ Дневной лимит рассылки исчерпан: {error.limit} получателей."
+        )
+        await state.clear()
+        return
     success_count = 0
     fail_count = 0
 
@@ -301,7 +316,7 @@ async def process_broadcast_code(message: Message, state: FSMContext):
                 pass
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔙 В меню админа", callback_data="admin_broadcast_cancel")
+    builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     builder.adjust(1)
 
     await status_msg.edit_text(
@@ -338,13 +353,18 @@ async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     revoke_otp(callback.from_user.id, ACTION_MASS_BROADCAST)
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔙 В меню админа", callback_data="admin_broadcast_cancel")
+    builder.button(text="🔙 В меню админа", callback_data="admin_menu")
     builder.adjust(1)
 
-    await callback.bot.edit_message_text(
-        chat_id=callback.from_user.id,
-        message_id=callback.message.message_id,
-        text="❌ <b>Рассылка отменена</b>",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.from_user.id,
+            message_id=callback.message.message_id,
+            text="❌ <b>Рассылка отменена</b>",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc).lower():
+            raise
+    await callback.answer()

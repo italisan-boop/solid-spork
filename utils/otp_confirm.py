@@ -20,6 +20,7 @@ OTP_TTL_SECONDS = 120
 ACTION_DROP_CACHE = "drop_cache"
 ACTION_MASS_BROADCAST = "mass_broadcast"
 ACTION_PURGE_ARCHIVED_BOOKS = "purge_archived_books"
+ACTION_RESET_REFERRALS = "reset_referrals"
 
 # (admin_id, action) -> (code, expires_at)
 _pending: dict[tuple[int, str], tuple[str, float]] = {}

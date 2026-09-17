@@ -40,6 +40,14 @@ async def create_referral(referrer_id: int, referred_id: int):
         await db.commit()
 
 
+async def clear_referrals() -> int:
+    """Delete referral links while preserving issued user bonuses."""
+    async with connection() as db:
+        cursor = await db.execute("DELETE FROM referrals")
+        await db.commit()
+        return cursor.rowcount
+
+
 async def add_user_bonus(user_id: int, bonus_type: str, amount: int):
     """Начислить бонус пользователю"""
     async with connection() as db:

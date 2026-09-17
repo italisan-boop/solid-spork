@@ -15,7 +15,7 @@ from aiogram.fsm.storage.base import (
     StorageKey,
 )
 
-from db.schema import DB_PATH
+from db.schema import current_database_path
 
 
 class SQLiteStorage(BaseStorage):
@@ -25,10 +25,10 @@ class SQLiteStorage(BaseStorage):
 
     def __init__(
         self,
-        db_path: str = str(DB_PATH),
+        db_path: str | None = None,
         key_builder: "DefaultKeyBuilder | None" = None,
     ) -> None:
-        self.db_path = db_path
+        self.db_path = db_path or str(current_database_path())
         self._db: aiosqlite.Connection | None = None
         self.key_builder = key_builder or DefaultKeyBuilder(
             with_bot_id=True, with_destiny=True

@@ -1,46 +1,72 @@
 """Модуль для работы с книгами (каталог)"""
 import aiosqlite
 import json
+
+from controlplane.plan_policy import FEATURE_CATALOG, LIMIT_BOOKS
 from db.connection import connection
 from db.categories import NO_CATEGORY_NAME
 
 PAGE_SIZE = 20  # Количество книг на странице
 
 
-async def add_book(title: str, price: int, category_id: int,
-                   author: str = "", description: str = "",
-                   cover_photo: str = None, page_photos: list = None) -> int:
-    """Добавить новую книгу в каталог"""
-    # Преобразуем список фото страниц в JSON
-    images_json = json.dumps(page_photos) if page_photos else "[]"
+async def add_book(
+    title: str,
+    price: int,
+    category_id: int | None,
+    *,
+    author: str = "",
+    description: str = "",
+    stock_quantity: int | None = None,
+) -> int:
+    from runtime.context import maybe_current_tenant_context
+    from runtime.features import require_feature
+    from runtime.quota import require_count_quota
 
-    # Получаем название категории по ID. Если категория не указана или
-    # удалена — сохраняем плейсхолдер NO_CATEGORY_NAME, чтобы catalog.py /
-    # Mini App корректно отрисовали «📦 Без категории» через category_display.
+    tenant_context = maybe_current_tenant_context()
+    if tenant_context is not None:
+        require_feature(FEATURE_CATALOG, tenant_context)
     async with connection() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT name FROM categories WHERE id = ?",
-            (category_id,)
-        )
-        row = await cursor.fetchone()
-        category_name = row['name'] if row else NO_CATEGORY_NAME
-
-    async with connection() as db:
-        # Зеркалим cover_photo в поле emoji — фронтенд Mini App и
-        # catalog.py читают именно emoji. Без этого каталог рисует 📚
-        # вместо присланной обложки.
-        emoji_value = cover_photo or ''
-        # created_at проставляем явно: после миграции колонка added без
-        # DEFAULT (SQLite запрещает неконстантный дефолт в ADD COLUMN), и
-        # DEFAULT из CREATE TABLE работает только на свежих инсталляциях.
-        cursor = await db.execute(
-            """INSERT INTO books (title, price, category, category_id, author, description, cover_photo, images, emoji, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-            (title, price, category_name, category_id, author, description, cover_photo, images_json, emoji_value)
-        )
-        await db.commit()
-        return cursor.lastrowid
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT name FROM categories WHERE id = ?",
+                (category_id,),
+            )
+            row = await cursor.fetchone()
+            category_name = row["name"] if row else NO_CATEGORY_NAME
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) FROM books
+                WHERE is_active = 1 AND COALESCE(is_archived, 0) = 0
+                """
+            )
+            active_books = (await cursor.fetchone())[0]
+            require_count_quota(LIMIT_BOOKS, active_books, context=tenant_context)
+            cursor = await db.execute(
+                """INSERT INTO books (
+                       title, price, category, category_id, author, description, cover_photo,
+                       images, emoji, stock_quantity, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, '', '[]', '', ?, CURRENT_TIMESTAMP)""",
+                (
+                    title, price, category_name, category_id, author, description, stock_quantity,
+                ),
+            )
+            book_id = cursor.lastrowid
+            if stock_quantity is not None and stock_quantity > 0:
+                await db.execute(
+                    """
+                    INSERT INTO inventory_movements (
+                        book_id, action, stock_delta, stock_after, reserved_after, reason, source_key
+                    ) VALUES (?, 'opening_balance', ?, ?, 0, 'initial stock', ?)
+                    """,
+                    (book_id, stock_quantity, stock_quantity, f"opening:{book_id}"),
+                )
+            await db.commit()
+            return book_id
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def find_book_by_title_author(title: str, author: str) -> dict | None:
@@ -72,7 +98,9 @@ async def get_all_books() -> list:
     async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            """SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images, b.category_id, b.sort_order,
+            """SELECT b.id, b.title, b.price, b.category, b.author, b.emoji, b.cover_photo,
+                      b.description, b.images, b.category_id, b.sort_order,
+                      b.stock_quantity,
                       c.emoji as category_emoji
                FROM books b
                LEFT JOIN categories c ON b.category_id = c.id
@@ -98,7 +126,9 @@ async def get_book(book_id: int) -> dict:
     async with connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            """SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images, b.category_id, b.sort_order,
+            """SELECT b.id, b.title, b.price, b.category, b.author, b.emoji, b.cover_photo,
+                      b.description, b.images, b.category_id, b.sort_order,
+                      b.stock_quantity,
                       c.emoji as category_emoji
                FROM books b
                LEFT JOIN categories c ON b.category_id = c.id
@@ -162,23 +192,44 @@ async def delete_book(book_id: int) -> bool:
     """Мягко удалить (архивировать) одну активную книгу."""
     result = await archive_books([book_id])
     archived = bool(result["archived_ids"])
-    if archived:
-        print(f"✅ Книга #{book_id} перенесена в архив")
     return archived
 
 
 async def restore_book(book_id: int) -> bool:
     """Вернуть книгу из архива в каталог (is_archived=0, is_active=1)."""
+    from runtime.context import maybe_current_tenant_context
+    from runtime.features import require_feature
+    from runtime.quota import require_count_quota
+
+    tenant_context = maybe_current_tenant_context()
+    if tenant_context is not None:
+        require_feature(FEATURE_CATALOG, tenant_context)
     async with connection() as db:
-        cursor = await db.execute(
-            "UPDATE books SET is_archived = 0, is_active = 1 WHERE id = ? AND is_archived = 1",
-            (book_id,)
-        )
-        await db.commit()
-    restored = cursor.rowcount > 0
-    if restored:
-        print(f"✅ Книга #{book_id} восстановлена из архива")
-    return restored
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT 1 FROM books WHERE id = ? AND is_archived = 1", (book_id,)
+            )
+            if await cursor.fetchone() is None:
+                await db.commit()
+                return False
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) FROM books
+                WHERE is_active = 1 AND COALESCE(is_archived, 0) = 0
+                """
+            )
+            active_books = (await cursor.fetchone())[0]
+            require_count_quota(LIMIT_BOOKS, active_books, context=tenant_context)
+            await db.execute(
+                "UPDATE books SET is_archived = 0, is_active = 1 WHERE id = ?",
+                (book_id,),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def get_archived_books(limit: int | None = None, offset: int = 0) -> list:
@@ -320,6 +371,18 @@ async def update_book_full(book_id: int, **kwargs) -> bool:
     return True
 
 
+async def set_book_stock(book_id: int, stock_quantity: int | None) -> bool:
+    if stock_quantity is not None and stock_quantity < 0:
+        raise ValueError("stock quantity must be non-negative")
+    async with connection() as db:
+        cursor = await db.execute(
+            "UPDATE books SET stock_quantity = ? WHERE id = ?",
+            (stock_quantity, book_id),
+        )
+        await db.commit()
+    return cursor.rowcount > 0
+
+
 async def get_books_count(is_active: bool = True, search_query: str = "") -> int:
     """Получить количество книг с опциональным поиском по названию.
 
@@ -373,7 +436,7 @@ async def get_all_books_paginated(
             like = f"%{search_query}%"
             cursor = await db.execute(
                 f"""SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images,
-                           b.category_id, b.sort_order, b.created_at,
+                           b.category_id, b.sort_order, b.created_at, b.stock_quantity,
                            c.emoji as category_emoji
                     FROM books b
                     LEFT JOIN categories c ON b.category_id = c.id
@@ -385,7 +448,7 @@ async def get_all_books_paginated(
         else:
             cursor = await db.execute(
                 f"""SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images,
-                           b.category_id, b.sort_order, b.created_at,
+                           b.category_id, b.sort_order, b.created_at, b.stock_quantity,
                            c.emoji as category_emoji
                     FROM books b
                 LEFT JOIN categories c ON b.category_id = c.id

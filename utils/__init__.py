@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timezone, timedelta
 
-from .logger import setup_logger
+from .logger import log_event, setup_logger
 
 
 def format_local_time(utc_time_str: str) -> str:

@@ -7,15 +7,15 @@ from handlers.admin_orders import admin_keyboard, admin_menu, cmd_admin
 
 EXPECTED_BUTTONS = [
     ("📋 Все заказы", "admin_orders_all"),
-    ("🆕 Новые", "admin_orders_new"),
-    ("✅ Подтверждённые", "admin_orders_confirmed"),
     ("📊 Статистика", "admin_stats"),
     ("📢 Рассылка", "admin_broadcast"),
     ("📚 Управление книгами", "admin_books_menu"),
     ("📂 Управление категориями", "admin_categories"),
     ("💳 Настройки оплаты", "admin_payments"),
+    ("🚚 Доставка", "payment_settings:delivery"),
     ("🎟️ Промокоды", "admin_promo"),
     ("🗑 Сброс кэша", "admin_drop_cache"),
+    ("🧹 Сброс рефералов", "admin_reset_referrals"),
     ("🎧 Поддержка", "admin_support_menu"),
     ("✏️ Тексты", "admin_texts"),
 ]

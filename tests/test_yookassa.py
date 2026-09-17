@@ -46,6 +46,14 @@ class YooKassaApiTests(unittest.TestCase):
         self._patches.enter_context(patch.object(schema, "DB_PATH", self.database_path))
         self._patches.enter_context(patch.object(db_connection, "DB_PATH", self.database_path))
         self._patches.enter_context(patch.object(server, "BOT_TOKEN", TEST_TOKEN))
+        self._patches.enter_context(patch.object(server.settings, "DELIVERY_ENCRYPTION_ACTIVE_KEY_ID", "test"))
+        self._patches.enter_context(
+            patch.object(
+                server.settings,
+                "DELIVERY_ENCRYPTION_KEYS_JSON",
+                '{"test":"eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg="}',
+            )
+        )
         self._patches.enter_context(patch.object(server.settings, "YOOKASSA_SHOP_ID", "test-shop"))
         self._patches.enter_context(patch.object(server.settings, "YOOKASSA_SECRET_KEY", "test-secret"))
         self._patches.enter_context(
@@ -55,6 +63,9 @@ class YooKassaApiTests(unittest.TestCase):
         self._patches.enter_context(patch("server.send_telegram_with_keyboard", return_value={"ok": True}))
         self._patches.enter_context(patch("server.send_stars_invoice", return_value={"ok": True}))
         schema.initialize_database(self.database_path)
+        self._execute(
+            "UPDATE payment_settings SET setting_value = '1' WHERE setting_key = 'delivery_enabled'"
+        )
         self._execute(
             "UPDATE payment_settings SET setting_value = '1' WHERE setting_key = 'yookassa_enabled'"
         )
@@ -86,6 +97,13 @@ class YooKassaApiTests(unittest.TestCase):
             "checkout_key": checkout_key or str(uuid.uuid4()),
             "payment_method": "yookassa",
             "promo_code": "",
+            "delivery": {
+                "method": "sdek_pickup",
+                "recipient_name": "Покупатель",
+                "recipient_phone": "+79991234567",
+                "city": "Москва",
+                "pickup_point": "ПВЗ СДЭК 123",
+            },
         }
 
     def _create_order(self, provider_response, checkout_key=None):
@@ -114,13 +132,13 @@ class YooKassaApiTests(unittest.TestCase):
         self.assertEqual("yookassa", result["payment_method"])
         self.assertEqual("awaiting_yookassa_payment", result["status"])
         self.assertEqual("https://payment.example/provider-payment-1", result["confirmation_url"])
-        self.assertEqual("1200.00", create_payment.call_args.args[0])
+        self.assertEqual("1700.00", create_payment.call_args.args[0])
         self.assertEqual(1, self._rows("SELECT COUNT(*) FROM orders")[0][0])
         attempts = self._rows(
             "SELECT idempotence_key, provider_payment_id, amount, currency, status FROM yookassa_payments"
         )
         self.assertEqual(1, len(attempts))
-        self.assertEqual(("provider-payment-1", "1200.00", "RUB", "pending"), attempts[0][1:])
+        self.assertEqual(("provider-payment-1", "1700.00", "RUB", "pending"), attempts[0][1:])
         self.assertEqual(200, reused.status_code)
         self.assertTrue(reused.get_json()["reused"])
         self.assertEqual(result["order_id"], reused.get_json()["order_id"])
@@ -175,7 +193,7 @@ class YooKassaApiTests(unittest.TestCase):
             "id": "provider-payment-1",
             "status": "succeeded",
             "paid": True,
-            "amount": {"value": "1200.00", "currency": "RUB"},
+            "amount": {"value": "1700.00", "currency": "RUB"},
             "metadata": {"order_id": str(order_id), "attempt_id": str(attempt_id)},
         }
         with (

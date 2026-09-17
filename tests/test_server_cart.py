@@ -36,6 +36,14 @@ class PersistentCartApiTests(unittest.TestCase):
         self._patches.enter_context(patch.object(schema, "DB_PATH", self.database_path))
         self._patches.enter_context(patch.object(db_connection, "DB_PATH", self.database_path))
         self._patches.enter_context(patch.object(server, "BOT_TOKEN", TEST_TOKEN))
+        self._patches.enter_context(patch.object(server.settings, "DELIVERY_ENCRYPTION_ACTIVE_KEY_ID", "test"))
+        self._patches.enter_context(
+            patch.object(
+                server.settings,
+                "DELIVERY_ENCRYPTION_KEYS_JSON",
+                '{"test":"eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg="}',
+            )
+        )
         self._patches.enter_context(patch("server.send_telegram_message", return_value={"ok": True}))
         self._patches.enter_context(patch("server.send_telegram_with_keyboard", return_value={"ok": True}))
         self._patches.enter_context(patch("server.send_stars_invoice", return_value={"ok": True}))
@@ -117,6 +125,19 @@ class PersistentCartApiTests(unittest.TestCase):
         self.assertEqual(1, stale.get_json()["revision"])
         self.assertEqual([{"id": 1, "quantity": 1}], self._cart().get_json()["cart"])
 
+    def test_cart_rejects_quantity_above_finite_availability_with_canonical_snapshot(self):
+        self._execute("UPDATE books SET stock_quantity = 3 WHERE id = 1")
+        saved = self._save([{"id": 1, "quantity": 3}], 0)
+        self.assertEqual(200, saved.status_code)
+
+        rejected = self._save([{"id": 1, "quantity": 4}], 1)
+
+        self.assertEqual(409, rejected.status_code)
+        self.assertEqual("inventory_changed", rejected.get_json()["code"])
+        self.assertEqual([{"id": 1, "quantity": 3}], rejected.get_json()["cart"])
+        self.assertEqual(1, rejected.get_json()["revision"])
+        self.assertEqual([{"id": 1, "quantity": 3}], self._cart().get_json()["cart"])
+
     def test_cart_rejects_inactive_book_without_replacing_saved_cart(self):
         self.assertEqual(200, self._save([{"id": 1, "quantity": 1}], 0).status_code)
         self._execute("UPDATE books SET is_active = 0 WHERE id = 2")
@@ -140,6 +161,13 @@ class PersistentCartApiTests(unittest.TestCase):
                 "checkout_key": "00000000-0000-4000-8000-000000000001",
                 "payment_method": "none",
                 "promo_code": "",
+                "delivery": {
+                    "method": "sdek_pickup",
+                    "recipient_name": "Покупатель",
+                    "recipient_phone": "+79991234567",
+                    "city": "Москва",
+                    "pickup_point": "ПВЗ СДЭК 123",
+                },
             },
             headers=signed_headers(101),
         )
@@ -162,6 +190,13 @@ class PersistentCartApiTests(unittest.TestCase):
                 "checkout_key": "00000000-0000-4000-8000-000000000002",
                 "payment_method": "none",
                 "promo_code": "",
+                "delivery": {
+                    "method": "sdek_pickup",
+                    "recipient_name": "Покупатель",
+                    "recipient_phone": "+79991234567",
+                    "city": "Москва",
+                    "pickup_point": "ПВЗ СДЭК 123",
+                },
             },
             headers=signed_headers(),
         )
@@ -178,6 +213,13 @@ class PersistentCartApiTests(unittest.TestCase):
                 "checkout_key": "00000000-0000-4000-8000-000000000003",
                 "payment_method": "none",
                 "promo_code": "",
+                "delivery": {
+                    "method": "sdek_pickup",
+                    "recipient_name": "Покупатель",
+                    "recipient_phone": "+79991234567",
+                    "city": "Москва",
+                    "pickup_point": "ПВЗ СДЭК 123",
+                },
             },
             headers=signed_headers(),
         )

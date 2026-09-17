@@ -125,7 +125,10 @@
       <p>Создайте локальный файл <code>.env</code> в корне проекта. Его нельзя добавлять в Git.</p>
       <pre><code>BOT_TOKEN=получите_новый_токен_в_BotFather
 WEBAPP_URL=https://shop.example.ru
-ADMIN_IDS=123456789
+# Единственный неизменяемый ID владельца:
+OWNER_TELEGRAM_ID=123456789
+# ADMIN_IDS — временная совместимость при миграции старой установки:
+# ADMIN_IDS=123456789
 DATABASE_PATH=C:\\Apps\\semena-znaniy\\semena_znaniy.sqlite
 RUN_MODE=polling
 # Только для RUN_MODE=webhook:
@@ -136,13 +139,25 @@ RUN_MODE=polling
 # ЮKassa: задаются только локально или в secret store:
 # YOOKASSA_SHOP_ID=идентификатор_магазина
 # YOOKASSA_SECRET_KEY=секретный_ключ_ЮKassa
-# YOOKASSA_RETURN_URL=https://shop.example.ru/payments/yookassa/return</code></pre>
+# YOOKASSA_RETURN_URL=https://shop.example.ru/payments/yookassa/return
+# Операции и резервное копирование:
+# LOG_FORMAT=json
+# LOG_LEVEL=INFO
+# REPORT_TIMEZONE=Europe/Moscow
+# BACKUP_DIR=D:\secure-backups\semena-znaniy
+# BACKUP_DAILY_RETENTION=14
+# BACKUP_MONTHLY_RETENTION=3
+# СДЭК ПВЗ: получатель и пункт хранятся только зашифрованно:
+# DELIVERY_PII_RETENTION_DAYS=90
+# DELIVERY_ENCRYPTION_ACTIVE_KEY_ID=2026-09
+# DELIVERY_ENCRYPTION_KEYS_JSON={"2026-09":"base64url_32-byte_key"}</code></pre>
       <table>
         <thead><tr><th>Переменная</th><th>Назначение</th></tr></thead>
         <tbody>
           <tr><td><code>BOT_TOKEN</code></td><td>Обязательный token Telegram-бота. Используется ботом, отправкой уведомлений и проверкой WebApp <code>initData</code>.</td></tr>
           <tr><td><code>WEBAPP_URL</code></td><td>Публичный HTTPS-адрес Mini App. Бот передаёт его в кнопке открытия магазина.</td></tr>
-          <tr><td><code>ADMIN_IDS</code></td><td>Telegram ID администраторов через запятую. Это security-critical настройка, хотя она не является секретом.</td></tr>
+          <tr><td><code>OWNER_TELEGRAM_ID</code></td><td>Единственный неизменяемый Telegram ID владельца. Владелец назначает менеджеров и кладовщиков в защищённом разделе Operations Mini App.</td></tr>
+          <tr><td><code>ADMIN_IDS</code></td><td>Временная совместимость для старой установки до задания <code>OWNER_TELEGRAM_ID</code>. После миграции не используйте её как список равноправных администраторов.</td></tr>
           <tr><td><code>DATABASE_PATH</code></td><td>Обязательный абсолютный путь к общей SQLite-базе. Если файла нет, приложение создаст его и применит схему.</td></tr>
           <tr><td><code>RUN_MODE</code></td><td>Рабочий переключатель: <code>polling</code> запускает получение updates через Telegram API; <code>webhook</code> запускает aiohttp webhook listener.</td></tr>
           <tr><td><code>WEBHOOK_URL</code></td><td>Обязательный публичный HTTPS URL вида <code>https://домен/webhook</code> только для режима webhook.</td></tr>
@@ -151,6 +166,14 @@ RUN_MODE=polling
           <tr><td><code>YOOKASSA_SHOP_ID</code></td><td>Идентификатор магазина из личного кабинета ЮKassa. Нужен только серверу для создания и проверки платежей.</td></tr>
           <tr><td><code>YOOKASSA_SECRET_KEY</code></td><td>Секрет API ЮKassa. Хранится только в <code>.env</code> или secret store, не вводится в Telegram, не попадает в SQLite, ответы API, логи или Git.</td></tr>
           <tr><td><code>YOOKASSA_RETURN_URL</code></td><td>Публичный HTTPS-адрес <code>/payments/yookassa/return</code>. Это только возврат в Mini App после оплаты, а не подтверждение платежа.</td></tr>
+          <tr><td><code>LOG_FORMAT</code> / <code>LOG_LEVEL</code></td><td><code>json</code> включает безопасные структурированные события в stdout; журналы не содержат реквизиты, payload webhook, initData или секреты.</td></tr>
+          <tr><td><code>REPORT_TIMEZONE</code></td><td>Часовой пояс периодов CSV-продаж, например <code>Europe/Moscow</code>.</td></tr>
+          <tr><td><code>BACKUP_DIR</code></td><td>Абсолютная защищённая папка вне проекта и папки БД. Обязательна только для команды online backup.</td></tr>
+          <tr><td><code>BACKUP_DAILY_RETENTION</code> / <code>BACKUP_MONTHLY_RETENTION</code> / <code>BACKUP_INTERVAL_SECONDS</code></td><td>Число daily/monthly копий и интервал schedule. Backup использует SQLite online backup, integrity/foreign-key/schema проверку и lease, поэтому polling и webhook процессы не создают одну копию параллельно.</td></tr>
+          <tr><td><code>Цены доставки</code></td><td>Фиксированные цены СДЭК, Почты России и самовывоза задаются и изменяются только в <code>Админ-панель → 🚚 Доставка</code>; клиент не может их изменить.</td></tr>
+          <tr><td><code>DELIVERY_PII_RETENTION_DAYS</code></td><td>Сколько дней после статуса «Выдан / доставлен» хранить зашифрованные контакты и ПВЗ; по умолчанию 90.</td></tr>
+          <tr><td><code>DELIVERY_ENCRYPTION_ACTIVE_KEY_ID</code></td><td>Идентификатор ключа, которым шифруются новые адресные данные. Не является ключом, но должен соответствовать записи keyring.</td></tr>
+          <tr><td><code>DELIVERY_ENCRYPTION_KEYS_JSON</code></td><td>JSON keyring base64url-ключей AES-256-GCM. Только для <code>.env</code> или secret store; не передаётся в Telegram, SQLite, API, логи или Git.</td></tr>
         </tbody>
       </table>
       <div class="warning"><p>Не сохраняйте token в исходниках, URL изображений, логах, скриншотах или Git-коммитах. При любом раскрытии token немедленно отзовите его через BotFather и выпустите новый.</p></div>
@@ -180,6 +203,42 @@ PORT=8080
     </section>
 
     <section>
+      <h2>4.5. White-label: рабочий порядок</h2>
+      <p>White-label платформа разделена на control plane и изолированные runtime каждого магазина. У каждого клиента собственные SQLite-база, папка media, резервные копии, домен, bot token и платёжные credentials. Один runtime-процесс обслуживает только один магазин.</p>
+      <h3>Платформенный администратор</h3>
+      <ol>
+        <li>Откройте Platform Console через платформенного Telegram-бота и создайте черновик магазина: название, slug, Telegram ID владельца и тариф <b>Старт</b>, <b>Бизнес</b> или <b>Pro</b>.</li>
+        <li>Укажите только ссылки на внешний SecretStore для tenant bot token и webhook secret. Не вставляйте значения токенов, ключей ЮKassa или webhook secrets в Platform Console, SQLite, Telegram, Git или логи.</li>
+        <li>Подготовьте runtime. Provisioning создаст отдельные <code>app.sqlite</code>, <code>media</code> и <code>backups</code> в tenant-private каталогах.</li>
+        <li>Запустите tenant worker с обязательным <code>TENANT_RUNTIME_ID</code>. Для production webhook компонент <code>bot</code> обслуживает Telegram и tenant-gated Mini App; для polling используйте отдельные процессы <code>bot</code> и <code>web</code> этого же tenant.</li>
+        <li>Reverse proxy должен направлять только verified canonical/custom host этого tenant в его worker и сохранять проверенный <code>Host</code>. Не передавайте tenant ID в query, cookie или клиентском заголовке.</li>
+        <li>После того как владелец подтвердит магазин в <code>/setup</code>, нажмите «Активировать магазин» в Platform Console. До активации публичная витрина недоступна, а canonical host допускает только owner onboarding.</li>
+      </ol>
+      <h3>Владелец магазина</h3>
+      <ol>
+        <li>Откройте <code>/setup</code из своего tenant Telegram-бота, подтвердите владение и настройте доступные название, цвета и контакт поддержки.</li>
+        <li>Тариф, лимиты, включённые модули, домен, lifecycle, bot и платёжные секреты меняет только платформенный администратор.</li>
+        <li>Добавляйте книгу через поддерживаемый мастер: название, автор, описание, цена, остаток, категория, затем Telegram-фото обложки и страниц.</li>
+      </ol>
+      <div class="note"><p>Медиа принимаются только как Telegram-фото. Бот локально обрабатывает их в tenant-private WebP варианты и Mini App получает только opaque URL вида <code>/media/books/&lt;asset-id&gt;/display</code>. Ссылки на изображения не принимаются. Старые внешние изображения могут отображаться только временно до замены загруженными фото; Telegram/Bot API file URL не выдаются клиенту.</p></div>
+      <table>
+        <thead><tr><th>Тариф</th><th>Доступ</th><th>Базовые лимиты</th></tr></thead>
+        <tbody>
+          <tr><td>Старт</td><td>Каталог, заказы, бренд и разрешённые настройки</td><td>100 книг, один владелец</td></tr>
+          <tr><td>Бизнес</td><td>Старт + сотрудники, склад, импорт, аналитика</td><td>1 000 книг, 5 сотрудников, 2 импорта в сутки</td></tr>
+          <tr><td>Pro</td><td>Бизнес + кампании и рассылки</td><td>10 000 книг, 20 сотрудников, 20 кампаний, 2 000 получателей рассылки в сутки</td></tr>
+        </tbody>
+      </table>
+      <h3>Проверка перед передачей</h3>
+      <ul>
+        <li>Проверьте, что <code>BOOK_MEDIA_ROOT</code> — абсолютная tenant-private папка вне репозитория и public static tree; в tenant runtime она задаётся provisioning автоматически.</li>
+        <li>Откройте витрину на verified host, добавьте обложку и album страниц, затем проверьте карточку, модалку, замену и удаление фото.</li>
+        <li>В Operations убедитесь, что остатки загружаются без журнала, а движения появляются только после кнопки <b>Журнал действий</b>.</li>
+        <li>Проверьте checkout, tenant-local backup, lifecycle и отсутствие cross-tenant доступа для двух тестовых магазинов.</li>
+      </ul>
+    </section>
+
+    <section>
       <h2>5. Настройка Telegram Mini App</h2>
       <ol>
         <li>Разместите Mini App по адресу из <code>WEBAPP_URL</code> с действующим HTTPS-сертификатом.</li>
@@ -205,7 +264,30 @@ PORT=8080
     </section>
 
     <section>
-      <h2>7. Администрирование каталога</h2>
+      <h2>7. Доставка и самовывоз</h2>
+      <p>Доступны три способа: <b>СДЭК — пункт выдачи</b> и <b>Почта России — отделение</b> по 500 ₽, а также <b>самовывоз</b> за 0 ₽. Расчёт тарифов, поиск отделений, печать ярлыков и автоматическая проверка статуса перевозчика не входят в текущую версию.</p>
+      <p>По умолчанию доставка выключена: это режим для цифровых книг. Сначала настройте keyring ниже и перезапустите процессы, затем откройте <b>Админ-панель → 🚚 Доставка</b>. В этом экране включаются отдельные способы, меняются цены, а для самовывоза заполняются адрес, график и инструкция.</p>
+      <ol>
+        <li>Для СДЭК покупатель указывает получателя, телефон, город и код либо адрес ПВЗ. Для Почты России — получателя, телефон, город и индекс либо адрес выбранного отделения.</li>
+        <li>Самовывоз нельзя включить, пока администратор не задал адрес, график и инструкцию. Эти публичные условия фиксируются в созданном заказе и показываются покупателю в «Моих заказах».</li>
+        <li>В карточке заказа нажмите <b>Данные доставки</b>. Данные покупателя для СДЭК/Почты России расшифровываются только по явному действию администратора и отправляются в личный Telegram-чат с protected content.</li>
+        <li>После сборки для СДЭК введите трек из букв, цифр и дефиса; для Почты России — 14-значный номер отправления. Ссылки создаются сервером только на официальные страницы tracking, произвольные URL не принимаются.</li>
+        <li>Самовывоз проходит этапы «Собран → Готов к выдаче → Выдан / доставлен» и не имеет трек-номера.</li>
+        <li>После статуса «Выдан / доставлен» через 90 календарных дней зашифрованные данные покупателя удаляются. Статус, сумма, трек и состав заказа остаются для учёта.</li>
+      </ol>
+      <h3>Создание и ротация ключа</h3>
+      <pre><code># Выполните локально один раз и сохраните результат только в secret store:
+.venv\Scripts\python.exe -c "import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('='))"
+
+# В .env (одна строка JSON, без опубликования ключа):
+DELIVERY_ENCRYPTION_ACTIVE_KEY_ID=2026-09
+DELIVERY_ENCRYPTION_KEYS_JSON={"2026-09":"результат_команды"}</code></pre>
+      <p>Для ротации добавьте новый ключ в JSON, назначьте его <code>DELIVERY_ENCRYPTION_ACTIVE_KEY_ID</code> и перезапустите приложение. Старый ключ остаётся decrypt-only: не удаляйте его, пока все записи с ним не обезличены и не истёк срок хранения резервных копий. Неверный или отсутствующий keyring останавливает checkout доставки без сохранения адреса.</p>
+      <div class="warning"><p>SQLite и её backup содержат зашифрованные данные доставки. Доступ к файлам БД, <code>.env</code> и резервным копиям должен быть только у service account и доверенных администраторов; не публикуйте их и не отправляйте в поддержку.</p></div>
+    </section>
+
+    <section>
+      <h2>8. Администрирование каталога</h2>
       <ul>
         <li>Обычное удаление книги переносит её в архив и скрывает из магазина.</li>
         <li>В управлении книгами можно выбрать несколько книг на разных страницах и одним действием перенести их в архив.</li>
@@ -216,7 +298,7 @@ PORT=8080
     </section>
 
     <section>
-      <h2>8. Проверка перед передачей покупателю</h2>
+      <h2>9. Проверка перед передачей покупателю</h2>
       <pre><code>set PYTHONIOENCODING=utf-8
 .venv\Scripts\python.exe -m unittest discover -s tests -v</code></pre>
       <ul class="checklist">
@@ -225,23 +307,27 @@ PORT=8080
         <li>Проверить вход админа, добавление/архивирование/восстановление книги и работу поддержки.</li>
         <li>Проверить открытие Mini App из Telegram, persistent-корзину и checkout.</li>
         <li>Проверить, что неадминистратор не открывает admin API и admin callbacks.</li>
+        <li>Проверьте в Operations Mini App роли: владелец видит imports/staff/audit, менеджер — payment/delivery/support, кладовщик — только остатки и сборку.</li>
+        <li>Проверьте CSV/XLSX preview до commit, чек-лист сборки и A4-лист на тестовом заказе.</li>
+        <li>GitHub Actions в <code>.github/workflows/ci.yml</code> должен пройти до слияния: workflow не использует production secrets или production SQLite.</li>
         <li>Проверить, что <code>.env</code>, SQLite-файлы и резервные копии не добавлены в Git.</li>
       </ul>
     </section>
 
     <section>
-      <h2>9. Резервная копия и восстановление</h2>
+      <h2>10. Резервная копия и восстановление</h2>
       <ol>
-        <li>Остановите Flask и бот, чтобы не копировать базу во время записи.</li>
-        <li>Скопируйте файл из <code>DATABASE_PATH</code> в защищённое место с датой в имени.</li>
-        <li>При использовании SQLite WAL копируйте также соседние файлы <code>-wal</code> и <code>-shm</code>, либо выполняйте копирование после штатной остановки процессов.</li>
-        <li>Для восстановления остановите процессы, замените файл базы резервной копией и запустите процессы снова.</li>
+        <li>Задайте абсолютный <code>BACKUP_DIR</code> на зашифрованном диске вне репозитория, static-папки и каталога SQLite; выдайте запись только service account.</li>
+        <li>Создайте проверенную online-копию без остановки бота: <code>.venv\Scripts\python.exe -m db.backups</code>. Команда использует SQLite backup API, проверяет <code>quick_check</code>/<code>foreign_key_check</code> и завершится с ошибкой, если копия невалидна.</li>
+        <li>При заданном <code>BACKUP_DIR</code> <code>main.py</code> запускает проверенный backup-loop; SQLite lease не даёт polling/webhook процессам создать одну копию параллельно. Внешний Планировщик заданий остаётся рекомендуемой независимой проверкой: <code>.venv\Scripts\python.exe -m db.backups</code>.</li>
+        <li>Команда хранит 14 последних daily-копий и по одной копии за 3 предыдущих месяца. В админском Mini App отображается итог последнего запуска.</li>
+        <li>Раз в квартал проверяйте восстановление: остановите все процессы, замените production-БД копией в отдельной тестовой среде, выполните <code>PRAGMA integrity_check</code>, откройте каталог и проверьте заказ.</li>
       </ol>
-      <div class="warning"><p>Постоянное удаление архивной книги нельзя отменить через интерфейс. Перед массовой очисткой архива сделайте и проверьте резервную копию SQLite.</p></div>
+      <div class="warning"><p>Не публикуйте SQLite backup: в нём есть история заказов и сохранённые реквизиты ручной оплаты. Для аварийного raw-copy остановите все процессы; в WAL-режиме нельзя копировать только основной файл БД.</p></div>
     </section>
 
     <section>
-      <h2>10. Передача проекта покупателю</h2>
+      <h2>11. Передача проекта покупателю</h2>
       <ol>
         <li>Передайте исходный код без <code>.env</code>, без SQLite production-базы и без папки <code>.venv</code>.</li>
         <li>Покупатель создаёт собственного бота в BotFather и использует только собственный <code>BOT_TOKEN</code>.</li>

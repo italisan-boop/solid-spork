@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Семена Знаний</title>
+    <title id="documentTitle">Семена Знаний</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -40,6 +40,8 @@
             --disabled-bg: #e8e8ec;
             --disabled-fg: #96969d;
             --focus-ring: #2563eb;
+            --price-color: var(--accent);
+            --cart-title-color: var(--accent);
             --elevation-1: 0 2px 8px rgba(0,0,0,0.08);
             --elevation-2: 0 12px 28px rgba(0,0,0,0.13);
 
@@ -89,6 +91,8 @@
             --disabled-bg: #2d2d31;
             --disabled-fg: #83838a;
             --focus-ring: #8ab4f8;
+            --price-color: #ffffff;
+            --cart-title-color: #ffffff;
             --elevation-1: 0 2px 8px rgba(0,0,0,0.34);
             --elevation-2: 0 14px 34px rgba(0,0,0,0.55);
         }
@@ -370,7 +374,7 @@
         }
         .book-category { font-size: 12px; color: var(--text-light); margin-bottom: 8px; font-style: italic; }
         .book-price-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
-        .book-price { font-size: 18px; font-weight: 700; color: var(--primary-green); }
+        .book-price { font-size: 18px; font-weight: 700; color: var(--price-color); }
         .book-hint { font-size: 11px; color: var(--text-light); opacity: 0.7; }
 
         .modal-overlay {
@@ -439,8 +443,18 @@
             padding: 18px; background: var(--bg-cream); border-radius: 12px;
             border-left: 4px solid var(--accent-green); white-space: pre-line;
         }
-        .modal-price-row { display: flex; justify-content: space-between; align-items: center; padding-top: 16px; border-top: 2px solid var(--border-sage); }
-        .modal-price { font-size: 28px; font-weight: 700; color: var(--primary-green); }
+        .modal-price-row {
+            display: grid; grid-template-columns: minmax(0, 1fr) 156px; gap: 12px; align-items: center;
+            padding-top: 16px; border-top: 2px solid var(--border-sage);
+        }
+        .modal-price {
+            min-width: 0; color: var(--price-color); font-size: 28px; font-weight: 700;
+            font-variant-numeric: tabular-nums; line-height: 1; white-space: nowrap;
+        }
+        @media (max-width: 360px) {
+            .modal-price-row { grid-template-columns: 1fr; justify-items: center; gap: 14px; }
+            .modal-price { text-align: center; }
+        }
         .modal-add-btn {
             padding: 14px 28px; background: var(--accent);
             color: var(--tg-button-text); border: none; border-radius: 25px; font-size: 16px; font-weight: 600;
@@ -448,6 +462,48 @@
         }
         .modal-add-btn:active { transform: scale(0.95); }
         .modal-add-btn.in-cart { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+        .modal-price-row .modal-add-btn {
+            box-sizing: border-box; min-height: 48px; height: 48px;
+            display: inline-flex; align-items: center; justify-content: center; text-align: center;
+            padding: 0 12px; line-height: 1.2;
+        }
+        .modal-price-row.has-notify {
+            grid-template-columns: minmax(0, 1fr) 112px 112px; gap: 8px;
+        }
+        .modal-price-row.has-notify .modal-price { font-size: 24px; }
+        .modal-price-row.has-notify .modal-add-btn.is-unavailable,
+        .modal-price-row.has-notify .modal-notify-btn {
+            flex-basis: 112px; width: 112px; padding: 0 4px; font-size: 12px;
+        }
+        @media (max-width: 390px) {
+            .modal-price-row.has-notify {
+                grid-template-columns: minmax(0, 1fr) 136px;
+                grid-template-rows: 48px 48px;
+                justify-items: stretch;
+                gap: 8px;
+            }
+            .modal-price-row.has-notify .modal-price {
+                grid-column: 1;
+                grid-row: 1 / span 2;
+                align-self: center;
+                font-size: 24px;
+                text-align: left;
+            }
+            .modal-price-row.has-notify .modal-add-btn.is-unavailable {
+                grid-column: 2;
+                grid-row: 1;
+            }
+            .modal-price-row.has-notify .modal-notify-btn {
+                grid-column: 2;
+                grid-row: 2;
+            }
+            .modal-price-row.has-notify .modal-add-btn.is-unavailable,
+            .modal-price-row.has-notify .modal-notify-btn {
+                width: 136px;
+                flex-basis: 136px;
+                font-size: 13px;
+            }
+        }
 
         .cart-items { max-height: 400px; overflow-y: auto; margin-bottom: 16px; }
         .cart-item {
@@ -457,7 +513,7 @@
         }
         .cart-item-info { flex: 1; }
         .cart-item-title { font-size: 14px; font-weight: 600; color: var(--text-dark); margin-bottom: 4px; }
-        .cart-item-price { font-size: 13px; color: var(--primary-green); font-weight: 600; }
+        .cart-item-price { font-size: 13px; color: var(--price-color); font-weight: 600; }
         .cart-item-controls { display: flex; align-items: center; gap: 8px; }
         .cart-qty-btn {
             width: 28px; height: 28px;
@@ -495,7 +551,8 @@
             align-items: center; margin-bottom: 8px;
         }
         .cart-total-label { font-size: 14px; color: var(--text-light); }
-        .cart-total-value { font-size: 18px; font-weight: 700; color: var(--primary-green); }
+        .cart-total-value { font-size: 18px; font-weight: 700; color: var(--price-color); }
+        #cartOverlay .modal-title { color: var(--cart-title-color); }
         .cart-discount { color: var(--accent-green); }
 
         .cart-actions { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -662,14 +719,14 @@
             border-radius: 12px; padding: 14px 10px; text-align: center;
         }
         .admin-card-label { font-size: 12px; color: var(--text-light); margin-bottom: 6px; }
-        .admin-card-value { font-size: 18px; font-weight: 700; color: var(--primary-green); }
+        .admin-card-value { font-size: 18px; font-weight: 700; color: var(--price-color); }
         .admin-card-sub { font-size: 11px; color: var(--text-light); margin-top: 4px; }
         .admin-block {
             background: var(--bg-cream); border-radius: 12px;
             padding: 14px 16px; margin-bottom: 12px;
         }
         .admin-block-title { font-size: 13px; font-weight: 700; color: var(--text-dark); margin-bottom: 10px; }
-        .admin-avg { font-size: 26px; font-weight: 700; color: var(--primary-green); }
+        .admin-avg { font-size: 26px; font-weight: 700; color: var(--price-color); }
         .admin-avg-sub { font-size: 12px; color: var(--text-light); margin-top: 2px; }
         .admin-top-item {
             display: flex; align-items: center; gap: 10px;
@@ -687,6 +744,21 @@
         .admin-top-qty { font-size: 13px; font-weight: 700; color: var(--text-dark); }
         .admin-top-rev { font-size: 11px; color: var(--text-light); }
         .admin-empty { font-size: 13px; color: var(--text-light); padding: 8px 0; }
+        .admin-analytics-list { display: grid; gap: 8px; }
+        .admin-analytics-item {
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px;
+            padding: 9px 0; border-bottom: 1px solid var(--border-sage); font-size: 13px;
+        }
+        .admin-analytics-item:last-child { border-bottom: none; }
+        .admin-analytics-label { min-width: 0; color: var(--text-dark); overflow-wrap: anywhere; }
+        .admin-analytics-value { color: var(--text-dark); font-weight: 700; text-align: right; }
+        .admin-analytics-meta { grid-column: 1 / -1; color: var(--text-light); font-size: 12px; }
+        .admin-campaign-form { display: grid; gap: 8px; }
+        .admin-campaign-form .promo-input { width: 100%; box-sizing: border-box; }
+        .admin-campaign-result { margin-top: 10px; color: var(--text-light); font-size: 12px; overflow-wrap: anywhere; }
+        .admin-campaign-link { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+        .admin-campaign-link code { flex: 1; min-width: 0; user-select: all; overflow-wrap: anywhere; }
+        .admin-copy-link { width: auto; min-height: 34px; padding: 6px 9px; font-size: 12px; }
 
         /* Unified interactive control system */
         button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
@@ -842,6 +914,95 @@
         .copy-btn-small:active,
         .admin-refresh:active,
         .admin-export button:active { transform: scale(0.96); }
+        .admin-operations { display: grid; gap: 12px; margin-bottom: 18px; }
+        .operations-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .operations-title { margin: 0; font-size: 22px; color: var(--text-dark); }
+        .operations-tab-list, .operations-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .operations-tab-list button, .operations-action {
+            box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; border: 0; border-radius: 10px;
+            padding: 9px 11px; font: inherit; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere;
+            background: var(--control-bg); color: var(--control-fg); cursor: pointer;
+        }
+        .operations-tab-list button.active, .operations-action.primary { background: var(--primary-bg); color: var(--primary-fg); }
+        .operations-tab-list button:last-child:nth-child(odd), .operations-action-grid > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+        .operations-list { display: grid; gap: 8px; }
+        .operations-row { border: 1px solid var(--border-sage); border-radius: 12px; padding: 10px; }
+        .operations-row-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; }
+        .operations-meta { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+        .operations-form { display: grid; gap: 8px; margin-top: 8px; }
+        .operations-form input, .operations-form select { width: 100%; box-sizing: border-box; }
+        .operations-print { display: none; }
+        @media (max-width: 340px) {
+            .operations-tab-list, .operations-action-grid { grid-template-columns: minmax(0, 1fr); }
+            .operations-tab-list button:last-child:nth-child(odd), .operations-action-grid > :last-child:nth-child(odd) { grid-column: auto; }
+        }
+        @media print {
+            body > * { display: none !important; }
+            .operations-print { display: block !important; font: 12pt/1.35 Arial, sans-serif; color: #000; }
+            .operations-print h1 { font-size: 18pt; }
+            .operations-print table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            .operations-print th, .operations-print td { border: 1px solid #000; padding: 7px; text-align: left; }
+        }
+        @page { size: A4 portrait; margin: 14mm; }
+
+        .order-card {
+            border: 1px solid var(--border-sage);
+            border-radius: 16px;
+            background: var(--surface-alt);
+            padding: 14px;
+        }
+        .order-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-weight: 700;
+        }
+        .order-status {
+            border-radius: 999px;
+            background: var(--control-bg);
+            color: var(--control-fg);
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 8px;
+            text-align: right;
+        }
+        .order-meta { color: var(--text-secondary); font-size: 13px; margin-top: 5px; }
+        .order-items { margin: 10px 0; color: var(--text-primary); font-size: 14px; }
+        .order-items div + div { margin-top: 4px; }
+        .order-card-footer { align-items: flex-end; }
+        .order-actions {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 8px;
+            width: min(100%, 230px);
+        }
+        .order-actions:empty { display: none; }
+        .order-delivery-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+        .order-delivery-actions button:only-child { grid-column: 1 / -1; }
+        .order-actions button {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0;
+            border: 0;
+            border-radius: 10px;
+            padding: 9px 11px;
+            background: var(--primary-bg);
+            color: var(--primary-fg);
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .order-actions button.secondary { background: var(--control-bg); color: var(--control-fg); }
+        .order-actions button:disabled { opacity: 0.55; cursor: default; }
+        @media (max-width: 340px) {
+            .order-card-footer { align-items: stretch; flex-wrap: wrap; }
+            .order-actions { width: 100%; }
+        }
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
         }
@@ -849,13 +1010,16 @@
 </head>
 <body>
     <div class="header">
-        <h1> Семена Знаний 📚</h1>
+        <h1 id="storefrontName">Семена Знаний</h1>
         <p>органика <span style="color: var(--primary-green); font-size: 26px;">=</span> ботаника</p>
     </div>
 
     <div class="header-buttons">
         <button type="button" class="header-btn" id="adminBtn" onclick="openAdminDashboard()" title="Дашборд админа" aria-label="Открыть дашборд администратора" style="display: none;">
             📊
+        </button>
+        <button type="button" class="header-btn" id="ordersBtn" onclick="openOrdersModal()" title="Мои заказы" aria-label="Открыть мои заказы">
+            📦
         </button>
         <button type="button" class="header-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Сменить тему" aria-label="Включить тёмную тему" aria-pressed="false">
             <span id="themeIcon">🌙</span>
@@ -940,6 +1104,7 @@
                 <div class="modal-price-row">
                     <div class="modal-price" id="modalPrice"></div>
                     <button type="button" class="modal-add-btn" id="modalAddBtn" aria-pressed="false">Добавить в корзину</button>
+                    <button type="button" class="modal-add-btn modal-notify-btn" id="modalNotifyBtn" style="display: none;" onclick="toggleBackInStockSubscription()">Уведомить</button>
                 </div>
             </div>
         </div>
@@ -956,6 +1121,24 @@
                     <select id="paymentMethodSelect" class="payment-method-select">
                         <option value="">Загрузка способов оплаты…</option>
                     </select>
+                    <div id="deliverySection" style="display: none;">
+                        <label class="cart-total-label" for="deliveryMethodSelect">Доставка</label>
+                        <select id="deliveryMethodSelect" class="payment-method-select" disabled>
+                            <option value="">Загрузка способов доставки…</option>
+                        </select>
+                        <p class="delivery-note" id="deliveryUnavailableMessage" style="display: none;"></p>
+                        <div class="delivery-fields" id="deliveryFields" style="display: none;">
+                            <p class="delivery-note" id="deliveryNote"></p>
+                            <input class="promo-input" id="deliveryRecipientName" type="text" maxlength="120" autocomplete="name" placeholder="Получатель">
+                            <input class="promo-input" id="deliveryRecipientPhone" type="tel" maxlength="24" autocomplete="tel" placeholder="Телефон получателя">
+                            <input class="promo-input" id="deliveryCity" type="text" maxlength="120" autocomplete="address-level2" placeholder="Город">
+                            <textarea class="promo-input" id="deliveryPickupPoint" maxlength="280" rows="3" autocomplete="off" placeholder="Код или полный адрес выбранного ПВЗ СДЭК"></textarea>
+                        </div>
+                        <div class="cart-total-row" id="cartDeliveryRow" style="display: none;">
+                            <span class="cart-total-label" id="cartDeliveryLabel">Доставка:</span>
+                            <span class="cart-total-value" id="cartDeliveryValue">0 ₽</span>
+                        </div>
+                    </div>
                     <div class="cart-total-row">
                         <span class="cart-total-label">Товары:</span>
                         <span class="cart-total-value" id="cartSubtotal">0 ₽</span>
@@ -984,16 +1167,35 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="ordersOverlay">
+        <div class="modal-content">
+            <button type="button" class="modal-close" onclick="closeOrdersModal()" aria-label="Закрыть мои заказы">&times;</button>
+            <div class="modal-body">
+                <h2 class="modal-title">📦 Мои заказы</h2>
+                <div class="orders-list" id="ordersList"><div class="admin-empty">Загрузка...</div></div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="adminOverlay">
         <div class="modal-content">
             <button type="button" class="modal-close" onclick="closeAdminDashboard()" aria-label="Закрыть дашборд">&times;</button>
             <div class="modal-body">
-                <h2 class="modal-title">📊 Дашборд</h2>
-                <button type="button" class="admin-refresh" onclick="loadAdminDashboard()">🔄 Обновить</button>
+                <div class="admin-operations" id="adminOperations"></div>
+                <div id="adminOwnerDashboard">
                 <div class="admin-export">
-                    <button type="button" onclick="exportCSV('orders')">⬇️ Заказы CSV</button>
+                    <button type="button" onclick="exportCSV('orders')">⬇️ Реестр заказов CSV</button>
+                    <button type="button" onclick="exportSalesCSV()">⬇️ Продажи CSV</button>
                     <button type="button" onclick="exportCSV('books')">⬇️ Книги CSV</button>
+                    <button type="button" onclick="exportAnalyticsCSV('promo')">⬇️ Промокоды CSV</button>
+                    <button type="button" onclick="exportAnalyticsCSV('acquisition')">⬇️ Каналы CSV</button>
+                    <button type="button" onclick="exportAnalyticsCSV('referral')">⬇️ Рефералы CSV</button>
                 </div>
+                <div class="price-filter admin-sales-period">
+                    <div class="price-wrapper"><span class="price-label">Продажи с</span><input type="date" id="salesDateFrom"></div>
+                    <div class="price-wrapper"><span class="price-label">по</span><input type="date" id="salesDateTo"></div>
+                </div>
+                <button type="button" class="admin-refresh" onclick="loadAdminDashboard()">Применить период</button>
                 <div class="admin-periods" id="adminPeriods">
                     <div class="admin-card"><div class="admin-card-label">За день</div><div class="admin-card-value" id="admDayRev">—</div><div class="admin-card-sub" id="admDayOrd"></div></div>
                     <div class="admin-card"><div class="admin-card-label">За неделю</div><div class="admin-card-value" id="admWeekRev">—</div><div class="admin-card-sub" id="admWeekOrd"></div></div>
@@ -1005,8 +1207,37 @@
                     <div class="admin-avg-sub" id="adminTotals">—</div>
                 </div>
                 <div class="admin-block">
+                    <div class="admin-block-title">💾 Последняя резервная копия</div>
+                    <div class="admin-avg-sub" id="adminBackupStatus">Пока не запускалась</div>
+                </div>
+                <div class="admin-block">
                     <div class="admin-block-title">🏆 Топ-5 книг</div>
                     <div id="adminTopBooks"><div class="admin-empty">Загрузка...</div></div>
+                </div>
+                <div class="admin-block">
+                    <div class="admin-block-title">🎟️ Промокоды · оплаченные продажи</div>
+                    <div id="adminPromoAnalytics"><div class="admin-empty">Загрузка...</div></div>
+                </div>
+                <div class="admin-block">
+                    <div class="admin-block-title">📣 Каналы привлечения · первое касание</div>
+                    <div id="adminAcquisitionAnalytics"><div class="admin-empty">Загрузка...</div></div>
+                </div>
+                <div class="admin-block">
+                    <div class="admin-block-title">👥 Реферальная программа · анонимная сводка</div>
+                    <div id="adminReferralAnalytics"><div class="admin-empty">Загрузка...</div></div>
+                </div>
+                <div class="admin-block">
+                    <div class="admin-block-title">🔗 Кампании Telegram</div>
+                    <form class="admin-campaign-form" id="campaignForm">
+                        <input class="promo-input" id="campaignCode" maxlength="48" autocomplete="off" placeholder="Код: vk_september">
+                        <input class="promo-input" id="campaignChannel" maxlength="48" autocomplete="off" placeholder="Канал: vk">
+                        <input class="promo-input" id="campaignSource" maxlength="120" autocomplete="off" placeholder="Источник: community">
+                        <input class="promo-input" id="campaignName" maxlength="120" autocomplete="off" placeholder="Кампания: september_2026">
+                        <button type="submit" class="admin-refresh">Сохранить кампанию</button>
+                    </form>
+                    <div class="admin-campaign-result" id="campaignResult"></div>
+                    <div id="adminCampaigns"><div class="admin-empty">Загрузка...</div></div>
+                </div>
                 </div>
             </div>
         </div>
@@ -1059,7 +1290,18 @@
     </div>
 
     <script>
-        const tg = window.Telegram.WebApp;
+        const tg = window.Telegram?.WebApp || {
+            initData: '',
+            initDataUnsafe: {},
+            colorScheme: 'light',
+            ready() {},
+            expand() {},
+            HapticFeedback: { impactOccurred() {}, notificationOccurred() {} },
+            showAlert(message) { window.alert(message); },
+            showConfirm(message, callback) { callback(window.confirm(message)); },
+            openLink(url) { window.open(url, '_blank', 'noopener'); },
+            openTelegramLink(url) { window.open(url, '_blank', 'noopener'); },
+        };
         tg.ready();
         tg.expand();
 
@@ -1070,11 +1312,66 @@
             return initData ? { ...headers, 'X-Telegram-Init-Data': initData } : headers;
         }
 
-        // ⚠️ ВАЖНО: замени на username твоего бота (без @)
-        const BOT_USERNAME = 'bookseed_bot';
+        let botUsername = null;
+
+        async function resolveBotUsername() {
+            if (botUsername) return botUsername;
+            if (!initData) return null;
+            try {
+                const response = await fetch('/api/app/bot-identity', {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (!response.ok || !result.username) return null;
+                botUsername = result.username;
+                return botUsername;
+            } catch (error) {
+                console.error('Не удалось получить username бота:', error);
+                return null;
+            }
+        }
+
+        let storefrontStorageNamespace = window.location.hostname || 'legacy';
+        function storefrontStorageKey(key) {
+            return `storefront:${storefrontStorageNamespace}:${key}`;
+        }
+        function applyStorefrontColors(primaryColor, accentColor) {
+            if (!/^#[0-9a-f]{6}$/i.test(primaryColor) || !/^#[0-9a-f]{6}$/i.test(accentColor)) return;
+            const style = document.documentElement.style;
+            style.setProperty('--accent', primaryColor);
+            style.setProperty('--primary-green', primaryColor);
+            style.setProperty('--accent-green', accentColor);
+            style.setProperty('--light-green', accentColor);
+            style.setProperty('--heart-color', accentColor);
+            style.setProperty('--tg-link', primaryColor);
+            style.setProperty('--tg-button', primaryColor);
+            style.setProperty('--primary-bg', primaryColor);
+            style.setProperty('--primary-fg', '#ffffff');
+        }
+        async function loadStorefrontConfig() {
+            try {
+                const response = await fetch('/api/storefront/config', {cache: 'no-store'});
+                const storefront = await response.json();
+                if (!response.ok || !storefront || typeof storefront.store_name !== 'string') return;
+                const name = storefront.store_name.trim();
+                if (name) {
+                    document.title = name;
+                    document.getElementById('storefrontName').textContent = name;
+                }
+                applyStorefrontColors(storefront.primary_color, storefront.accent_color);
+                if (typeof storefront.tenant_id === 'string' && storefront.tenant_id) {
+                    storefrontStorageNamespace = storefront.tenant_id;
+                    wishlist = JSON.parse(localStorage.getItem(storefrontStorageKey('wishlist')) || '[]');
+                    initTheme();
+                }
+            } catch (error) {
+                console.error('Не удалось загрузить оформление витрины:', error);
+            }
+        }
 
         // Theme: respect Telegram color scheme, but persist a manual override.
-        const THEME_KEY = 'miniapp_theme';
+        function themeStorageKey() { return storefrontStorageKey('theme'); }
         function applyTheme(theme) {
             document.documentElement.setAttribute('data-theme', theme);
             const icon = document.getElementById('themeIcon');
@@ -1089,7 +1386,7 @@
             }
         }
         function initTheme() {
-            const saved = localStorage.getItem(THEME_KEY);
+            const saved = localStorage.getItem(themeStorageKey());
             const theme = saved || (tg.colorScheme === 'dark' ? 'dark' : 'light');
             applyTheme(theme);
         }
@@ -1097,7 +1394,7 @@
             const current = document.documentElement.getAttribute('data-theme') || 'light';
             const next = current === 'dark' ? 'light' : 'dark';
             applyTheme(next);
-            localStorage.setItem(THEME_KEY, next);
+            localStorage.setItem(themeStorageKey(), next);
         }
         initTheme();
 
@@ -1108,7 +1405,9 @@
         let cartHydrated = false;
         let cartSyncConflict = false;
         let cartSaveChain = Promise.resolve(true);
-        let wishlist = JSON.parse(localStorage.getItem('semena_wishlist') || '[]');
+        let wishlist = JSON.parse(localStorage.getItem(storefrontStorageKey('wishlist')) || '[]');
+        let backInStockSubscriptions = new Set();
+        let backInStockSubscriptionPending = false;
 
         let activeCategory = 'all';
         let searchQuery = '';
@@ -1130,23 +1429,28 @@
         let discount = 0;
         let finalTotal = 0;
         let paymentMethods = [];
+        let deliveryMethods = [];
+        let deliveryCapability = { enabled: false, available: false, methods: [], message: '' };
+        let selectedDeliveryMethod = '';
         let selectedPaymentMethod = '';
         let checkoutKey = null;
+        const orderTrackingUrls = new Map();
 
         function parseBookImages(field) {
             if (!field || field === '') return [];
-            if (Array.isArray(field)) return field;
-            if (typeof field === 'string') {
-                if (field.startsWith('[')) {
-                    try {
-                        const parsed = JSON.parse(field);
-                        return Array.isArray(parsed) ? parsed : [parsed];
-                    } catch (e) {}
-                }
-                if (field.startsWith('http')) return [field];
-                return [field];
+            try {
+                const parsed = Array.isArray(field) ? field : JSON.parse(field);
+                return Array.isArray(parsed) ? parsed.filter(isSafeImageUrl) : [];
+            } catch (error) {
+                return [];
             }
-            return [];
+        }
+
+        function isSafeImageUrl(value) {
+            return typeof value === 'string' && (
+                /^\/media\/books\/[0-9a-f]{32}\/(thumbnail|display)$/.test(value)
+                || /^https:\/\/[^\s]+$/i.test(value)
+            );
         }
 
         async function loadCategories() {
@@ -1164,34 +1468,29 @@
 
                 if (data.books && data.books.length > 0) {
                     books = data.books.map(b => {
-                        // Страницы остаются отдельными от обложки: модальное окно
-                        // всегда собирает последовательность «обложка → страницы».
-                        const pages = [];
-                        if (b.images && b.images !== '[]' && b.images !== '') {
-                            try {
-                                const parsed = JSON.parse(b.images);
-                                if (Array.isArray(parsed)) {
-                                    pages.push(...parsed.filter(image => typeof image === 'string' && image.startsWith('http')));
-                                }
-                            } catch (error) {
-                                console.warn('Некорректная галерея книги:', b.id);
-                            }
-                        }
-
-                        const cover = b.emoji || '📚';
-
+                        const media = b.media && typeof b.media === 'object'
+                            ? b.media
+                            : { cover: null, pages: [] };
+                        const pages = parseBookImages(b.images);
                         return {
                             id: b.id,
                             title: b.title,
                             price: b.price,
                             category: b.category,
                             category_emoji: b.category_emoji || '',
-                            emoji: cover,
                             description: b.description || '',
-                            images: pages
+                            images: pages,
+                            media,
+                            available_quantity: b.available_quantity ?? null,
+                            is_available: b.is_available !== false
                         };
                     });
                 } else { books = []; }
+                if (cartHydrated) {
+                    const before = JSON.stringify(cartSnapshot());
+                    cart = cartFromSnapshot(cartSnapshot());
+                    if (JSON.stringify(cartSnapshot()) !== before) void persistCart();
+                }
 
                 renderCategories();
                 applyFiltersAndRender();
@@ -1209,7 +1508,11 @@
             const catalog = new Map(books.map(book => [book.id, book]));
             return snapshot.flatMap(item => {
                 const book = catalog.get(item.id);
-                return book ? [{ ...book, quantity: item.quantity }] : [];
+                if (!book || book.is_available === false) return [];
+                const quantity = book.available_quantity === null
+                    ? item.quantity
+                    : Math.min(item.quantity, book.available_quantity);
+                return quantity > 0 ? [{ ...book, quantity }] : [];
             });
         }
 
@@ -1262,7 +1565,12 @@
                     updateUI();
                     renderCartItems();
                     applyFiltersAndRender();
-                    tg.showAlert('Корзина была изменена в другой сессии. Показана актуальная версия.');
+                    if (result.code === 'inventory_changed') {
+                        await loadBooks();
+                        tg.showAlert('Количество книг изменилось: корзина обновлена по текущему остатку.');
+                    } else {
+                        tg.showAlert('Корзина была изменена в другой сессии. Показана актуальная версия.');
+                    }
                     return false;
                 }
                 if (!response.ok) throw new Error(result.error || `Cart save failed: ${response.status}`);
@@ -1275,12 +1583,31 @@
             return cartSaveChain;
         }
 
+        function clearDeliveryInputs() {
+            selectedDeliveryMethod = '';
+            for (const id of [
+                'deliveryRecipientName',
+                'deliveryRecipientPhone',
+                'deliveryCity',
+                'deliveryPickupPoint'
+            ]) {
+                document.getElementById(id).value = '';
+            }
+        }
+
+        function deliveryCanCheckout() {
+            return !deliveryCapability.enabled || deliveryCapability.available;
+        }
+
         async function loadPaymentMethods() {
-            const selector = document.getElementById('paymentMethodSelect');
+            const paymentSelector = document.getElementById('paymentMethodSelect');
+            const deliverySelector = document.getElementById('deliveryMethodSelect');
             if (!initData) {
-                selector.innerHTML = '<option value="">Откройте магазин из Telegram</option>';
-                selector.disabled = true;
-                return;
+                paymentSelector.innerHTML = '<option value="">Откройте магазин из Telegram</option>';
+                paymentSelector.disabled = true;
+                deliveryCapability = { enabled: false, available: false, methods: [], message: '' };
+                renderDeliveryFields();
+                return false;
             }
             try {
                 const response = await fetch('/api/checkout/options', {
@@ -1290,20 +1617,142 @@
                 if (!response.ok) throw new Error(`Payment options failed: ${response.status}`);
                 const result = await response.json();
                 paymentMethods = Array.isArray(result.methods) ? result.methods : [];
-                selector.innerHTML = paymentMethods.map(method =>
-                    `<option value="${method.id}">${method.title}</option>`
+                deliveryCapability = result.delivery && typeof result.delivery === 'object'
+                    ? result.delivery
+                    : { enabled: false, available: false, methods: [], message: '' };
+                deliveryMethods = Array.isArray(deliveryCapability.methods)
+                    ? deliveryCapability.methods
+                    : [];
+                paymentSelector.innerHTML = paymentMethods.map(method =>
+                    `<option value="${method.id}">${escapeHtml(method.title)}</option>`
                 ).join('');
-                selectedPaymentMethod = paymentMethods[0]?.id || '';
-                selector.disabled = !selectedPaymentMethod;
+                selectedPaymentMethod = paymentMethods.some(
+                    method => method.id === selectedPaymentMethod
+                ) ? selectedPaymentMethod : (paymentMethods[0]?.id || '');
+                paymentSelector.value = selectedPaymentMethod;
+                paymentSelector.disabled = !selectedPaymentMethod;
+
+                deliverySelector.innerHTML = deliveryMethods.map(method =>
+                    `<option value="${method.id}">${escapeHtml(method.title)} · ${method.price} ₽</option>`
+                ).join('');
+                selectedDeliveryMethod = deliveryMethods.some(
+                    method => method.id === selectedDeliveryMethod
+                ) ? selectedDeliveryMethod : (deliveryMethods[0]?.id || '');
+                deliverySelector.value = selectedDeliveryMethod;
+                deliverySelector.disabled = !selectedDeliveryMethod;
+                renderDeliveryFields();
+                updateUI();
+                return true;
             } catch (error) {
-                console.error('Ошибка загрузки способов оплаты:', error);
-                selector.innerHTML = '<option value="">Способы оплаты недоступны</option>';
-                selector.disabled = true;
+                console.error('Ошибка загрузки способов оплаты и доставки:', error);
+                deliveryCapability = {
+                    enabled: true,
+                    available: false,
+                    methods: [],
+                    message: 'Не удалось проверить доступность доставки. Попробуйте позже.'
+                };
+                paymentSelector.innerHTML = '<option value="">Способы оплаты недоступны</option>';
+                paymentSelector.disabled = true;
+                deliverySelector.innerHTML = '<option value="">Доставка недоступна</option>';
+                deliverySelector.disabled = true;
+                clearDeliveryInputs();
+                renderDeliveryFields();
+                updateUI();
+                return false;
             }
+        }
+
+        function currentDeliveryMethod() {
+            return deliveryMethods.find(method => method.id === selectedDeliveryMethod) || null;
+        }
+
+        function renderDeliveryFields() {
+            const section = document.getElementById('deliverySection');
+            const selector = document.getElementById('deliveryMethodSelect');
+            const fields = document.getElementById('deliveryFields');
+            const note = document.getElementById('deliveryNote');
+            const unavailable = document.getElementById('deliveryUnavailableMessage');
+            const deliveryRow = document.getElementById('cartDeliveryRow');
+            if (!deliveryCapability.enabled) {
+                section.style.display = 'none';
+                fields.style.display = 'none';
+                deliveryRow.style.display = 'none';
+                unavailable.style.display = 'none';
+                clearDeliveryInputs();
+                return;
+            }
+            section.style.display = 'block';
+            if (!deliveryCapability.available) {
+                selector.style.display = 'none';
+                fields.style.display = 'none';
+                deliveryRow.style.display = 'none';
+                unavailable.textContent = deliveryCapability.message || 'Доставка временно недоступна. Попробуйте позже.';
+                unavailable.style.display = 'block';
+                clearDeliveryInputs();
+                return;
+            }
+            selector.style.display = 'block';
+            unavailable.style.display = 'none';
+            const pointInput = document.getElementById('deliveryPickupPoint');
+            const method = currentDeliveryMethod();
+            if (!method) {
+                fields.style.display = 'none';
+                deliveryRow.style.display = 'none';
+                return;
+            }
+            const isSelfPickup = method.id === 'self_pickup';
+            fields.style.display = 'grid';
+            for (const id of [
+                'deliveryRecipientName',
+                'deliveryRecipientPhone',
+                'deliveryCity',
+                'deliveryPickupPoint'
+            ]) {
+                document.getElementById(id).style.display = isSelfPickup ? 'none' : '';
+            }
+            document.getElementById('deliveryRecipientName').placeholder = 'Получатель';
+            document.getElementById('deliveryRecipientPhone').placeholder = 'Телефон получателя';
+            document.getElementById('deliveryCity').placeholder = 'Город';
+            pointInput.placeholder = method.id === 'russian_post_pickup'
+                ? 'Индекс или адрес выбранного отделения Почты России'
+                : 'Код или полный адрес выбранного ПВЗ СДЭК';
+            note.textContent = [method.note, method.public_instructions]
+                .filter(Boolean)
+                .join(' ');
+            deliveryRow.style.display = 'flex';
+            document.getElementById('cartDeliveryLabel').textContent = `Доставка: ${method.title}`;
+            document.getElementById('cartDeliveryValue').textContent = `${method.price.toLocaleString('ru-RU')} ₽`;
+        }
+
+        function deliveryPayload() {
+            if (!deliveryCapability.enabled) return undefined;
+            if (!deliveryCapability.available) return null;
+            const method = currentDeliveryMethod();
+            if (!method) return null;
+            if (method.id === 'self_pickup') return { method: method.id };
+            const delivery = {
+                method: method.id,
+                recipient_name: document.getElementById('deliveryRecipientName').value.trim(),
+                recipient_phone: document.getElementById('deliveryRecipientPhone').value.trim(),
+                city: document.getElementById('deliveryCity').value.trim()
+            };
+            const point = document.getElementById('deliveryPickupPoint').value.trim();
+            if (method.id === 'russian_post_pickup') {
+                delivery.post_office = point;
+            } else {
+                delivery.pickup_point = point;
+            }
+            if (Object.entries(delivery).some(([key, value]) => key !== 'method' && !value)) return null;
+            return delivery;
         }
 
         document.getElementById('paymentMethodSelect').addEventListener('change', event => {
             selectedPaymentMethod = event.target.value;
+        });
+        document.getElementById('deliveryMethodSelect').addEventListener('change', event => {
+            selectedDeliveryMethod = event.target.value;
+            renderDeliveryFields();
+            updateUI();
         });
 
         async function retryYookassaPayment(orderId) {
@@ -1488,7 +1937,6 @@
                     if (b.title.toLowerCase().includes(query)) return true;
                     if (b.category.toLowerCase().includes(query)) return true;
                     if (b.description && b.description.toLowerCase().includes(query)) return true;
-                    if (b.emoji && b.emoji.toLowerCase().includes(query)) return true;
                     return false;
                 });
             }
@@ -1505,14 +1953,14 @@
             return safeText.replace(regex, '<mark style="background: #ffeb3b; padding: 0 2px; border-radius: 3px; color: #000;">$1</mark>');
         }
         function renderCatalogCover(book) {
-            const gallery = getBookGallery(book);
+            const gallery = getBookGallery(book, 'thumbnail');
             const currentIndex = Math.min(catalogGalleryIndexes.get(book.id) || 0, gallery.length - 1);
             const slides = gallery.map((image, index) => {
                 const label = index === 0 ? 'Обложка книги' : `Страница ${index}`;
-                if (typeof image === 'string' && image.startsWith('http')) {
+                if (isSafeImageUrl(image)) {
                     return `<div class="book-cover-slide"><img src="${escapeHtml(image)}" alt="${label}: ${escapeHtml(book.title)}" loading="lazy" onerror="this.parentElement.innerHTML='📚'"></div>`;
                 }
-                return `<div class="book-cover-slide" role="img" aria-label="${label}: ${escapeHtml(book.title)}">${escapeHtml(String(image))}</div>`;
+                return `<div class="book-cover-slide" role="img" aria-label="${label}: ${escapeHtml(book.title)}">📚</div>`;
             }).join('');
             const pagination = gallery.length > 1
                 ? `<div class="book-cover-pagination" aria-hidden="true">${gallery.map((_, index) => `<span class="book-cover-pagination-dot ${index === currentIndex ? 'active' : ''}"></span>`).join('')}</div>`
@@ -1591,6 +2039,12 @@
                 const titleHtml = searchQuery ? highlightText(book.title, searchQuery) : safeTitle;
                 const categoryHtml = searchQuery ? highlightText(categoryDisplay, searchQuery) : safeCategory;
 
+                const availability = !book.is_available
+                    ? '<div class="book-hint">Нет в наличии</div>'
+                    : book.available_quantity !== null
+                        ? `<div class="book-hint">Осталось: ${book.available_quantity} шт.</div>`
+                        : '<div class="book-hint">Нажми для деталей</div>';
+
                 return `
                     <div class="book-card ${inCartClass}" data-id="${book.id}" role="button" tabindex="0" aria-label="Открыть книгу: ${safeTitle}" onclick="openCatalogBook(${book.id}, event)" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openBookModal(${book.id}); }">
                         <button type="button" class="heart-btn ${inWishlistClass}" aria-label="${wishlist.includes(book.id) ? 'Убрать из избранного' : 'Добавить в избранное'}: ${safeTitle}" aria-pressed="${wishlist.includes(book.id)}" onclick="toggleWishlistItem(${book.id}, event)">${heartIcon}</button>
@@ -1602,7 +2056,7 @@
                             <div class="book-category">${categoryHtml}</div>
                             <div class="book-price-row">
                                 <div class="book-price">${book.price} ₽</div>
-                                <div class="book-hint">Нажми для деталей</div>
+                                ${availability}
                             </div>
                         </div>
                     </div>
@@ -1610,24 +2064,130 @@
             }).join('');
         }
 
-        function toggleWishlistItem(bookId, event) {
-            if (event) event.stopPropagation();
+        async function loadFavorites() {
+            if (!initData) return;
+            try {
+                const response = await fetch('/api/favorites', {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                if (!response.ok) throw new Error(`Favorites request failed: ${response.status}`);
+                const result = await response.json();
+                wishlist = (result.favorites || []).map(favorite => favorite.book_id);
+                updateWishlistBadge();
+            } catch (error) {
+                console.error('Ошибка загрузки избранного:', error);
+            }
+        }
 
+        async function loadBackInStockSubscriptions() {
+            if (!initData) return;
+            try {
+                const response = await fetch('/api/back-in-stock-subscriptions', {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                if (!response.ok) throw new Error(`Subscription request failed: ${response.status}`);
+                const result = await response.json();
+                backInStockSubscriptions = new Set(result.book_ids || []);
+            } catch (error) {
+                console.error('Ошибка загрузки подписок на наличие:', error);
+            }
+        }
+
+        async function toggleBackInStockSubscription() {
+            const book = currentModalBook;
+            if (
+                backInStockSubscriptionPending
+                || !book
+                || book.is_available !== false
+                || book.available_quantity === null
+                || !initData
+            ) return;
+
+            const notifyBtn = document.getElementById('modalNotifyBtn');
+            const subscribed = backInStockSubscriptions.has(book.id);
+            let handled = false;
+            backInStockSubscriptionPending = true;
+            notifyBtn.disabled = true;
+
+            const finish = () => {
+                backInStockSubscriptionPending = false;
+                if (currentModalBook?.id === book.id) notifyBtn.disabled = false;
+            };
+            const apply = async confirmed => {
+                if (handled) return;
+                handled = true;
+                if (!confirmed) {
+                    finish();
+                    return;
+                }
+                try {
+                    const response = await fetch(`/api/books/${book.id}/back-in-stock-subscription`, {
+                        method: subscribed ? 'DELETE' : 'PUT',
+                        headers: telegramAuthHeaders(),
+                        cache: 'no-store'
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || `Subscription update failed: ${response.status}`);
+                    if (result.subscribed) backInStockSubscriptions.add(book.id);
+                    else backInStockSubscriptions.delete(book.id);
+                    notifyBtn.textContent = result.subscribed
+                        ? 'Не уведомлять'
+                        : 'Уведомить';
+                    notifyBtn.setAttribute('aria-pressed', String(Boolean(result.subscribed)));
+                } catch (error) {
+                    console.error('Ошибка подписки на наличие:', error);
+                    tg.showAlert('Не удалось изменить подписку. Попробуйте ещё раз.');
+                } finally {
+                    finish();
+                }
+            };
+            try {
+                tg.showConfirm(
+                    subscribed
+                        ? 'Отменить уведомление о появлении этой книги?'
+                        : 'Отправить один раз уведомление в Telegram, когда эта книга снова появится в наличии?',
+                    apply,
+                );
+            } catch (error) {
+                console.error('Не удалось открыть подтверждение подписки:', error);
+                finish();
+            }
+        }
+
+        async function toggleWishlistItem(bookId, event) {
+            if (event) event.stopPropagation();
             const index = wishlist.indexOf(bookId);
-            if (index > -1) {
-                wishlist.splice(index, 1);
-                tg.HapticFeedback.impactOccurred('light');
-            } else {
+            const adding = index === -1;
+            if (initData) {
+                try {
+                    const response = await fetch(`/api/favorites/${bookId}`, {
+                        method: adding ? 'PUT' : 'DELETE',
+                        headers: telegramAuthHeaders(),
+                        cache: 'no-store'
+                    });
+                    if (!response.ok) throw new Error(`Favorite update failed: ${response.status}`);
+                } catch (error) {
+                    console.error('Ошибка сохранения избранного:', error);
+                    tg.showAlert('Не удалось сохранить избранное. Попробуйте ещё раз.');
+                    return;
+                }
+            }
+            if (adding) {
                 wishlist.push(bookId);
                 tg.HapticFeedback.notificationOccurred('success');
+            } else {
+                wishlist.splice(index, 1);
+                tg.HapticFeedback.impactOccurred('light');
             }
-
-            localStorage.setItem('semena_wishlist', JSON.stringify(wishlist));
+            if (!initData) localStorage.setItem(storefrontStorageKey('wishlist'), JSON.stringify(wishlist));
             updateWishlistBadge();
             applyFiltersAndRender();
         }
 
-        function shareBook(bookId, event) {
+
+        async function shareBook(bookId, event) {
             if (event) event.stopPropagation();
 
             const book = books.find(b => b.id === bookId);
@@ -1635,9 +2195,14 @@
                 tg.showAlert('❌ Книга не найдена');
                 return;
             }
+            const username = await resolveBotUsername();
+            if (!username || !presentationUserId) {
+                tg.showAlert('Не удалось получить ссылку бота. Попробуйте позже.');
+                return;
+            }
 
             const refCode = `ref_${presentationUserId}`;
-            const bookLink = `https://t.me/${BOT_USERNAME}?start=${refCode}`;
+            const bookLink = `https://t.me/${username}?start=${encodeURIComponent(refCode)}`;
 
             const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
 
@@ -1700,13 +2265,29 @@
 
             const isInCart = cart.some(c => c.id === book.id);
             const addBtn = document.getElementById('modalAddBtn');
-            addBtn.textContent = isInCart ? '✓ В корзине' : 'Добавить в корзину';
+            const unavailable = book.is_available === false;
+            addBtn.textContent = unavailable ? 'Нет в наличии' : (isInCart ? '✓ В корзине' : 'Добавить в корзину');
+            addBtn.disabled = unavailable;
             addBtn.setAttribute('aria-pressed', String(isInCart));
             addBtn.setAttribute(
                 'aria-label',
                 isInCart ? `Убрать «${book.title}» из корзины` : `Добавить «${book.title}» в корзину`
             );
             addBtn.classList.toggle('in-cart', isInCart);
+            addBtn.classList.toggle('is-unavailable', unavailable);
+            const notifyBtn = document.getElementById('modalNotifyBtn');
+            const priceRow = addBtn.parentElement;
+            const canSubscribe = unavailable && book.available_quantity !== null && Boolean(initData);
+            priceRow.classList.toggle('has-notify', canSubscribe);
+            notifyBtn.style.display = canSubscribe ? 'inline-flex' : 'none';
+            notifyBtn.disabled = false;
+            if (canSubscribe) {
+                const subscribed = backInStockSubscriptions.has(book.id);
+                notifyBtn.textContent = subscribed
+                    ? 'Не уведомлять'
+                    : 'Уведомить';
+                notifyBtn.setAttribute('aria-pressed', String(subscribed));
+            }
 
             updateModalImages();
 
@@ -1721,13 +2302,19 @@
             tg.HapticFeedback.impactOccurred('medium');
         }
 
-        function getBookGallery(book) {
-            const cover = book.emoji || '📚';
-            const pages = Array.isArray(book.images) ? book.images : [];
-            return [
-                cover,
-                ...pages.filter(image => typeof image === 'string' && image.startsWith('http') && image !== cover)
-            ];
+        function getBookGallery(book, variant = 'display') {
+            const media = book?.media || {};
+            const nativeCover = media.cover?.[`${variant}_url`];
+            const nativePages = Array.isArray(media.pages)
+                ? media.pages.map(page => page?.[`${variant}_url`]).filter(isSafeImageUrl)
+                : [];
+            if (nativeCover || nativePages.length) {
+                return [nativeCover, ...nativePages].filter(isSafeImageUrl);
+            }
+            const legacyCover = media.legacy_cover_url;
+            const legacyGallery = [legacyCover, ...(Array.isArray(book?.images) ? book.images : [])]
+                .filter(isSafeImageUrl);
+            return legacyGallery.length ? legacyGallery : [null];
         }
 
         function updateModalImages() {
@@ -1739,10 +2326,10 @@
 
             slider.innerHTML = gallery.map((image, index) => {
                 const label = index === 0 ? 'Обложка книги' : `Страница ${index}`;
-                if (typeof image === 'string' && image.startsWith('http')) {
+                if (isSafeImageUrl(image)) {
                     return `<div class="modal-image-slide"><img src="${escapeHtml(image)}" alt="${label}" loading="lazy" onerror="this.parentElement.innerHTML='📚'"></div>`;
                 }
-                return `<div class="modal-image-slide" role="img" aria-label="${label}">${escapeHtml(String(image))}</div>`;
+                return `<div class="modal-image-slide" role="img" aria-label="${label}">📚</div>`;
             }).join('');
             slider.style.transform = `translateX(-${currentImageIndex * 100}%)`;
 
@@ -1827,6 +2414,10 @@
                 tg.HapticFeedback.impactOccurred('light');
             } else {
                 const book = books.find(b => b.id === bookId);
+                if (book?.is_available === false) {
+                    tg.showAlert('Эта книга закончилась.');
+                    return;
+                }
                 if (book) {
                     cart.push({...book, quantity: 1});
                     tg.HapticFeedback.impactOccurred('medium');
@@ -1862,7 +2453,12 @@
                 console.warn('Книга не найдена в корзине:', bookId);
                 return;
             }
-            book.quantity = (book.quantity || 1) + delta;
+            const nextQuantity = (book.quantity || 1) + delta;
+            if (book.available_quantity !== null && nextQuantity > book.available_quantity) {
+                tg.showAlert(`Доступно: ${book.available_quantity} шт.`);
+                return;
+            }
+            book.quantity = nextQuantity;
             if (book.quantity <= 0) {
                 removeFromCart(bookId);
             } else {
@@ -1902,7 +2498,7 @@
                 return;
             }
 
-            document.getElementById('cartCheckoutBtn').disabled = false;
+            document.getElementById('cartCheckoutBtn').disabled = !deliveryCanCheckout();
 
             cartItemsEl.innerHTML = cart.map(book => {
                 const qty = book.quantity || 1;
@@ -1917,7 +2513,7 @@
                         <div class="cart-item-controls">
                             <button type="button" class="cart-qty-btn" aria-label="Уменьшить количество: ${safeTitle}" onclick="changeQuantity(${book.id}, -1)">−</button>
                             <span class="cart-qty" aria-label="Количество: ${qty}">${qty}</span>
-                            <button type="button" class="cart-qty-btn" aria-label="Увеличить количество: ${safeTitle}" onclick="changeQuantity(${book.id}, 1)">+</button>
+                            <button type="button" class="cart-qty-btn" aria-label="Увеличить количество: ${safeTitle}" onclick="changeQuantity(${book.id}, 1)" ${book.available_quantity !== null && qty >= book.available_quantity ? 'disabled' : ''}>+</button>
                             <button type="button" class="cart-remove-btn" aria-label="Удалить из корзины: ${safeTitle}" onclick="removeFromCart(${book.id})">×</button>
                         </div>
                     </div>
@@ -1925,7 +2521,8 @@
             }).join('');
         }
 
-        function openCartModal() {
+        async function openCartModal() {
+            await loadPaymentMethods();
             renderCartItems();
             document.getElementById('cartOverlay').classList.add('active');
             tg.HapticFeedback.impactOccurred('medium');
@@ -1959,7 +2556,8 @@
 
             const totalItems = cart.reduce((sum, b) => sum + (b.quantity || 1), 0);
             const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
-            finalTotal = total - discount;
+            const deliveryPrice = currentDeliveryMethod()?.price || 0;
+            finalTotal = total - discount + deliveryPrice;
 
             if (cart.length > 0) {
                 summary.style.display = 'flex';
@@ -1972,12 +2570,12 @@
                 if (discount > 0) {
                     buttonText.textContent = `Оформить · ${finalTotal.toLocaleString('ru-RU')} ₽ (-${discount} ₽)`;
                 } else {
-                    buttonText.textContent = `Оформить · ${total.toLocaleString('ru-RU')} ₽`;
+                    buttonText.textContent = `Оформить · ${finalTotal.toLocaleString('ru-RU')} ₽`;
                 }
 
                 buttonBadge.textContent = totalItems;
                 buttonBadge.style.display = 'inline-block';
-                mainButton.disabled = false;
+                mainButton.disabled = !deliveryCanCheckout();
 
                 cartBadge.textContent = totalItems;
                 cartBadge.style.display = 'flex';
@@ -2108,9 +2706,22 @@
                 return;
             }
 
+            const optionsReady = await loadPaymentMethods();
+            if (!optionsReady) {
+                tg.showAlert('Не удалось обновить условия оформления. Попробуйте позже.');
+                return;
+            }
             if (!selectedPaymentMethod) { tg.showAlert('Выберите способ оплаты.'); return; }
+            const delivery = deliveryPayload();
+            if (delivery === null) {
+                tg.showAlert(
+                    deliveryCapability.available
+                        ? 'Заполните данные для доставки СДЭК.'
+                        : (deliveryCapability.message || 'Доставка временно недоступна. Попробуйте позже.')
+                );
+                return;
+            }
             checkoutKey = checkoutKey || crypto.randomUUID();
-            const total = cart.reduce((sum, b) => sum + b.price * (b.quantity || 1), 0);
             const payload = {
                 cart: cart.map(b => ({ id: b.id, quantity: b.quantity || 1 })),
                 cart_revision: cartRevision,
@@ -2118,6 +2729,7 @@
                 payment_method: selectedPaymentMethod,
                 promo_code: promoCode
             };
+            if (delivery !== undefined) payload.delivery = delivery;
 
             document.getElementById('loadingOverlay').classList.add('active');
             try {
@@ -2151,13 +2763,17 @@
                     promoInput.value = '';
                     promoMessage.textContent = '';
                     promoDiscount.style.display = 'none';
+                    clearDeliveryInputs();
                     updateUI();
                     renderCartItems();
-                    applyFiltersAndRender();
+                    await loadBooks();
                     closeModal();
                     closeCartModal();
                 } else {
                     tg.HapticFeedback.notificationOccurred('error');
+                    if (result.code === 'delivery_unavailable') {
+                        await loadPaymentMethods();
+                    }
                     tg.showAlert(`❌ Ошибка: ${result.error}`);
                 }
             } catch (error) {
@@ -2202,6 +2818,196 @@
             document.getElementById('paymentOverlay').classList.remove('active');
         }
 
+        function formatOrderDate(value) {
+            const date = new Date(String(value).replace(' ', 'T') + 'Z');
+            return Number.isNaN(date.valueOf()) ? String(value || '') : date.toLocaleString('ru-RU');
+        }
+
+        function orderFinancialRows(order) {
+            const rows = [`<div class="order-meta">Товары: ${fmtRub(order.items_subtotal)}</div>`];
+            if (order.delivery_price) rows.push(`<div class="order-meta">Доставка: ${fmtRub(order.delivery_price)}</div>`);
+            if (order.promo_code_snapshot) rows.push(`<div class="order-meta">Промокод: ${escapeHtml(order.promo_code_snapshot)}</div>`);
+            if (order.promo_discount) rows.push(`<div class="order-meta">Скидка промокода: −${fmtRub(order.promo_discount)}</div>`);
+            if (order.bonus_discount) rows.push(`<div class="order-meta">Скидка бонуса: −${fmtRub(order.bonus_discount)}</div>`);
+            return rows.join('');
+        }
+
+        function orderItemsHtml(order) {
+            return order.items.map(item => `
+                <div>${escapeHtml(item.title)}${item.quantity > 1 ? ` ×${item.quantity}` : ''} · ${fmtRub(item.line_total ?? item.price * item.quantity)}</div>
+            `).join('');
+        }
+
+        async function requestOrderSupport(orderId, button) {
+            button.disabled = true;
+            try {
+                const detailResponse = await fetch(`/api/orders/${orderId}`, {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const detailResult = await detailResponse.json();
+                if (!detailResponse.ok) throw new Error(detailResult.error || 'Order request failed');
+                if (!detailResult.order.can_contact_support) {
+                    await loadOrders();
+                    tg.showAlert('Поддержка по завершённому заказу недоступна.');
+                    return;
+                }
+                const response = await fetch(`/api/orders/${orderId}/support`, {
+                    method: 'POST',
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (response.status === 409) {
+                    await loadOrders();
+                    tg.showAlert('Статус заказа изменился. Обращение не создано.');
+                    return;
+                }
+                if (!response.ok) throw new Error(result.error || 'Support request failed');
+                button.textContent = '✅ Обращение создано';
+                tg.HapticFeedback.notificationOccurred('success');
+                tg.showAlert('Обращение передано в поддержку. Продолжите диалог в Telegram-боте.');
+            } catch (error) {
+                console.error('Ошибка обращения в поддержку:', error);
+                tg.showAlert('Не удалось передать обращение в поддержку. Попробуйте позже.');
+                button.disabled = false;
+            }
+        }
+
+        function renderOrders(orders) {
+            const container = document.getElementById('ordersList');
+            if (!orders.length) {
+                container.innerHTML = '<div class="admin-empty">Заказов пока нет.</div>';
+                return;
+            }
+            orderTrackingUrls.clear();
+            container.innerHTML = orders.map(order => {
+                const items = orderItemsHtml(order);
+                const actions = [];
+                const deliveryActions = [];
+                if (order.can_check_yookassa_payment) {
+                    actions.push(`<button type="button" onclick="resumeYookassaPayment(${order.id})">🟣 К оплате</button>`);
+                }
+                if (order.can_resend_manual_details) {
+                    actions.push(`<button type="button" class="secondary" onclick="resendManualDetails(${order.id}, this)">📩 Реквизиты в Telegram</button>`);
+                }
+                if (order.can_contact_support) {
+                    deliveryActions.push(`<button type="button" class="secondary" onclick="requestOrderSupport(${order.id}, this)">🆘 Поддержка</button>`);
+                }
+                const delivery = order.delivery;
+                const deliverySummary = delivery
+                    ? `<div class="order-meta">${escapeHtml(delivery.method_label)} · ${escapeHtml(delivery.shipment_label)}${delivery.tracking ? ` · Трек: ${escapeHtml(delivery.tracking.number)}` : ''}${delivery.public_instructions ? `<br>${escapeHtml(delivery.public_instructions)}` : ''}</div>`
+                    : '<div class="order-meta">Доставка не указана</div>';
+                if (delivery?.tracking?.url) {
+                    orderTrackingUrls.set(order.id, delivery.tracking.url);
+                    deliveryActions.push(`<button type="button" class="secondary" onclick="openTrackingLink(${order.id})">📍 Отследить</button>`);
+                }
+                if (deliveryActions.length) {
+                    actions.push(`<div class="order-delivery-actions">${deliveryActions.join('')}</div>`);
+                }
+                return `
+                    <article class="order-card">
+                        <div class="order-card-header">
+                            <span>Заказ #${order.id}</span>
+                            <span class="order-status">${escapeHtml(order.status_label)}</span>
+                        </div>
+                        <div class="order-meta">${formatOrderDate(order.created_at)} · ${escapeHtml(order.payment_method)}</div>
+                        ${deliverySummary}
+                        <div class="order-items">${items}</div>
+                        ${orderFinancialRows(order)}
+                        <div class="order-card-header order-card-footer">
+                            <span>${fmtRub(order.total)}</span>
+                            <div class="order-actions">${actions.join('')}</div>
+                        </div>
+                    </article>
+                `;
+            }).join('');
+        }
+
+        async function loadOrders() {
+            const container = document.getElementById('ordersList');
+            if (!initData) {
+                container.innerHTML = '<div class="admin-empty">Откройте магазин через Telegram.</div>';
+                return;
+            }
+            container.innerHTML = '<div class="admin-empty">Загрузка...</div>';
+            try {
+                const response = await fetch('/api/orders', {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Orders request failed');
+                renderOrders(Array.isArray(result.orders) ? result.orders : []);
+            } catch (error) {
+                console.error('Ошибка загрузки заказов:', error);
+                container.innerHTML = '<div class="admin-empty">Не удалось загрузить заказы.</div>';
+            }
+        }
+
+        function openTrackingLink(orderId) {
+            const url = orderTrackingUrls.get(orderId);
+            if (!url) return;
+            tg.openLink(url);
+        }
+
+        function openOrdersModal() {
+            document.getElementById('ordersOverlay').classList.add('active');
+            tg.HapticFeedback.impactOccurred('medium');
+            loadOrders();
+        }
+
+        function closeOrdersModal() {
+            document.getElementById('ordersOverlay').classList.remove('active');
+        }
+
+        async function resumeYookassaPayment(orderId) {
+            try {
+                const response = await fetch(`/api/orders/${orderId}/payment`, {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Payment request failed');
+                if (result.confirmation_url) {
+                    tg.openLink(result.confirmation_url);
+                    watchYookassaPayment(orderId);
+                } else if (result.provider_status === 'canceled') {
+                    retryYookassaPayment(orderId);
+                } else {
+                    tg.showAlert('Платёж пока обрабатывается. Попробуйте обновить список позже.');
+                }
+            } catch (error) {
+                console.error('Ошибка открытия платежа ЮKassa:', error);
+                tg.showAlert('Не удалось получить ссылку на оплату.');
+            }
+        }
+
+        async function resendManualDetails(orderId, button) {
+            button.disabled = true;
+            try {
+                const response = await fetch(`/api/orders/${orderId}/manual-details/resend`, {
+                    method: 'POST',
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Manual details resend failed');
+                tg.HapticFeedback.notificationOccurred('success');
+                tg.showAlert('Реквизиты отправлены в чат с ботом.');
+                await loadOrders();
+            } catch (error) {
+                console.error('Ошибка повторной отправки реквизитов:', error);
+                tg.HapticFeedback.notificationOccurred('error');
+                tg.showAlert(error.message || 'Не удалось отправить реквизиты.');
+                button.disabled = false;
+            }
+        }
+
+        document.getElementById('ordersOverlay').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('ordersOverlay')) closeOrdersModal();
+        });
+
         function copyToClipboard(elementId) {
             const text = document.getElementById(elementId)?.textContent;
             if (!text) return;
@@ -2226,6 +3032,614 @@
         function escapeHtml(s) {
             return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
+
+        function adminAnalyticsQuery() {
+            const params = new URLSearchParams();
+            const dateFrom = document.getElementById('salesDateFrom').value;
+            const dateTo = document.getElementById('salesDateTo').value;
+            if (dateFrom) params.set('date_from', dateFrom);
+            if (dateTo) params.set('date_to', dateTo);
+            return params.toString();
+        }
+
+        async function fetchAdminResource(path, query = '') {
+            if (!initData) return null;
+            const separator = path.includes('?') ? '&' : '?';
+            const suffix = query ? `&${query}` : '';
+            try {
+                const response = await fetch(`${path}${separator}t=${Date.now()}${suffix}`, {
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                if (!response.ok) throw new Error(`Admin request failed: ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.error(`Ошибка загрузки ${path}:`, error);
+                return null;
+            }
+        }
+
+        async function loadAdminInsights(dashboard) {
+            const query = adminAnalyticsQuery();
+            const [analytics, referrals, campaigns, username] = await Promise.all([
+                fetchAdminResource('/api/admin/analytics', query),
+                fetchAdminResource('/api/admin/analytics/referrals', query),
+                fetchAdminResource('/api/admin/campaigns'),
+                resolveBotUsername(),
+            ]);
+            dashboard.analytics = analytics;
+            dashboard.referrals = referrals;
+            dashboard.campaigns = campaigns?.campaigns || null;
+            dashboard.botUsername = username;
+        }
+
+        function renderAdminAnalytics(dashboard) {
+            const analytics = dashboard.analytics;
+            const promoEl = document.getElementById('adminPromoAnalytics');
+            const acquisitionEl = document.getElementById('adminAcquisitionAnalytics');
+            const referralEl = document.getElementById('adminReferralAnalytics');
+            const campaignsEl = document.getElementById('adminCampaigns');
+
+            if (!analytics) {
+                promoEl.innerHTML = '<div class="admin-empty">Не удалось загрузить отчёт.</div>';
+                acquisitionEl.innerHTML = '<div class="admin-empty">Не удалось загрузить отчёт.</div>';
+            } else {
+                const promos = analytics.promos || [];
+                promoEl.innerHTML = promos.length ? `<div class="admin-analytics-list">${promos.map(row => `
+                    <div class="admin-analytics-item">
+                        <div class="admin-analytics-label">${escapeHtml(row.promo_code)}</div>
+                        <div class="admin-analytics-value">${fmtRub(row.net_revenue)}</div>
+                        <div class="admin-analytics-meta">Заказов: ${row.orders} · Покупателей: ${row.buyers} · Скидка: ${fmtRub(row.promo_discount)}</div>
+                    </div>
+                `).join('')}</div>` : '<div class="admin-empty">Оплаченных продаж за период нет.</div>';
+
+                const acquisition = analytics.acquisition || [];
+                acquisitionEl.innerHTML = acquisition.length ? `<div class="admin-analytics-list">${acquisition.map(row => {
+                    const label = [row.channel, row.source, row.campaign].filter(Boolean).map(escapeHtml).join(' · ');
+                    return `<div class="admin-analytics-item">
+                        <div class="admin-analytics-label">${label || 'Неизвестный источник'}</div>
+                        <div class="admin-analytics-value">${fmtRub(row.net_revenue)}</div>
+                        <div class="admin-analytics-meta">Заказов: ${row.orders} · Покупателей: ${row.buyers}</div>
+                    </div>`;
+                }).join('')}</div>` : '<div class="admin-empty">Оплаченных продаж за период нет.</div>';
+            }
+
+            if (!dashboard.referrals) {
+                referralEl.innerHTML = '<div class="admin-empty">Не удалось загрузить анонимную сводку.</div>';
+            } else {
+                const referral = dashboard.referrals;
+                referralEl.innerHTML = `<div class="admin-analytics-list">
+                    <div class="admin-analytics-item"><div class="admin-analytics-label">Принято приглашений</div><div class="admin-analytics-value">${referral.accepted_referrals}</div></div>
+                    <div class="admin-analytics-item"><div class="admin-analytics-label">Реферальные покупатели</div><div class="admin-analytics-value">${referral.buyers}</div></div>
+                    <div class="admin-analytics-item"><div class="admin-analytics-label">Оплаченные заказы</div><div class="admin-analytics-value">${referral.orders}</div></div>
+                    <div class="admin-analytics-item"><div class="admin-analytics-label">Выручка</div><div class="admin-analytics-value">${fmtRub(referral.net_revenue)}</div><div class="admin-analytics-meta">После принятия приглашения · скидки: ${fmtRub((referral.promo_discount || 0) + (referral.bonus_discount || 0))}</div></div>
+                </div>`;
+            }
+
+            if (!dashboard.campaigns) {
+                campaignsEl.innerHTML = '<div class="admin-empty">Не удалось загрузить кампании.</div>';
+            } else if (dashboard.campaigns.length === 0) {
+                campaignsEl.innerHTML = '<div class="admin-empty">Кампаний пока нет.</div>';
+            } else {
+                campaignsEl.innerHTML = `<div class="admin-analytics-list">${dashboard.campaigns.map(campaign => {
+                    const payload = `c_${campaign.code}`;
+                    const link = campaignDeepLink(payload);
+                    const linkMarkup = link
+                        ? `<div class="admin-analytics-meta admin-campaign-link">
+                                <code>${escapeHtml(link)}</code>
+                                <button type="button" class="admin-refresh admin-copy-link" data-campaign-link="${escapeHtml(link)}" onclick="copyCampaignLink(this.dataset.campaignLink)">Копировать ссылку</button>
+                           </div>`
+                        : '<div class="admin-analytics-meta">Ссылка временно недоступна.</div>';
+                    return `
+                        <div class="admin-analytics-item">
+                            <div class="admin-analytics-label">${escapeHtml(campaign.code)}</div>
+                            <div class="admin-analytics-value">${campaign.is_active ? 'Активна' : 'Выключена'}</div>
+                            <div class="admin-analytics-meta">${[campaign.channel, campaign.source, campaign.campaign].filter(Boolean).map(escapeHtml).join(' · ')}</div>
+                            ${linkMarkup}
+                            <div class="operations-action-grid">
+                                <button type="button" class="operations-action" onclick="updateCampaignStatus('${campaign.code}', ${campaign.is_active ? 'false' : 'true'})">${campaign.is_active ? 'Отключить' : 'Включить'}</button>
+                                <button type="button" class="operations-action danger" onclick="deleteCampaign('${campaign.code}')">Удалить</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('')}</div>`;
+            }
+        }
+
+        async function updateCampaignStatus(code, isActive) {
+            try {
+                const response = await fetch(`/api/admin/campaigns/${encodeURIComponent(code)}`, {
+                    method: 'PATCH',
+                    headers: telegramAuthHeaders({ 'Content-Type': 'application/json' }),
+                    cache: 'no-store',
+                    body: JSON.stringify({ is_active: isActive })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Не удалось изменить кампанию.');
+                await loadAdminDashboard();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось изменить кампанию.');
+            }
+        }
+
+        async function deleteCampaign(code) {
+            if (!window.confirm(`Удалить кампанию ${code}? История переходов и заказов сохранится.`)) return;
+            try {
+                const response = await fetch(`/api/admin/campaigns/${encodeURIComponent(code)}`, {
+                    method: 'DELETE',
+                    headers: telegramAuthHeaders(),
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Не удалось удалить кампанию.');
+                await loadAdminDashboard();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось удалить кампанию.');
+            }
+        }
+
+        function campaignDeepLink(payload) {
+            return botUsername ? `https://t.me/${botUsername}?start=${encodeURIComponent(payload)}` : '';
+        }
+
+        function copyCampaignLink(link) {
+            navigator.clipboard.writeText(link).then(() => {
+                tg.HapticFeedback.notificationOccurred('success');
+                tg.showAlert('Ссылка кампании скопирована.');
+            }).catch(() => tg.showAlert('Не удалось скопировать ссылку.'));
+        }
+
+        async function showCampaignResult(payload) {
+            const username = await resolveBotUsername();
+            const result = document.getElementById('campaignResult');
+            if (!username) {
+                result.textContent = 'Кампания сохранена, но ссылка временно недоступна.';
+                return;
+            }
+            const link = campaignDeepLink(payload);
+            const copyButton = document.createElement('button');
+            copyButton.type = 'button';
+            copyButton.className = 'admin-refresh admin-copy-link';
+            copyButton.textContent = 'Скопировать ссылку';
+            copyButton.addEventListener('click', () => copyCampaignLink(link));
+            result.replaceChildren(document.createTextNode(`Ссылка кампании: ${link} `), copyButton);
+        }
+
+        async function saveCampaign(event) {
+            event.preventDefault();
+            if (!initData) return;
+            const values = {
+                code: document.getElementById('campaignCode').value.trim(),
+                channel: document.getElementById('campaignChannel').value.trim(),
+                source: document.getElementById('campaignSource').value.trim(),
+                campaign: document.getElementById('campaignName').value.trim()
+            };
+            const result = document.getElementById('campaignResult');
+            if (!values.code || !values.channel) {
+                result.textContent = 'Заполните код и канал.';
+                return;
+            }
+            try {
+                const response = await fetch('/api/admin/campaigns', {
+                    method: 'PUT',
+                    headers: telegramAuthHeaders({ 'Content-Type': 'application/json' }),
+                    cache: 'no-store',
+                    body: JSON.stringify(values)
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || `Campaign request failed: ${response.status}`);
+                document.getElementById('campaignForm').reset();
+                await showCampaignResult(payload.deep_link_payload);
+                await loadAdminDashboard();
+            } catch (error) {
+                console.error('Ошибка сохранения кампании:', error);
+                result.textContent = error.message || 'Не удалось сохранить кампанию.';
+            }
+        }
+
+        document.getElementById('campaignForm').addEventListener('submit', saveCampaign);
+
+        let adminSession = null;
+        let operationsSection = 'inventory';
+
+        function hasAdminCapability(capability) {
+            return adminSession?.capabilities?.includes('*') || adminSession?.capabilities?.includes(capability);
+        }
+
+        async function loadAdminSession() {
+            if (!initData) return null;
+            try {
+                const response = await fetch('/api/admin/session', {
+                    headers: telegramAuthHeaders(), cache: 'no-store'
+                });
+                if (!response.ok) return null;
+                adminSession = await response.json();
+                const button = document.getElementById('adminBtn');
+                button.style.display = '';
+                button.title = adminSession.role === 'warehouse' ? 'Операции склада' : 'Операции магазина';
+                button.setAttribute('aria-label', button.title);
+                return adminSession;
+            } catch (error) {
+                console.error('Не удалось определить роль сотрудника:', error);
+                return null;
+            }
+        }
+
+        function operationsTabs() {
+            const tabs = [];
+            if (hasAdminCapability('inventory.read')) tabs.push(['inventory', '📦 Остатки']);
+            if (hasAdminCapability('fulfillment.manage')) tabs.push(['fulfillment', '🧾 Сборка']);
+            if (hasAdminCapability('book.import')) tabs.push(['import', '⬆️ Импорт']);
+            if (hasAdminCapability('staff.manage')) tabs.push(['staff', '👥 Сотрудники']);
+            return tabs;
+        }
+
+        function renderOperationsShell() {
+            const container = document.getElementById('adminOperations');
+            const tabs = operationsTabs();
+            if (!tabs.some(([key]) => key === operationsSection)) operationsSection = tabs[0]?.[0] || '';
+            document.getElementById('adminOwnerDashboard').style.display = hasAdminCapability('reports.view') ? '' : 'none';
+            container.innerHTML = `
+                <div class="operations-header"><h2 class="operations-title">${adminSession?.role === 'warehouse' ? 'Операции склада' : 'Операции магазина'}</h2><button class="operations-action" type="button" aria-label="Обновить текущий раздел" onclick="loadOperations()">🔄</button></div>
+                <div class="operations-tab-list">${tabs.map(([key, label]) => `<button type="button" class="${key === operationsSection ? 'active' : ''}" onclick="showOperations('${key}')">${label}</button>`).join('')}${hasAdminCapability('inventory.read') || hasAdminCapability('audit.read') ? '<button type="button" onclick="toggleActionJournal()">📜 Журнал действий</button>' : ''}</div>
+                <div id="operationsContent" class="operations-list"><div class="admin-empty">Загрузка...</div></div>
+                <div id="auditOperationsPanel" hidden></div>`;
+        }
+
+        async function showOperations(section) {
+            operationsSection = section;
+            renderOperationsShell();
+            await loadOperations();
+        }
+
+        async function loadOperations() {
+            if (!adminSession) return;
+            const content = document.getElementById('operationsContent');
+            if (!content) return;
+            content.innerHTML = '<div class="admin-empty">Загрузка...</div>';
+            try {
+                if (operationsSection === 'inventory') await loadInventoryOperations(content);
+                if (operationsSection === 'fulfillment') await loadFulfillmentOperations(content);
+                if (operationsSection === 'import') renderImportOperations(content);
+                if (operationsSection === 'staff') await loadStaffOperations(content);
+            } catch (error) {
+                console.error('Ошибка загрузки операций:', error);
+                content.innerHTML = '<div class="admin-empty">Не удалось загрузить данные.</div>';
+            }
+        }
+
+        function inventoryMovementLabel(item) {
+            const labels = {
+                received: 'Поступление',
+                recount: 'Пересчёт',
+                damaged: 'Брак',
+                return: 'Возврат'
+            };
+            return labels[item.reason] || item.action;
+        }
+
+        async function loadInventoryOperations(content) {
+            const response = await fetch('/api/admin/inventory?limit=50', { headers: telegramAuthHeaders(), cache: 'no-store' });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error);
+            const inventory = result.inventory || [];
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Остатки</span><span>${inventory.filter(item => item.is_low_stock).length} низких</span></div>
+                <div class="operations-list">${inventory.map(item => `
+                    <div class="operations-row"><div class="operations-row-head"><span>${escapeHtml(item.title)}</span><span>${item.stock_quantity === null ? '∞' : `${item.available_quantity} шт.`}</span></div>
+                    <div class="operations-meta">На складе: ${item.stock_quantity ?? '∞'} · В резерве: ${item.reserved_quantity} · Порог: ${item.low_stock_threshold}</div>
+                    ${hasAdminCapability('inventory.adjust') && item.stock_quantity !== null ? `<form class="operations-form" onsubmit="adjustInventory(event, ${item.id})"><label><span class="inventory-quantity-label">Количество поступило</span><input type="number" min="1" name="quantity" value="" placeholder="Количество" aria-label="Количество операции" required></label><select name="reason" onchange="updateInventoryQuantityHint(this)"><option value="received">Поступление</option><option value="recount">Пересчёт</option><option value="damaged">Брак</option><option value="return">Возврат</option></select><button class="operations-action" type="submit">Сохранить остаток</button></form>` : ''}</div>`).join('') || '<div class="admin-empty">Книг нет.</div>'}</div></div>`;
+        }
+
+        function updateInventoryQuantityHint(select) {
+            const form = select.closest('form');
+            const input = form.elements.quantity;
+            const label = form.querySelector('.inventory-quantity-label');
+            const labels = {
+                received: 'Количество поступило',
+                recount: 'Фактический остаток',
+                damaged: 'Количество брака',
+                return: 'Количество возвращено'
+            };
+            label.textContent = labels[select.value];
+            input.min = select.value === 'recount' ? '0' : '1';
+            input.placeholder = select.value === 'recount' ? 'Фактическое количество' : 'Количество';
+            input.value = '';
+        }
+
+        async function adjustInventory(event, bookId) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            try {
+                const quantity = Number(form.elements.quantity.value);
+                const reason = form.elements.reason.value;
+                const response = await fetch(`/api/admin/inventory/${bookId}`, { method: 'POST', headers: telegramAuthHeaders({'Content-Type': 'application/json'}), body: JSON.stringify({quantity, reason}) });
+                const result = await response.json();
+                if (!response.ok) { tg.showAlert(result.error || 'Не удалось изменить остаток.'); return; }
+                tg.HapticFeedback.notificationOccurred('success');
+                await loadOperations();
+            } catch (error) {
+                console.error('Ошибка операции с остатком:', error);
+                tg.showAlert('Не удалось изменить остаток.');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function loadFulfillmentOperations(content) {
+            const response = await fetch('/api/admin/fulfillment?limit=50', { headers: telegramAuthHeaders(), cache: 'no-store' });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error);
+            content.innerHTML = (result.orders || []).map(order => `<div class="operations-row"><div class="operations-row-head"><span>Заказ #${order.order_id}</span><span>${escapeHtml(order.fulfillment_state)}</span></div><div class="operations-meta">${escapeHtml(order.method)} · ${escapeHtml(order.shipment_status)}${order.warehouse_user_id ? ` · сотрудник #${order.warehouse_user_id}` : ''}</div><button type="button" class="operations-action primary" onclick="openFulfillment(${order.order_id})">Открыть сборку</button></div>`).join('') || '<div class="admin-empty">Нет заказов для сборки.</div>';
+        }
+
+        async function openFulfillment(orderId) {
+            const content = document.getElementById('operationsContent');
+            const response = await fetch(`/api/admin/fulfillment/${orderId}`, { headers: telegramAuthHeaders(), cache: 'no-store' });
+            const result = await response.json();
+            if (!response.ok) { tg.showAlert(result.error || 'Не удалось открыть сборку.'); return; }
+            renderFulfillment(content, orderId, result.fulfillment);
+        }
+
+        async function claimFulfillment(orderId, button) {
+            button.disabled = true;
+            try {
+                const response = await fetch(`/api/admin/fulfillment/${orderId}/claim`, { method: 'POST', headers: telegramAuthHeaders(), cache: 'no-store' });
+                const result = await response.json();
+                if (!response.ok) { tg.showAlert(result.error || 'Не удалось взять заказ в работу.'); return; }
+                renderFulfillment(document.getElementById('operationsContent'), orderId, result.fulfillment);
+            } catch (error) {
+                console.error('Ошибка взятия заказа в работу:', error);
+                tg.showAlert('Не удалось взять заказ в работу.');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function renderFulfillment(content, orderId, fulfillment) {
+            const isOwner = adminSession?.role === 'owner';
+            const claimedByCurrentUser = fulfillment.warehouse_user_id === adminSession?.user_id;
+            const canEdit = fulfillment.state !== 'packed' && (isOwner || claimedByCurrentUser);
+            const canClaim = fulfillment.state !== 'packed' && !fulfillment.warehouse_user_id;
+            const lines = fulfillment.lines.map(line => canEdit
+                ? `<form class="operations-form" data-title="${escapeHtml(line.title)}" onsubmit="setPackingLine(event, ${orderId}, ${line.book_id}, ${line.price})"><div>${escapeHtml(line.title)} · ${line.picked_quantity}/${line.ordered_quantity}</div><input name="picked" type="number" min="0" max="${line.ordered_quantity}" value="${line.picked_quantity}"><button type="submit" class="operations-action">Отметить</button></form>`
+                : `<div class="operations-meta">${escapeHtml(line.title)} · ${line.picked_quantity}/${line.ordered_quantity}</div>`
+            ).join('');
+            const assignment = fulfillment.warehouse_user_id
+                ? `В работе у сотрудника #${fulfillment.warehouse_user_id}`
+                : 'Заказ ещё не взят в работу';
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Сборка #${orderId}</span><span>${escapeHtml(fulfillment.state)}</span></div><div class="operations-meta">${assignment}</div>${lines}<div class="operations-action-grid">${canClaim ? `<button class="operations-action primary" type="button" onclick="claimFulfillment(${orderId}, this)">Взять в работу</button>` : ''}<button class="operations-action primary" type="button" onclick="packFulfillment(${orderId}, this)" ${canEdit ? '' : 'disabled'}>📦 Собран</button><button class="operations-action" type="button" onclick="printPackingSheet(${orderId})">🖨️ A4</button><button class="operations-action" type="button" onclick="showOperations('fulfillment')">◀️ Очередь</button></div></div>`;
+        }
+
+        async function setPackingLine(event, orderId, bookId, price) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            try {
+                const picked_quantity = Number(form.elements.picked.value);
+                const response = await fetch(`/api/admin/fulfillment/${orderId}/lines`, { method: 'PUT', headers: telegramAuthHeaders({'Content-Type': 'application/json'}), body: JSON.stringify({book_id: bookId, title: form.dataset.title, price, picked_quantity}) });
+                const result = await response.json();
+                if (!response.ok) { tg.showAlert(result.error || 'Не удалось обновить строку.'); return; }
+                renderFulfillment(document.getElementById('operationsContent'), orderId, result.fulfillment);
+            } catch (error) {
+                console.error('Ошибка чек-листа сборки:', error);
+                tg.showAlert('Не удалось обновить чек-лист.');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function packFulfillmentMessage(result) {
+            if (result.code === 'incomplete_checklist') {
+                return result.remaining_quantity
+                    ? `Отметьте ещё ${result.remaining_quantity} шт. в чек-листе.`
+                    : 'Отметьте все позиции в чек-листе.';
+            }
+            if (result.code === 'claim_required') return 'Сначала возьмите заказ в работу.';
+            if (result.code === 'shipment_already_packed') return 'Заказ уже собран. Обновите список.';
+            return result.error || 'Не удалось отметить заказ собранным.';
+        }
+
+        async function packFulfillment(orderId, button) {
+            button.disabled = true;
+            try {
+                const response = await fetch(`/api/admin/fulfillment/${orderId}/pack`, { method: 'POST', headers: telegramAuthHeaders(), cache: 'no-store' });
+                const result = await response.json();
+                if (!response.ok) {
+                    tg.showAlert(packFulfillmentMessage(result));
+                    await openFulfillment(orderId);
+                    return;
+                }
+                tg.HapticFeedback.notificationOccurred('success');
+                if (result.already_packed) tg.showAlert('Заказ уже был отмечен собранным.');
+                await showOperations('fulfillment');
+            } catch (error) {
+                console.error('Ошибка завершения сборки:', error);
+                tg.showAlert('Не удалось отметить заказ собранным.');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function printPackingSheet(orderId) {
+            const response = await fetch(`/api/admin/fulfillment/${orderId}/print`, { headers: telegramAuthHeaders(), cache: 'no-store' });
+            const result = await response.json();
+            if (!response.ok) { tg.showAlert(result.error || 'Лист недоступен.'); return; }
+            const recipient = result.recipient || {};
+            const lines = result.fulfillment.lines.map(line => `<tr><td>${escapeHtml(line.title)}</td><td>${line.ordered_quantity}</td><td>□</td></tr>`).join('');
+            const printNode = document.createElement('section');
+            printNode.className = 'operations-print';
+            printNode.innerHTML = `<h1>Лист сборки · заказ #${result.order_id}</h1><p>Дата заказа: ${escapeHtml(formatOrderDate(result.created_at))}</p><p>Доставка: ${escapeHtml(result.method)} · ${escapeHtml(result.shipment_status)}</p><p>${recipient.instructions ? `Инструкция: ${escapeHtml(recipient.instructions)}` : `Получатель: ${escapeHtml(recipient.recipient_name || '')}<br>Телефон: ${escapeHtml(recipient.recipient_phone || '')}<br>Город: ${escapeHtml(recipient.city || '')}<br>Пункт: ${escapeHtml(recipient.pickup_point || recipient.post_office || '')}`}</p><table><thead><tr><th>Книга</th><th>Кол-во</th><th>Проверено</th></tr></thead><tbody>${lines}</tbody></table>`;
+            document.body.appendChild(printNode);
+            window.addEventListener('afterprint', () => printNode.remove(), {once: true});
+            window.print();
+        }
+
+        function renderImportOperations(content) {
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Импорт книг CSV/XLSX</span></div><div class="operations-meta">Колонки: book_id, title, author, description, price_rub, category, stock_mode, stock_quantity. Изображения импортируются отдельно.</div><form class="operations-form" onsubmit="previewBookImport(event)"><input name="file" type="file" accept=".csv,.xlsx" required><button class="operations-action primary" type="submit">Проверить файл</button></form><div id="importPreview" aria-live="polite"></div></div>`;
+        }
+
+        async function previewBookImport(event) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const input = form.querySelector('input[type="file"]');
+            const file = input?.files?.[0];
+            const button = form.querySelector('button[type="submit"]');
+            const target = document.getElementById('importPreview');
+            if (!file) {
+                target.textContent = 'Выберите CSV или XLSX файл.';
+                return;
+            }
+            button.disabled = true;
+            target.textContent = `Проверяем файл «${file.name}»...`;
+            try {
+                const body = new FormData();
+                body.append('file', file, file.name);
+                const response = await fetch('/api/admin/books/import/preview', {method: 'POST', headers: telegramAuthHeaders(), body, cache: 'no-store'});
+                const raw = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(raw);
+                } catch {
+                    throw new Error('Сервер вернул некорректный ответ.');
+                }
+                if (!response.ok) {
+                    target.textContent = result.error || 'Файл не прошёл проверку.';
+                    return;
+                }
+                const rows = Array.isArray(result.rows_preview) ? result.rows_preview : [];
+                target.innerHTML = `<div class="operations-meta">Файл: ${escapeHtml(file.name)} · строк: ${result.rows}; верных: ${result.valid_rows}; ошибок: ${result.invalid_rows}</div>${rows.map(item => `<div class="operations-meta">${item.line_number}: ${item.errors?.length ? escapeHtml(item.errors.join('; ')) : '✓'}</div>`).join('')}${result.invalid_rows ? '' : `<button class="operations-action primary" type="button" onclick="commitBookImport('${result.batch_id}')">Применить импорт</button>`}`;
+            } catch (error) {
+                console.error('Ошибка проверки файла импорта:', error);
+                target.textContent = error.message || 'Не удалось проверить файл.';
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function commitBookImport(batchId) {
+            const response = await fetch(`/api/admin/books/import/${batchId}/commit`, {method: 'POST', headers: telegramAuthHeaders(), cache: 'no-store'});
+            const result = await response.json();
+            if (!response.ok) { tg.showAlert(result.error || 'Не удалось применить импорт.'); return; }
+            tg.showAlert(`Импорт выполнен: создано ${result.created}, обновлено ${result.updated}.`);
+            await showOperations('inventory');
+        }
+
+        async function loadStaffOperations(content) {
+            const response = await fetch('/api/admin/staff', {headers: telegramAuthHeaders(), cache: 'no-store'});
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error);
+            const staffRows = (result.staff || []).map(staff => `<div class="operations-row"><div class="operations-row-head"><span>#${staff.telegram_user_id}</span><span>${staff.is_active ? 'активен' : 'отключён'}</span></div><form class="operations-form" data-active="${staff.is_active ? 'true' : 'false'}" onsubmit="saveStaffMember(event)"><input name="telegram_user_id" type="hidden" value="${staff.telegram_user_id}"><select name="role"><option value="manager" ${staff.role === 'manager' ? 'selected' : ''}>Менеджер</option><option value="warehouse" ${staff.role === 'warehouse' ? 'selected' : ''}>Кладовщик</option></select><button class="operations-action" type="submit">Сменить роль</button></form><div class="operations-action-grid">${staff.is_active ? `<button class="operations-action" type="button" onclick="setStaffActive(${staff.telegram_user_id}, false)">Отключить</button>` : `<button class="operations-action" type="button" onclick="setStaffActive(${staff.telegram_user_id}, true, '${staff.role}')">Включить</button><button class="operations-action danger" type="button" onclick="deleteStaffMember(${staff.telegram_user_id})">Удалить</button>`}</div></div>`).join('') || '<div class="operations-meta">Сотрудников пока нет.</div>';
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Сотрудники</span></div><form class="operations-form" onsubmit="saveStaffMember(event)"><input name="telegram_user_id" type="number" min="1" placeholder="Telegram ID" required><select name="role"><option value="manager">Менеджер</option><option value="warehouse">Кладовщик</option></select><button class="operations-action primary" type="submit">Добавить</button></form></div>${staffRows}`;
+        }
+
+        async function saveStaffMember(event) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            try {
+                const response = await fetch('/api/admin/staff', {method: 'PUT', headers: telegramAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({telegram_user_id: Number(form.elements.telegram_user_id.value), role: form.elements.role.value, is_active: form.dataset.active !== 'false'})});
+                const result = await response.json();
+                if (!response.ok) { tg.showAlert(result.error || 'Не удалось сохранить сотрудника.'); return; }
+                await loadOperations();
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function setStaffActive(telegramUserId, isActive, role) {
+            const row = document.querySelector(`input[name="telegram_user_id"][value="${telegramUserId}"]`)?.closest('.operations-row');
+            const currentRole = role || row?.querySelector('select[name="role"]')?.value;
+            if (!currentRole) return;
+            try {
+                const response = await fetch('/api/admin/staff', {method: 'PUT', headers: telegramAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({telegram_user_id: telegramUserId, role: currentRole, is_active: isActive})});
+                const result = await response.json();
+                if (!response.ok) { tg.showAlert(result.error || 'Не удалось изменить сотрудника.'); return; }
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert('Не удалось изменить сотрудника.');
+            }
+        }
+
+        async function deleteStaffMember(telegramUserId) {
+            if (!window.confirm(`Удалить отключённую запись сотрудника #${telegramUserId}?`)) return;
+            try {
+                const response = await fetch('/api/admin/staff', {method: 'DELETE', headers: telegramAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({telegram_user_id: telegramUserId})});
+                const result = await response.json();
+                if (!response.ok) { tg.showAlert(result.error || 'Сначала отключите сотрудника.'); return; }
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert('Не удалось удалить сотрудника.');
+            }
+        }
+
+        async function toggleActionJournal() {
+            const panel = document.getElementById('auditOperationsPanel');
+            if (!panel) return;
+            if (!panel.hidden) {
+                panel.hidden = true;
+                panel.replaceChildren();
+                return;
+            }
+            panel.hidden = false;
+            panel.innerHTML = '<div class="admin-empty">Загрузка журнала...</div>';
+            try {
+                await loadActionJournal(panel);
+            } catch (error) {
+                console.error('Ошибка загрузки журнала:', error);
+                panel.innerHTML = '<div class="admin-empty">Не удалось загрузить журнал действий.</div>';
+            }
+        }
+
+        function renderInventoryMovements(content, movements, append = false) {
+            const entries = movements.map(item => `<div class="operations-meta">#${item.id} · ${escapeHtml(item.book_title)} · ${escapeHtml(inventoryMovementLabel(item))} · склад ${item.stock_delta >= 0 ? '+' : ''}${item.stock_delta}, резерв ${item.reserved_delta >= 0 ? '+' : ''}${item.reserved_delta}</div>`).join('');
+            const list = content.querySelector('[data-inventory-movements]');
+            if (append && list) {
+                list.insertAdjacentHTML('beforeend', entries);
+                return;
+            }
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Движения остатков</span></div><div data-inventory-movements>${entries || '<div class="operations-meta">Движений пока нет.</div>'}</div><div data-inventory-more></div></div>`;
+        }
+
+        async function loadMoreInventoryMovements(button) {
+            const panel = document.getElementById('auditOperationsPanel');
+            const beforeId = Number(button.dataset.beforeId);
+            button.disabled = true;
+            try {
+                const response = await fetch(`/api/admin/inventory/movements?limit=50&before_id=${beforeId}`, {headers: telegramAuthHeaders(), cache: 'no-store'});
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error);
+                renderInventoryMovements(panel, result.movements || [], true);
+                const more = panel.querySelector('[data-inventory-more]');
+                more.innerHTML = result.next_before_id ? `<button type="button" class="operations-action" data-before-id="${result.next_before_id}" onclick="loadMoreInventoryMovements(this)">Показать ещё</button>` : '';
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось загрузить движения.');
+                button.disabled = false;
+            }
+        }
+
+        async function loadActionJournal(content) {
+            const sections = [];
+            if (hasAdminCapability('inventory.read')) {
+                const response = await fetch('/api/admin/inventory/movements?limit=50', {headers: telegramAuthHeaders(), cache: 'no-store'});
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error);
+                const movements = result.movements || [];
+                const entries = movements.map(item => `<div class="operations-meta">#${item.id} · ${escapeHtml(item.book_title)} · ${escapeHtml(inventoryMovementLabel(item))} · склад ${item.stock_delta >= 0 ? '+' : ''}${item.stock_delta}, резерв ${item.reserved_delta >= 0 ? '+' : ''}${item.reserved_delta}</div>`).join('');
+                sections.push(`<div class="operations-row"><div class="operations-row-head"><span>Движения остатков</span></div><div data-inventory-movements>${entries || '<div class="operations-meta">Движений пока нет.</div>'}</div><div data-inventory-more>${result.next_before_id ? `<button type="button" class="operations-action" data-before-id="${result.next_before_id}" onclick="loadMoreInventoryMovements(this)">Показать ещё</button>` : ''}</div></div>`);
+            }
+            if (hasAdminCapability('audit.read')) {
+                const response = await fetch('/api/admin/audit?limit=50', {headers: telegramAuthHeaders(), cache: 'no-store'});
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error);
+                sections.push(`<div class="operations-row"><div class="operations-row-head"><span>Аудит действий</span></div>${(result.events || []).map(event => `<div class="operations-meta">#${event.id} · ${escapeHtml(event.action)} · ${escapeHtml(event.entity_type)} #${escapeHtml(event.entity_id)} · ${escapeHtml(event.created_at)}</div>`).join('') || '<div class="operations-meta">Событий пока нет.</div>'}</div>`);
+            }
+            content.innerHTML = sections.join('') || '<div class="admin-empty">Журнал недоступен.</div>';
+        }
+
 
         async function fetchAdminDashboard() {
             if (!initData) return null;
@@ -2263,24 +3677,31 @@
             document.getElementById('adminTotals').textContent =
                 `Всего заказов: ${d.total_orders} · Выручка: ${fmtRub(d.total_revenue)}`;
 
+            const backupStatus = document.getElementById('adminBackupStatus');
+            backupStatus.textContent = d.latest_backup
+                ? `${d.latest_backup.outcome === 'succeeded' ? '✅ Успешно' : '❌ Ошибка'} · ${formatOrderDate(d.latest_backup.created_at)}`
+                : 'Пока не запускалась';
+
             const topEl = document.getElementById('adminTopBooks');
             if (!d.top_books || d.top_books.length === 0) {
                 topEl.innerHTML = '<div class="admin-empty">Продаж пока нет 😴</div>';
-                return;
-            }
-            topEl.innerHTML = d.top_books.map((b, i) => `
-                <div class="admin-top-item">
-                    <div class="admin-top-rank">${i + 1}</div>
-                    <div class="admin-top-title">${escapeHtml(b.title)}</div>
-                    <div class="admin-top-meta">
-                        <div class="admin-top-qty">${b.qty} шт</div>
-                        <div class="admin-top-rev">${fmtRub(b.revenue)}</div>
+            } else {
+                topEl.innerHTML = d.top_books.map((b, i) => `
+                    <div class="admin-top-item">
+                        <div class="admin-top-rank">${i + 1}</div>
+                        <div class="admin-top-title">${escapeHtml(b.title)}</div>
+                        <div class="admin-top-meta">
+                            <div class="admin-top-qty">${b.qty} шт</div>
+                            <div class="admin-top-rev">${fmtRub(b.revenue)}</div>
+                        </div>
                     </div>
-                </div>
-            `).join('');
+                `).join('');
+            }
+            renderAdminAnalytics(d);
         }
 
         async function loadAdminDashboard() {
+            if (!hasAdminCapability('reports.view')) return;
             const overlay = document.getElementById('adminOverlay');
             const button = document.getElementById('adminBtn');
             const refreshBtn = overlay.querySelector('.admin-refresh');
@@ -2302,15 +3723,16 @@
                 adminData = null;
                 return;
             }
+            await loadAdminInsights(d);
             adminData = d;
             renderAdminDashboard(d);
             if (button) button.style.display = '';
         }
 
-        async function exportCSV(kind) {
+        async function exportCSV(kind, query = '') {
             if (!initData) return;
             try {
-                const response = await fetch(`/api/admin/export/${kind}?t=${Date.now()}`, {
+                const response = await fetch(`/api/admin/export/${kind}?t=${Date.now()}${query}`, {
                     headers: telegramAuthHeaders()
                 });
                 if (!response.ok) {
@@ -2333,11 +3755,33 @@
             }
         }
 
-        function openAdminDashboard() {
+        function exportAnalyticsCSV(dimension) {
+            const query = adminAnalyticsQuery();
+            const suffix = `&dimension=${encodeURIComponent(dimension)}${query ? `&${query}` : ''}`;
+            exportCSV('analytics', suffix);
+        }
+
+        function exportSalesCSV() {
+            const params = new URLSearchParams();
+            const dateFrom = document.getElementById('salesDateFrom').value;
+            const dateTo = document.getElementById('salesDateTo').value;
+            if (dateFrom) params.set('date_from', dateFrom);
+            if (dateTo) params.set('date_to', dateTo);
+            const query = params.toString();
+            exportCSV('sales', query ? `&${query}` : '');
+        }
+
+        async function openAdminDashboard() {
+            if (!adminSession) adminSession = await loadAdminSession();
+            if (!adminSession) return;
             document.getElementById('adminOverlay').classList.add('active');
             tg.HapticFeedback.impactOccurred('medium');
-            if (adminData) renderAdminDashboard(adminData);
-            else loadAdminDashboard();
+            renderOperationsShell();
+            await loadOperations();
+            if (hasAdminCapability('reports.view')) {
+                if (adminData) renderAdminDashboard(adminData);
+                else await loadAdminDashboard();
+            }
         }
 
         function closeAdminDashboard() {
@@ -2349,16 +3793,20 @@
         });
 
         async function init() {
+            await loadStorefrontConfig();
             await loadCategories();
             await loadBooks();
+            await loadFavorites();
+            await loadBackInStockSubscriptions();
             await loadCart();
             await loadPaymentMethods();
             updateUI();
             renderCartItems();
             applyFiltersAndRender();
             updateWishlistBadge();
-            // Если пользователь админ — показываем кнопку дашборда
-            await loadAdminDashboard();
+            // Показываем рабочее пространство только после server-side проверки роли.
+            await loadAdminSession();
+            if (hasAdminCapability('reports.view')) await loadAdminDashboard();
         }
         init();
     </script>

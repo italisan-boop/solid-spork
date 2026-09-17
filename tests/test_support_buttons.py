@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import suppress
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -11,6 +13,7 @@ from handlers.admin_support import (
 from handlers.user import (
     _rewrite_ticket_notices,
     _ticket_action_markup,
+    order_support_notify_loop,
     support_claims,
     support_exit_callback,
     support_forward_msgs,
@@ -115,7 +118,60 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("support_reply:42", callbacks(kwargs["reply_markup"]))
         self.assertIn("support_release:42", callbacks(kwargs["reply_markup"]))
 
-    async def test_support_exit_deletes_prompt_and_sends_start_menu(self):
+    async def test_order_support_worker_delivers_authoritative_ticket(self):
+        sent = asyncio.Event()
+        request = {
+            "id": 71,
+            "user_id": 42,
+            "receipt_json": (
+                '{"id":44,"status":"confirmed","payment_method":"manual",'
+                '"items":[{"title":"Историческая книга","quantity":2,"line_total":2000}],'
+                '"items_subtotal":2000,"delivery_price":0,"promo_code_snapshot":"SAVE25",'
+                '"promo_discount":400,"bonus_discount":100,"total_discount":500,"total":1500}'
+            ),
+        }
+
+        async def mark_sent(request_id):
+            self.assertEqual(71, request_id)
+            sent.set()
+
+        bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=99)))
+        with (
+            patch(
+                "db.order_support_requests.claim_order_support_requests",
+                new_callable=AsyncMock,
+                return_value=[request],
+            ),
+            patch(
+                "db.order_support_requests.mark_order_support_request_sent",
+                side_effect=mark_sent,
+            ),
+            patch(
+                "db.order_support_requests.release_order_support_request",
+                new_callable=AsyncMock,
+            ) as release,
+            patch("handlers.user.set_support_mode", new_callable=AsyncMock) as set_mode,
+            patch("handlers.user.recipient_ids_for_event_sync", return_value=[101]),
+            patch("handlers.user.settings.ADMIN_IDS", [101]),
+        ):
+            task = asyncio.create_task(order_support_notify_loop(bot))
+            try:
+                await asyncio.wait_for(sent.wait(), timeout=1)
+            finally:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+        admin_call = bot.send_message.await_args_list[0]
+        self.assertEqual(101, admin_call.args[0])
+        self.assertIn("Историческая книга ×2", admin_call.args[1])
+        self.assertIn("Промокод", admin_call.args[1])
+        self.assertIn("Общая скидка", admin_call.args[1])
+        self.assertIn("support_reply:42", callbacks(admin_call.kwargs["reply_markup"]))
+        self.assertEqual(42, bot.send_message.await_args_list[1].args[0])
+        set_mode.assert_awaited_once_with(42, True)
+        release.assert_not_awaited()
+
         message = SimpleNamespace(
             delete=AsyncMock(),
             edit_reply_markup=AsyncMock(),

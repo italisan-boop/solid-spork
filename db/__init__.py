@@ -24,6 +24,7 @@ from db.referrals import (
     parse_referral_code,
     check_referral_exists,
     create_referral,
+    clear_referrals,
     add_user_bonus,
     get_user_active_bonus,
     mark_bonus_used,
@@ -51,8 +52,11 @@ from db.orders import (
     get_order_full,
     get_user_orders,
     update_order_status,
+    complete_delivery_and_order,
     get_unnotified_pending_orders,
+    claim_unnotified_pending_orders,
     mark_new_order_notified,
+    release_new_order_notification_claim,
     get_all_orders,
     get_orders_count,
     get_stats,
@@ -89,6 +93,47 @@ from db.books import (
     purge_archived_books,
     update_book,
     update_book_full,
+    set_book_stock,
+)
+from db.deliveries import (
+    get_delivery,
+    get_delivery_for_admin,
+    get_delivery_summary,
+    update_delivery_status,
+    update_sdek_tracking,
+    update_tracking,
+    redact_expired_delivery_pii,
+)
+from db.inventory import (
+    adjust_stock,
+    inventory_summary,
+    recent_movements,
+    claim_notification_outbox,
+    mark_notification_sent,
+    release_notification_claim,
+    revoke_back_in_stock_subscription,
+)
+from db.acquisition import capture_campaign_first_touch, create_campaign
+from db.order_support_requests import (
+    claim_order_support_requests,
+    enqueue_order_support_request_sync,
+    mark_order_support_request_sent,
+    release_order_support_request,
+    fail_order_support_request,
+)
+from db.staff import (
+    get_staff_role,
+    list_staff,
+    set_staff_member,
+)
+from db.audit import list_audit_events_sync
+from db.fulfillment import (
+    claim_fulfillment_sync,
+    get_fulfillment_sync,
+    list_fulfillment_queue_sync,
+    pack_fulfillment_sync,
+    packing_print_payload_sync,
+    set_picked_quantity_sync,
 )
 
 

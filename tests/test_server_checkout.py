@@ -37,6 +37,14 @@ class CheckoutApiTests(unittest.TestCase):
         self._patches.enter_context(patch.object(schema, "DB_PATH", self.database_path))
         self._patches.enter_context(patch.object(db_connection, "DB_PATH", self.database_path))
         self._patches.enter_context(patch.object(server, "BOT_TOKEN", TEST_TOKEN))
+        self._patches.enter_context(patch.object(server.settings, "DELIVERY_ENCRYPTION_ACTIVE_KEY_ID", "test"))
+        self._patches.enter_context(
+            patch.object(
+                server.settings,
+                "DELIVERY_ENCRYPTION_KEYS_JSON",
+                '{"test":"eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg="}',
+            )
+        )
         self._send_message = self._patches.enter_context(
             patch("server.send_telegram_message", return_value={"ok": True})
         )
@@ -47,6 +55,9 @@ class CheckoutApiTests(unittest.TestCase):
             patch("server.send_stars_invoice", return_value={"ok": True})
         )
         schema.initialize_database(self.database_path)
+        self._execute(
+            "UPDATE payment_settings SET setting_value = '1' WHERE setting_key = 'delivery_enabled'"
+        )
         self.client = server.app.test_client()
 
     def tearDown(self):
@@ -89,6 +100,13 @@ class CheckoutApiTests(unittest.TestCase):
             "checkout_key": str(uuid.uuid4()),
             "payment_method": "manual",
             "promo_code": "",
+            "delivery": {
+                "method": "sdek_pickup",
+                "recipient_name": "Покупатель",
+                "recipient_phone": "+79991234567",
+                "city": "Москва",
+                "pickup_point": "ПВЗ СДЭК 123",
+            },
         }
         payload.update(overrides)
         return self.client.post("/order", json=payload, headers=signed_headers())
@@ -111,7 +129,7 @@ class CheckoutApiTests(unittest.TestCase):
         result = response.get_json()
         self.assertEqual("none", result["payment_method"])
         self.assertFalse(result["payment_required"])
-        self.assertEqual(2400, result["final_total"])
+        self.assertEqual(2900, result["final_total"])
 
         connection = schema.connect(self.database_path)
         try:
@@ -119,7 +137,7 @@ class CheckoutApiTests(unittest.TestCase):
             items = connection.execute("SELECT title, price FROM order_items").fetchall()
         finally:
             connection.close()
-        self.assertEqual((2400, "new"), order)
+        self.assertEqual((2900, "new"), order)
         self.assertEqual(2, len(items))
         self.assertTrue(all(item[1] == 1200 for item in items))
         self.assertTrue(all(item[0] != "Подмена" for item in items))
@@ -137,7 +155,7 @@ class CheckoutApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         result = response.get_json()
         self.assertEqual(240, result["discount"])
-        self.assertEqual(2160, result["final_total"])
+        self.assertEqual(2660, result["final_total"])
         self.assertEqual("SAVE10", result["applied_promo"])
         self.assertEqual(1, self._scalar(
             "SELECT current_uses FROM promo_codes WHERE code = 'SAVE10'"
@@ -161,6 +179,9 @@ class CheckoutApiTests(unittest.TestCase):
         self._send_keyboard.assert_called_once()
 
         self._execute("UPDATE books SET price = 1201 WHERE id = 1")
+        self._execute(
+            "UPDATE payment_settings SET setting_value = '0' WHERE setting_key = 'delivery_enabled'"
+        )
         self._settings(card=True, stars=True, rate=2)
         stars_result = self._order(
             cart=[{"id": 1, "quantity": 1}],
@@ -171,6 +192,67 @@ class CheckoutApiTests(unittest.TestCase):
         self.assertFalse(stars_result["payment_required"])
         self.assertEqual(601, stars_result["stars_amount"])
         self._send_invoice.assert_called_once()
+
+    def test_disabled_delivery_creates_digital_order_without_sdek_data(self):
+        self._execute(
+            "UPDATE payment_settings SET setting_value = '0' WHERE setting_key = 'delivery_enabled'"
+        )
+        self._settings(card=False)
+        response = self._order(payment_method="none", delivery={"forged": "ignored"})
+
+        self.assertEqual(200, response.status_code)
+        result = response.get_json()
+        self.assertEqual(1200 * 2, result["final_total"])
+        self.assertEqual(0, result["delivery_price"])
+        self.assertIsNone(result["delivery"])
+        self.assertEqual(0, self._scalar("SELECT COUNT(*) FROM order_deliveries"))
+
+        options = self.client.get("/api/checkout/options", headers=signed_headers()).get_json()
+        self.assertEqual(
+            {"enabled": False, "available": False, "methods": [], "message": ""},
+            options["delivery"],
+        )
+
+    def test_unavailable_delivery_rolls_back_before_using_promo(self):
+        self._settings(card=False)
+        self._execute(
+            "INSERT INTO promo_codes (code, discount_percent, max_uses) VALUES ('SAVE10', 10, 1)"
+        )
+        with patch.object(server.settings, "DELIVERY_ENCRYPTION_KEYS_JSON", ""):
+            options = self.client.get("/api/checkout/options", headers=signed_headers()).get_json()
+            response = self._order(payment_method="none", promo_code="SAVE10")
+
+        self.assertEqual({
+            "enabled": True,
+            "available": False,
+            "methods": [],
+            "message": "Доставка временно недоступна. Попробуйте позже.",
+        }, options["delivery"])
+        self.assertEqual(503, response.status_code)
+        self.assertEqual("delivery_unavailable", response.get_json()["code"])
+        self.assertEqual(0, self._scalar("SELECT COUNT(*) FROM orders"))
+        self.assertEqual(0, self._scalar("SELECT current_uses FROM promo_codes WHERE code = 'SAVE10'"))
+
+    def test_stars_are_available_with_and_without_delivery(self):
+        self._settings(card=True, stars=True, rate=2)
+
+        delivery_options = self.client.get(
+            "/api/checkout/options", headers=signed_headers()
+        ).get_json()
+        self.assertIn("stars", {method["id"] for method in delivery_options["methods"]})
+        delivery_order = self._order(payment_method="stars")
+        self.assertEqual(200, delivery_order.status_code)
+        self.assertEqual("stars", delivery_order.get_json()["payment_method"])
+        self.assertEqual("awaiting_stars_payment", self._scalar("SELECT status FROM orders"))
+        self.assertEqual(1, self._scalar("SELECT COUNT(*) FROM order_deliveries"))
+
+        self._execute(
+            "UPDATE payment_settings SET setting_value = '0' WHERE setting_key = 'delivery_enabled'"
+        )
+        digital_options = self.client.get(
+            "/api/checkout/options", headers=signed_headers()
+        ).get_json()
+        self.assertIn("stars", {method["id"] for method in digital_options["methods"]})
 
 
 if __name__ == "__main__":

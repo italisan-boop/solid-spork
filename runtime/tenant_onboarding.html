@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Настройка магазина</title>
+<style>
+:root { --bg:#f4f7f3; --surface:#fff; --ink:#1c2c22; --muted:#647167; --line:#d8e2d8; --brand:#287548; }
+* { box-sizing:border-box; } body { margin:0; min-height:100vh; display:grid; place-items:center; padding:20px; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+main { width:min(100%,560px); } .card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:22px; box-shadow:0 2px 12px #1020160c; } h1 { margin:0 0 8px; font-size:26px; } p { color:var(--muted); } form { display:grid; gap:13px; margin-top:18px; } label { display:grid; gap:5px; font-weight:700; } input { min-height:43px; width:100%; border:1px solid var(--line); border-radius:9px; padding:9px 10px; font:inherit; } input[type=color] { padding:3px; } .colors { display:grid; grid-template-columns:1fr 1fr; gap:10px; } button { min-height:44px; border:0; border-radius:9px; padding:9px 12px; background:var(--brand); color:#fff; font:inherit; font-weight:750; cursor:pointer; } button:disabled { opacity:.55; } .status { min-height:22px; color:var(--muted); } .status.error { color:#a43b36; } .locked { display:none; border:1px solid #ead7ad; background:#fff8e7; border-radius:10px; padding:10px; color:#765510; }
+</style>
+</head>
+<body>
+<main><section class="card">
+<h1>Первоначальная настройка</h1>
+<p>Настройте то, что увидят покупатели. Тариф, лимиты, домен, бот и платёжные секреты настраиваются только платформенным администратором.</p>
+<div class="locked" id="locked"></div>
+<button type="button" id="claimOwner">Подтвердить владение магазином</button>
+<form id="form">
+<label>Название магазина<input id="storeName" maxlength="120" required></label>
+<div class="colors"><label>Основной цвет<input id="primaryColor" type="color" value="#2f7d4a"></label><label>Акцентный цвет<input id="accentColor" type="color" value="#f2b84b"></label></div>
+<label>Контакт поддержки<input id="supportContact" maxlength="160" placeholder="@support или email"></label>
+<button type="submit">Сохранить оформление</button>
+</form>
+<div class="status" id="status"></div>
+</section></main>
+<script>
+const tg = window.Telegram?.WebApp;
+const initData = tg?.initData || '';
+if (tg) { tg.ready(); tg.expand(); }
+const form = document.getElementById('form'); const claimButton = document.getElementById('claimOwner'); const statusNode = document.getElementById('status');
+function headers(extra = {}) { return initData ? {...extra, 'X-Telegram-Init-Data': initData} : extra; }
+function status(message, isError = false) { statusNode.textContent = message; statusNode.classList.toggle('error', isError); }
+async function request(path, options = {}) { const response = await fetch(path, {...options, headers:headers(options.headers || {}), cache:'no-store'}); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'Запрос не выполнен'); return data; }
+async function load() {
+  if (!initData) { form.querySelector('button').disabled = true; claimButton.disabled = true; status('Откройте мастер из Telegram-бота.', true); return; }
+  try {
+    const session = await request('/api/tenant/session');
+    if (!session.is_owner) {
+      form.style.display = 'none';
+      claimButton.style.display = 'none';
+      const locked = document.getElementById('locked');
+      locked.style.display = 'block';
+      locked.textContent = 'Только владелец магазина может менять оформление.';
+      return;
+    }
+    const data = await request('/api/tenant/onboarding/storefront');
+    document.getElementById('storeName').value = data.store_name;
+    document.getElementById('primaryColor').value = data.primary_color;
+    document.getElementById('accentColor').value = data.accent_color;
+    document.getElementById('supportContact').value = data.support_contact;
+  } catch (error) {
+    form.querySelector('button').disabled = true;
+    claimButton.disabled = true;
+    status(error.message, true);
+  }
+}
+claimButton.addEventListener('click', async () => {
+  claimButton.disabled = true;
+  status('Подтверждаем владение…');
+  try {
+    await request('/api/tenant/onboarding/owner-claim', {method:'POST'});
+    status('Владение подтверждено. Попросите платформенного администратора активировать магазин.');
+    tg?.HapticFeedback?.notificationOccurred('success');
+  } catch (error) {
+    status(error.message, true);
+    claimButton.disabled = false;
+  }
+});
+form.addEventListener('submit', async event => { event.preventDefault(); const button=form.querySelector('button'); button.disabled=true; status('Сохраняем…'); try { await request('/api/tenant/onboarding/storefront', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({store_name:document.getElementById('storeName').value.trim(),primary_color:document.getElementById('primaryColor').value,accent_color:document.getElementById('accentColor').value,support_contact:document.getElementById('supportContact').value.trim()})}); status('Оформление сохранено.'); tg?.HapticFeedback?.notificationOccurred('success'); } catch (error) { status(error.message, true); } finally { button.disabled=false; } });
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>White-label platform</title>
+<style>
+:root { --bg:#f5f7f3; --surface:#fff; --ink:#1c2c22; --muted:#637067; --line:#d9e1d9; --brand:#287548; --brand-ink:#fff; --danger:#a43b36; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+main { width:min(100% - 32px, 1120px); margin:32px auto 56px; }
+h1 { margin:0; font-size:30px; } h2 { margin:0 0 14px; font-size:20px; } p { color:var(--muted); }
+.grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:22px; align-items:start; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:20px; box-shadow:0 2px 10px #15241a0a; }
+form { display:grid; gap:12px; } label { display:grid; gap:5px; font-weight:650; } input, select { min-height:42px; width:100%; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--ink); padding:9px 10px; font:inherit; }
+button { min-height:42px; border:0; border-radius:9px; padding:9px 13px; background:var(--brand); color:var(--brand-ink); font:inherit; font-weight:700; cursor:pointer; } button.secondary { background:#eef3ee; color:var(--ink); } button.danger { background:var(--danger); } button:disabled { opacity:.55; cursor:default; }
+.status { min-height:22px; color:var(--muted); } .status.error { color:var(--danger); }
+.tenants { display:grid; gap:12px; } .tenant { border:1px solid var(--line); border-radius:12px; padding:14px; display:grid; gap:12px; } .tenant-head { display:flex; justify-content:space-between; gap:12px; align-items:start; } .tenant-name { font-size:17px; font-weight:750; } .pill { border-radius:999px; background:#edf5ee; color:#23643c; padding:3px 8px; font-size:12px; font-weight:700; white-space:nowrap; } .meta { color:var(--muted); font-size:13px; overflow-wrap:anywhere; } .actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .features { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; } .feature { display:flex; align-items:center; gap:7px; color:var(--ink); font-size:13px; } .feature input { width:16px; min-height:16px; margin:0; }
+.secret-form { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:10px; border-top:1px solid var(--line); } .secret-form > p { grid-column:1/-1; margin:0; font-size:13px; }
+@media (max-width:720px) { main { width:min(100% - 20px,1120px); margin-top:20px; } .grid { grid-template-columns:1fr; } .features, .actions, .secret-form { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Управление магазинами</h1>
+    <p>Создавайте изолированные витрины, назначайте тарифы и включайте модули. Секреты задаются только безопасными ссылками на хранилище секретов.</p>
+  </header>
+  <div class="grid">
+    <section class="card">
+      <h2>Новый магазин</h2>
+      <form id="createTenantForm">
+        <label>Название магазина<input id="displayName" maxlength="120" required></label>
+        <label>Поддомен<input id="slug" pattern="[a-z0-9][a-z0-9-]{1,46}[a-z0-9]" placeholder="my-bookstore" required></label>
+        <label>Telegram ID владельца<input id="ownerId" type="number" min="1" required></label>
+        <label>Тариф<select id="plan"><option value="start">Старт</option><option value="business">Бизнес</option><option value="pro">Pro</option></select></label>
+        <button type="submit">Создать черновик</button>
+      </form>
+      <div class="status" id="createStatus"></div>
+    </section>
+    <section class="card">
+      <h2>Правила тарифов</h2>
+      <p><b>Старт</b>: каталог, заказы, бренд и настройки; до 100 книг.</p>
+      <p><b>Бизнес</b>: Старт, сотрудники, склад, импорт и аналитика; до 1 000 книг и 5 сотрудников.</p>
+      <p><b>Pro</b>: Бизнес, кампании и рассылки; до 10 000 книг, 20 сотрудников, 20 кампаний и 2 000 получателей рассылки в сутки.</p>
+    </section>
+  </div>
+  <section class="card" style="margin-top:18px">
+    <h2>Магазины</h2>
+    <div class="status" id="listStatus">Загрузка…</div>
+    <div class="tenants" id="tenants"></div>
+  </section>
+</main>
+<script>
+const tg = window.Telegram?.WebApp;
+const initData = tg?.initData || '';
+if (tg) { tg.ready(); tg.expand(); }
+const features = ['catalog','orders','branding','store_settings','staff','inventory','book_import','analytics','campaigns','broadcast'];
+const labels = {catalog:'Каталог',orders:'Заказы',branding:'Бренд',store_settings:'Настройки',staff:'Сотрудники',inventory:'Склад',book_import:'Импорт',analytics:'Аналитика',campaigns:'Кампании',broadcast:'Рассылки'};
+function headers(extra = {}) { return initData ? {...extra, 'X-Telegram-Init-Data': initData} : extra; }
+async function api(path, options = {}) {
+  const response = await fetch(path, {...options, headers: headers(options.headers || {}), cache:'no-store'});
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Запрос не выполнен');
+  return payload;
+}
+function status(element, text, error = false) { element.textContent = text; element.classList.toggle('error', error); }
+function tenantCard(tenant) {
+  const featureSet = new Set(tenant.entitlements.features);
+  const checks = features.map(feature => `<label class="feature"><input type="checkbox" data-feature="${feature}" ${featureSet.has(feature) ? 'checked' : ''}>${labels[feature]}</label>`).join('');
+  const limits = Object.entries(tenant.entitlements.limits).map(([name, value]) => `${name}: ${value}`).join(' · ');
+  return `<article class="tenant" data-tenant="${tenant.id}">
+    <div class="tenant-head"><div><div class="tenant-name">${escapeHtml(tenant.display_name)}</div><div class="meta">${escapeHtml(tenant.canonical_host)} · владелец #${tenant.owner_telegram_id}</div></div><span class="pill">${escapeHtml(tenant.lifecycle_state)}</span></div>
+    <div class="meta">Лимиты: ${escapeHtml(limits)}</div>
+    <label>Тариф<select data-plan><option value="start" ${tenant.plan === 'start' ? 'selected' : ''}>Старт</option><option value="business" ${tenant.plan === 'business' ? 'selected' : ''}>Бизнес</option><option value="pro" ${tenant.plan === 'pro' ? 'selected' : ''}>Pro</option></select></label>
+    <div class="features">${checks}</div>
+    <div class="actions"><button type="button" data-save>Сохранить тариф и модули</button><button type="button" class="secondary" data-provision ${tenant.lifecycle_state === 'draft' || tenant.lifecycle_state === 'migration_failed' ? '' : 'disabled'}>Подготовить runtime</button>${tenant.lifecycle_state === 'awaiting_owner_claim' ? '<button type="button" class="secondary" data-activate>Активировать магазин</button>' : ''}</div>
+    <form class="secret-form" data-domain><p>Пользовательский домен сначала остаётся pending. Проверьте DNS/edge routing и подтвердите его через platform API.</p><label>Пользовательский домен<input name="host" placeholder="store.example.com"></label><button type="submit" class="secondary">Запросить домен</button></form>
+    <form class="secret-form" data-secrets><p>Укажите ссылки на внешний SecretStore. Не вставляйте токены и ключи в этот интерфейс.</p><label>Bot token reference<input data-secret="telegram_bot_token" placeholder="env:CLIENT_BOT_TOKEN"></label><label>Webhook secret reference<input data-secret="telegram_webhook_secret" placeholder="env:CLIENT_WEBHOOK_SECRET"></label><label>YooKassa reference<input data-secret="yookassa_credentials" placeholder="env:CLIENT_YOOKASSA_SECRET"></label><button type="submit" class="secondary">Сохранить ссылки</button></form>
+    <div class="status" data-status></div>
+  </article>`;
+}
+function escapeHtml(value) { const node = document.createElement('span'); node.textContent = String(value); return node.innerHTML; }
+async function loadTenants() {
+  const target = document.getElementById('tenants'); const state = document.getElementById('listStatus');
+  try { const payload = await api('/api/platform/tenants'); target.innerHTML = payload.tenants.map(tenantCard).join('') || '<p>Магазинов пока нет.</p>'; status(state, ''); } catch (error) { status(state, initData ? error.message : 'Откройте console через платформенного Telegram-бота.', true); }
+}
+document.getElementById('createTenantForm').addEventListener('submit', async event => {
+  event.preventDefault(); const state = document.getElementById('createStatus'); status(state, 'Создаём…');
+  try { await api('/api/platform/tenants', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name:document.getElementById('displayName').value.trim(),slug:document.getElementById('slug').value.trim(),owner_telegram_id:Number(document.getElementById('ownerId').value),plan:document.getElementById('plan').value})}); event.currentTarget.reset(); status(state, 'Черновик магазина создан. Добавьте ссылки на секреты и подготовьте runtime.'); await loadTenants(); } catch (error) { status(state, error.message, true); }
+});
+document.getElementById('tenants').addEventListener('click', async event => {
+  const card = event.target.closest('[data-tenant]'); if (!card) return; const id = card.dataset.tenant; const state = card.querySelector('[data-status]');
+  try {
+    if (event.target.matches('[data-save]')) { const planValue = card.querySelector('[data-plan]').value; const featureOverrides = Object.fromEntries([...card.querySelectorAll('[data-feature]')].map(input => [input.dataset.feature, input.checked])); await api(`/api/platform/tenants/${id}/plan`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan:planValue})}); await api(`/api/platform/tenants/${id}/entitlements`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature_overrides:featureOverrides,limit_overrides:{}})}); status(state,'Тариф и модули сохранены.'); await loadTenants(); }
+    if (event.target.matches('[data-provision]')) { status(state,'Подготавливаем isolated runtime…'); await api(`/api/platform/tenants/${id}/provision`, {method:'POST'}); status(state,'Runtime подготовлен. Ожидается подтверждение владельца.'); await loadTenants(); }
+    if (event.target.matches('[data-activate]')) { status(state,'Проверяем подтверждение владельца…'); await api(`/api/platform/tenants/${id}/activate`, {method:'POST'}); status(state,'Магазин активирован.'); await loadTenants(); }
+  } catch (error) { status(state,error.message,true); }
+});
+document.getElementById('tenants').addEventListener('submit', async event => {
+  if (!event.target.matches('[data-secrets], [data-domain]')) return; event.preventDefault(); const card = event.target.closest('[data-tenant]'); const state = card.querySelector('[data-status]');
+  try { if (event.target.matches('[data-domain]')) { const host=event.target.elements.host.value.trim(); const result=await api(`/api/platform/tenants/${card.dataset.tenant}/domains`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host})}); status(state,`Домен ${result.host} ожидает проверки.`); event.target.reset(); return; } for (const input of event.target.querySelectorAll('[data-secret]')) { if (!input.value.trim()) continue; await api(`/api/platform/tenants/${card.dataset.tenant}/secret-references/${input.dataset.secret}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:input.value.trim(),version:'v1'})}); } status(state,'Ссылки на секреты сохранены.'); event.target.reset(); } catch (error) { status(state,error.message,true); }
+});
+loadTenants();
+</script>
+</body>
+</html>

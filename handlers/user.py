@@ -11,9 +11,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 import db
+from db.orders import format_order_receipt_html
 from content_defaults import QUICK_TEMPLATE_KEYS
+from authz import has_permission_sync, recipient_ids_for_event_sync
 from config import settings
-from states import AddBookState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
+from states import AddBookState, DeliverySettingsState, EditBookState, CategoryState, PromoCodeState, ReferralState, PaymentSettingsState
 from utils import format_local_time, parseBookImages, setup_logger
 from utils.otp_confirm import revoke_otp
 
@@ -192,7 +194,7 @@ def _support_exit_markup():
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in settings.ADMIN_IDS
+    return has_permission_sync(user_id, "support.respond")
 
 
 async def set_support_mode(user_id: int, active: bool) -> None:
@@ -243,6 +245,7 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
     await set_support_mode(message.from_user.id, False)
 
     ref_code = message.text.split()[1] if len(message.text.split()) > 1 else ""
+    await db.capture_campaign_first_touch(message.from_user.id, ref_code)
     referrer_id = await db.parse_referral_code(ref_code)
 
     if referrer_id and referrer_id != message.from_user.id:
@@ -335,6 +338,21 @@ async def about_callback(callback: CallbackQuery):
     await callback.answer()
 
 
+def _support_intro_text(order_id: int | None = None) -> str:
+    order_note = (
+        f"Ваше обращение по заказу #{order_id} передано администратору.\n\n"
+        if order_id is not None
+        else ""
+    )
+    return (
+        "🆘 <b>Служба поддержки</b>\n\n"
+        f"{order_note}"
+        "Напишите ваш вопрос, и администратор ответит!\n\n"
+        "💬 Вы можете отправлять несколько сообщений подряд — все они уйдут "
+        "в поддержку, отвечать на них можно прямо здесь."
+    )
+
+
 @router.callback_query(F.data == "support")
 async def support_callback(callback: CallbackQuery, state: FSMContext):
     """Обработка кнопки поддержки"""
@@ -344,14 +362,110 @@ async def support_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await set_support_mode(callback.from_user.id, True)
     await callback.message.answer(
-        "🆘 <b>Служба поддержки</b>\n\n"
-        "Напишите ваш вопрос, и администратор ответит!\n\n"
-        "💬 Вы можете отправлять несколько сообщений подряд — все они уйдут "
-        "в поддержку, отвечать на них можно прямо здесь.",
+        _support_intro_text(),
         reply_markup=_support_exit_markup(),
         parse_mode="HTML"
     )
     await callback.answer()
+
+
+async def order_support_notify_loop(bot: Bot):
+    """Deliver durable Mini App order-support requests into the normal ticket flow."""
+    from db.order_support_requests import (
+        claim_order_support_requests,
+        fail_order_support_request,
+        mark_order_support_request_sent,
+        release_order_support_request,
+    )
+
+    logger.info("Order support request worker started")
+    while True:
+        try:
+            requests = await claim_order_support_requests()
+            for support_request in requests:
+                request_id = support_request["id"]
+                try:
+                    receipt = json.loads(support_request["receipt_json"])
+                    if not isinstance(receipt, dict) or not isinstance(receipt.get("items"), list):
+                        raise ValueError("invalid receipt")
+                    user_id = support_request["user_id"]
+                    item_lines = []
+                    for item in receipt["items"]:
+                        if not isinstance(item, dict):
+                            raise ValueError("invalid receipt item")
+                        title = html.escape(str(item["title"]), quote=False)
+                        quantity = int(item.get("quantity", 1))
+                        line_total = int(item["line_total"])
+                        if quantity < 1:
+                            raise ValueError("invalid receipt quantity")
+                        quantity_suffix = f" ×{quantity}" if quantity > 1 else ""
+                        item_lines.append(f"• {title}{quantity_suffix} — {line_total} ₽")
+                    item_text = "\n".join(item_lines)
+                    receipt_text = (
+                        f"🆘 <b>Обращение по заказу #{receipt['id']}</b>\n\n"
+                        f"Статус: {html.escape(str(receipt['status']), quote=False)}\n"
+                        f"Оплата: {html.escape(str(receipt['payment_method']), quote=False)}\n\n"
+                        f"📦 <b>Состав:</b>\n{item_text}\n\n"
+                        f"Товары: {int(receipt['items_subtotal'])} ₽\n"
+                    )
+                    if receipt.get("delivery_price"):
+                        receipt_text += f"Доставка: {int(receipt['delivery_price'])} ₽\n"
+                    if receipt.get("promo_code_snapshot"):
+                        receipt_text += (
+                            f"Промокод: <code>{html.escape(str(receipt['promo_code_snapshot']))}</code>\n"
+                        )
+                    if receipt.get("promo_discount"):
+                        receipt_text += f"Скидка промокода: −{int(receipt['promo_discount'])} ₽\n"
+                    if receipt.get("bonus_discount"):
+                        receipt_text += f"Скидка бонуса: −{int(receipt['bonus_discount'])} ₽\n"
+                    if receipt.get("total_discount"):
+                        receipt_text += f"Общая скидка: −{int(receipt['total_discount'])} ₽\n"
+                    receipt_text += f"Итого: <b>{int(receipt['total'])} ₽</b>"
+                    claimed_by = support_claims.get(user_id)
+                    support_recipients = recipient_ids_for_event_sync("support")
+                    recipients = [claimed_by] if claimed_by in support_recipients else support_recipients
+                    delivered = False
+                    for admin_id in recipients:
+                        try:
+                            sent = await bot.send_message(
+                                admin_id,
+                                receipt_text,
+                                reply_markup=_ticket_action_markup(user_id),
+                                parse_mode="HTML",
+                            )
+                            _track_admin_msg(user_id, admin_id, sent.message_id, support_forward_msgs)
+                            delivered = True
+                        except Exception:
+                            logger.warning("Order support ticket delivery failed")
+                    if not delivered:
+                        await release_order_support_request(request_id, "delivery_failed")
+                        continue
+                    await set_support_mode(user_id, True)
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            _support_intro_text(receipt["id"]),
+                            reply_markup=_support_exit_markup(),
+                            parse_mode="HTML",
+                        )
+                    except TelegramForbiddenError:
+                        logger.warning("Order support customer notice was rejected")
+                    except Exception:
+                        logger.warning("Order support customer notice failed")
+                    _track_support_message(
+                        user_id,
+                        name="Заказ",
+                        text=f"Обращение по заказу #{receipt['id']}",
+                    )
+                    await mark_order_support_request_sent(request_id)
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    await fail_order_support_request(request_id, "invalid_receipt")
+                except Exception:
+                    logger.exception("Order support request delivery failed")
+                    await release_order_support_request(request_id, "delivery_error")
+        except Exception:
+            logger.exception("Order support request worker failed")
+        await asyncio.sleep(15)
 
 
 @router.callback_query(F.data == "support_exit")
@@ -440,9 +554,10 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         claimed_by = support_claims.get(user_id)
         # Если тикет закреплён за конкретным админом — шлём только ему,
         # чтобы второй админ не отвечал параллельно.
+        support_recipients = recipient_ids_for_event_sync("support")
         recipients = (
-            [claimed_by] if claimed_by in settings.ADMIN_IDS
-            else settings.ADMIN_IDS
+            [claimed_by] if claimed_by in support_recipients
+            else support_recipients
         )
         claim_note = (
             "\n🔒 <i>Тикет закреплён за вами.</i>"
@@ -519,6 +634,10 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         PromoCodeState.editing_min_order.state,
         PromoCodeState.editing_max_uses.state,
         PromoCodeState.editing_expires.state,
+        DeliverySettingsState.waiting_for_price.state,
+        DeliverySettingsState.waiting_for_self_pickup_location.state,
+        DeliverySettingsState.waiting_for_self_pickup_schedule.state,
+        DeliverySettingsState.waiting_for_self_pickup_instructions.state,
     }
     if current_state in admin_only_states and not is_admin(user_id):
         await state.clear()
@@ -533,6 +652,10 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         PaymentSettingsState.waiting_for_recipient.state,
         PaymentSettingsState.waiting_for_instructions.state,
         PaymentSettingsState.waiting_for_stars_rate.state,
+        DeliverySettingsState.waiting_for_price.state,
+        DeliverySettingsState.waiting_for_self_pickup_location.state,
+        DeliverySettingsState.waiting_for_self_pickup_schedule.state,
+        DeliverySettingsState.waiting_for_self_pickup_instructions.state,
     ]
 
     if current_state in payment_states:
@@ -1554,7 +1677,7 @@ async def support_escalation_loop(bot: Bot):
                     f"• или используйте кнопки ниже"
                 )
                 sent = 0
-                for admin_id in settings.ADMIN_IDS:
+                for admin_id in recipient_ids_for_event_sync("support"):
                     try:
                         esc_msg = await bot.send_message(
                             admin_id,
@@ -1601,25 +1724,78 @@ async def show_user_orders(message_or_callback, user_id: int):
         orders = await db.get_user_orders(user_id)
         if not orders:
             text = "📭 У вас пока нет заказов.\n\nЗагляните в магазин! 🌱"
+            markup = None
         else:
             status_emoji = {'new': '🆕', 'confirmed': '✅', 'completed': '📦', 'cancelled': '❌', 'awaiting_payment': '💳', 'awaiting_stars_payment': '⭐', 'awaiting_yookassa_payment': '🟣', 'payment_pending': '⏳', 'paid': '💰'}
             status_names = {'new': 'Новый', 'confirmed': 'Подтверждён', 'completed': 'Выполнен', 'cancelled': 'Отменён', 'awaiting_payment': 'Ожидает оплаты', 'awaiting_stars_payment': 'Ожидает Stars', 'awaiting_yookassa_payment': 'Ожидает оплаты (ЮKassa)', 'payment_pending': 'Ожидает подтверждения', 'paid': 'Оплачен'}
-            orders_list = [
-                f"{status_emoji.get(o['status'], '')} Заказ #{o['id']} · {o['total']} ₽ · {status_names.get(o['status'], o['status'])} · {format_local_time(o['created_at'])}"
-                for o in orders]
-            text = "📜 <b>Ваши заказы:</b>\n\n" + "\n".join(orders_list)
+            lines = []
+            builder = InlineKeyboardBuilder()
+            for order in orders:
+                delivery = order.get("delivery")
+                delivery_text = f" · {delivery['shipment_label']}" if delivery else " · Доставка не указана"
+                preview = ", ".join(
+                    f"{html.escape(item['title'])}{f' ×{item['quantity']}' if item['quantity'] > 1 else ''}"
+                    for item in order.get("items", [])[:3]
+                ) or "Состав не сохранён"
+                discount_text = f" · скидка {order['total_discount']} ₽" if order.get("total_discount") else ""
+                lines.append(
+                    f"{status_emoji.get(order['status'], '')} Заказ #{order['id']} · "
+                    f"{order['total']} ₽ · {status_names.get(order['status'], order['status'])}"
+                    f"{delivery_text} · {format_local_time(order['created_at'])}\n"
+                    f"📚 {preview}{discount_text}"
+                )
+                builder.button(text=f"📦 Заказ #{order['id']}", callback_data=f"user_order_detail:{order['id']}")
+            builder.adjust(1)
+            text = "📜 <b>Ваши заказы:</b>\n\n" + "\n".join(lines)
+            markup = builder.as_markup()
         if isinstance(message_or_callback, Message):
-            await message_or_callback.answer(text, parse_mode="HTML")
+            await message_or_callback.answer(text, reply_markup=markup, parse_mode="HTML")
         else:
-            await message_or_callback.message.answer(text, parse_mode="HTML")
+            await message_or_callback.message.answer(text, reply_markup=markup, parse_mode="HTML")
             await message_or_callback.answer()
-    except Exception as e:
-        logger.warning(f"Ошибка заказов: {e}")
+    except Exception:
+        logger.exception("Failed to load customer order history")
         if isinstance(message_or_callback, Message):
             await message_or_callback.answer("❌ Ошибка при загрузке заказов")
         else:
             await message_or_callback.message.answer("❌ Ошибка при загрузке заказов")
             await message_or_callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^user_order_detail:\d+$"))
+async def user_order_detail(callback: CallbackQuery):
+    order_id = int(callback.data.split(":", 1)[1])
+    order = await db.get_order_full(order_id)
+    if not order or order["user_id"] != callback.from_user.id:
+        await callback.answer("❌ Заказ не найден", show_alert=True)
+        return
+    delivery = order.get("delivery_summary")
+    delivery_text = "Доставка не указана"
+    builder = InlineKeyboardBuilder()
+    if delivery:
+        delivery_text = f"{delivery['method_label']}\nСтатус: {delivery['shipment_label']}"
+        if delivery.get("public_instructions"):
+            delivery_text += f"\n{html.escape(delivery['public_instructions'])}"
+        if delivery["tracking"]:
+            tracking = delivery["tracking"]
+            delivery_text += f"\nТрек-номер: <code>{html.escape(tracking['number'])}</code>"
+            tracking_label = {
+                "sdek": "СДЭК",
+                "russian_post": "Почту России",
+            }.get(tracking.get("carrier"), delivery["method_label"])
+            builder.button(text=f"📍 Отследить {tracking_label}", url=tracking["url"])
+    builder.button(text="◀️ Все заказы", callback_data="my_orders")
+    builder.adjust(1)
+    receipt = format_order_receipt_html(order)
+    await callback.message.answer(
+        f"📦 <b>Заказ #{order['id']}</b>\n\n"
+        f"Статус заказа: {html.escape(order['status'])}\n"
+        f"{delivery_text}\n\n"
+        f"{receipt}",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 async def process_checkout(message: Message, data: dict, bot: Bot):

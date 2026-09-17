@@ -311,6 +311,9 @@ typings/
 # dotenv environment variables file
 .env
 
+# Claude Code temporary agent worktrees
+.claude/worktrees/
+
 # next.js build output
 .next/
 out/
@@ -473,7 +476,7 @@ firepit/
 .gitlab-ci.yml
 
 # GitHub Actions
-.github/workflows/
+# GitHub workflows are source-controlled CI configuration.
 
 # CircleCI
 .circleci/

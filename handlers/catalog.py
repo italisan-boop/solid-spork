@@ -5,7 +5,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
 import db
+from authz import has_permission_sync
 from config import settings
+from handlers.admin_books import books_menu, start_add_book
 from states import AddBookState, EditBookState
 from utils import parseBookImages
 from db.categories import category_display
@@ -14,7 +16,7 @@ router = Router()
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in settings.ADMIN_IDS
+    return has_permission_sync(user_id, "catalog.manage")
 
 
 # ============================================
@@ -22,30 +24,11 @@ def is_admin(user_id: int) -> bool:
 # ============================================
 
 @router.callback_query(F.data == "admin_catalog")
-async def admin_catalog_menu(callback: CallbackQuery):
+async def admin_catalog_menu(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
-
-    books = await db.get_all_books()
-    count = len(books)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Добавить книгу", callback_data="catalog_add")
-    builder.button(text="✏️ Редактировать книгу", callback_data="catalog_edit_list")
-    builder.button(text="🗑️ Удалить книгу", callback_data="catalog_delete_list")
-    builder.button(text="📖 Показать все книги", callback_data="catalog_list")
-    builder.button(text="◀️ Назад", callback_data="admin_menu")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        f"📚 <b>Управление каталогом</b>\n\n"
-        f"Всего книг: <b>{count}</b>\n\n"
-        f"Выберите действие:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
+    await books_menu(callback, state)
 
 
 # ============================================
@@ -57,15 +40,7 @@ async def catalog_add_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
-
-    await state.set_state(AddBookState.waiting_for_title)
-    await callback.message.answer(
-        "📚 <b>Добавление новой книги</b>\n\n"
-        "Отправьте <b>название</b> книги:\n\n"
-        "Или /cancel для отмены",
-        parse_mode="HTML"
-    )
-    await callback.answer()
+    await start_add_book(callback, state)
 
 
 @router.callback_query(F.data.startswith("book_cat_"))

@@ -6,6 +6,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
+from authz import has_permission_sync
 from config import settings
 from content_defaults import TEMPLATES_BY_KEY, templates_for_group
 from db.message_templates import TemplateValidationError
@@ -16,7 +17,7 @@ router = Router()
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in settings.ADMIN_IDS
+    return has_permission_sync(user_id, "catalog.manage")
 
 
 def _template_id(key: str) -> str:

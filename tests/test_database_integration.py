@@ -56,6 +56,24 @@ class SharedDatabaseIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"book_id": 1}, await reopened_storage.get_data(key))
         await reopened_storage.close()
 
+    async def test_clear_referrals_preserves_user_bonuses(self):
+        connection = schema.connect(self.database_path)
+        try:
+            connection.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (1, 2)")
+            connection.execute("INSERT INTO user_bonuses (user_id, bonus_type, amount) VALUES (1, 'percent', 15)")
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.assertEqual(1, await db.clear_referrals())
+
+        connection = schema.connect(self.database_path)
+        try:
+            self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM referrals").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM user_bonuses").fetchone()[0])
+        finally:
+            connection.close()
+
     async def test_async_adapter_and_sync_runner_are_idempotent(self):
         schema.initialize_database(self.database_path)
         await db.init_db()

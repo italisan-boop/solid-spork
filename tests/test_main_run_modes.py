@@ -72,6 +72,7 @@ class HttpLaunchTests(TestCase):
             patch.object(server.settings, "HOST", "127.0.0.1"),
             patch.object(server.settings, "PORT", 9123),
             patch.object(server.settings, "FLASK_DEBUG", False),
+            patch.object(server.settings, "SUPPRESS_LOOPBACK_SUCCESS_ACCESS_LOGS", False),
             patch.object(server.app, "run") as run,
         ):
             server.run_server()
@@ -81,6 +82,27 @@ class HttpLaunchTests(TestCase):
             debug=False,
             use_reloader=False,
         )
+
+    def test_standalone_flask_uses_quiet_handler_when_enabled(self):
+        with (
+            patch.object(server.settings, "SUPPRESS_LOOPBACK_SUCCESS_ACCESS_LOGS", True),
+            patch.object(server.app, "run") as run,
+        ):
+            server.run_server()
+
+        self.assertIs(
+            server._LoopbackSuccessQuietRequestHandler,
+            run.call_args.kwargs["request_handler"],
+        )
+
+    def test_loopback_success_access_log_filter_preserves_errors_and_remote_requests(self):
+        with patch.object(server.settings, "SUPPRESS_LOOPBACK_SUCCESS_ACCESS_LOGS", True):
+            self.assertTrue(server._should_suppress_loopback_success_access_log("127.0.0.1", 200))
+            self.assertTrue(server._should_suppress_loopback_success_access_log("::1", "304"))
+            self.assertFalse(server._should_suppress_loopback_success_access_log("127.0.0.1", 404))
+            self.assertFalse(server._should_suppress_loopback_success_access_log("203.0.113.1", 200))
+        with patch.object(server.settings, "SUPPRESS_LOOPBACK_SUCCESS_ACCESS_LOGS", False):
+            self.assertFalse(server._should_suppress_loopback_success_access_log("127.0.0.1", 200))
 
 
 class UnifiedWebhookAppTests(IsolatedAsyncioTestCase):

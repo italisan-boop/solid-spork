@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
+from authz import has_permission_sync
 from config import settings
 import db
 from states import CriticalActionState
@@ -11,6 +12,7 @@ from utils.otp_confirm import (
     issue_otp,
     consume_otp,
     ACTION_DROP_CACHE,
+    ACTION_RESET_REFERRALS,
     ACTION_MASS_BROADCAST,
     OTP_TTL_SECONDS,
 )
@@ -20,7 +22,7 @@ router = Router()
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in settings.ADMIN_IDS
+    return has_permission_sync(user_id, "admin.maintenance")
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +78,30 @@ async def cb_drop_cache(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _start_reset_referrals_flow(admin_id: int, state: FSMContext) -> str:
+    code = issue_otp(admin_id, ACTION_RESET_REFERRALS)
+    await state.set_state(CriticalActionState.waiting_for_code)
+    await state.update_data(action=ACTION_RESET_REFERRALS)
+    return (
+        "🧹 <b>Сброс рефералов</b>\n\n"
+        "Будут удалены только связи приглашений и реферальная статистика.\n"
+        "Бонусы, пользователи, заказы и кампании сохранятся.\n\n"
+        + _CODE_TEXT.format(code=code, ttl=OTP_TTL_SECONDS)
+    )
+
+
+@router.callback_query(F.data == "admin_reset_referrals")
+async def cb_reset_referrals(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await callback.message.answer(
+        await _start_reset_referrals_flow(callback.from_user.id, state),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 @router.message(CriticalActionState.waiting_for_code, ~F.text.startswith("/"))
 async def submit_drop_cache_code(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -86,7 +112,7 @@ async def submit_drop_cache_code(message: Message, state: FSMContext):
     data = await state.get_data()
     expected_action = data.get("action")
 
-    if expected_action != ACTION_DROP_CACHE:
+    if expected_action not in {ACTION_DROP_CACHE, ACTION_RESET_REFERRALS}:
         await state.clear()
         return
 
@@ -94,13 +120,23 @@ async def submit_drop_cache_code(message: Message, state: FSMContext):
     if not code:
         return
 
-    if not consume_otp(message.from_user.id, ACTION_DROP_CACHE, code):
+    if not consume_otp(message.from_user.id, expected_action, code):
         await message.answer(
             "✖ <b>Неверный или истёкший код.</b>\n"
-            "Запустите сброс кэша через кнопку в меню администратора.",
+            "Запустите действие заново через меню администратора.",
             parse_mode="HTML",
         )
         await state.clear()
+        return
+
+    if expected_action == ACTION_RESET_REFERRALS:
+        deleted = await db.clear_referrals()
+        await state.clear()
+        await message.answer(
+            f"✅ <b>Реферальные связи сброшены: {deleted}</b>\n\n"
+            "Бонусы, пользователи, заказы и кампании сохранены.",
+            parse_mode="HTML",
+        )
         return
 
     from handlers.user import (

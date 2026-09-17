@@ -5,11 +5,13 @@ from aiogram.fsm.context import FSMContext
 from datetime import datetime, timedelta
 from html import escape
 from utils import setup_logger
+from utils.delivery_crypto import delivery_encryption_is_available
 
 import db
-from db.orders import save_admin_notification_ids, clear_admin_notifications, replace_admin_notification_ids
+from db.orders import format_order_receipt_html, replace_admin_notification_ids, save_admin_notification_ids
+from authz import has_permission_sync, recipient_ids_for_event_sync
 from config import settings
-from states import PaymentSettingsState, PaymentReceiptState
+from states import DeliverySettingsState, PaymentSettingsState, PaymentReceiptState
 
 router = Router()
 logger = setup_logger(__name__)
@@ -21,7 +23,7 @@ logger.info("payments.py загружен")
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in settings.ADMIN_IDS
+    return has_permission_sync(user_id, "payment.configure")
 
 
 async def _require_admin_state(message: Message, state: FSMContext) -> bool:
@@ -68,6 +70,12 @@ async def admin_payments_menu(callback: CallbackQuery):
     builder.button(
         text="🟣 ЮKassa: " + ("включена" if yookassa_enabled else "выключена"),
         callback_data="payment_settings:yookassa",
+    )
+    builder.button(
+        text="🚚 Доставка: " + (
+            "включена" if payment_settings.get("delivery_enabled") == "1" else "выключена"
+        ),
+        callback_data="payment_settings:delivery",
     )
     builder.button(text="◀️ Назад", callback_data="admin_menu")
     builder.adjust(1)
@@ -221,7 +229,7 @@ async def process_card(message: Message, state: FSMContext):
     if not await _require_admin_state(message, state):
         return
 
-    logger.debug(f" process_card: {message.text}")
+    logger.debug("Manual card details updated")
     await db.set_payment_setting('card_number', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Номер карты обновлён: <code>{message.text.strip()}</code>", parse_mode="HTML")
@@ -232,7 +240,7 @@ async def process_sbp_phone(message: Message, state: FSMContext):
     if not await _require_admin_state(message, state):
         return
 
-    logger.debug(f" process_sbp_phone: {message.text}")
+    logger.debug("SBP phone details updated")
     await db.set_payment_setting('sbp_phone', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Телефон для СБП обновлён: <code>{message.text.strip()}</code>", parse_mode="HTML")
@@ -243,7 +251,7 @@ async def process_sbp_bank(message: Message, state: FSMContext):
     if not await _require_admin_state(message, state):
         return
 
-    logger.debug(f" process_sbp_bank: {message.text}")
+    logger.debug("SBP bank details updated")
     await db.set_payment_setting('sbp_bank', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Банк для СБП обновлён: {message.text.strip()}")
@@ -254,7 +262,7 @@ async def process_recipient(message: Message, state: FSMContext):
     if not await _require_admin_state(message, state):
         return
 
-    logger.debug(f" process_recipient: {message.text}")
+    logger.debug("Manual payment recipient updated")
     await db.set_payment_setting('recipient_name', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Получатель обновлён: {message.text.strip()}")
@@ -265,16 +273,227 @@ async def process_instructions(message: Message, state: FSMContext):
     if not await _require_admin_state(message, state):
         return
 
-    logger.debug(f" process_instructions: {message.text}")
+    logger.debug("Manual payment instructions updated")
     await db.set_payment_setting('payment_instructions', message.text.strip())
     await state.clear()
     await message.answer(f"✅ Инструкция обновлена!")
 
 
 # ============================================
-# НАСТРОЙКИ TELEGRAM STARS
+# НАСТРОЙКИ ДОСТАВКИ
 # ============================================
 
+_DELIVERY_METHOD_SETTINGS = {
+    "sdek_pickup": {
+        "title": "СДЭК ПВЗ",
+        "enabled_key": "delivery_sdek_pickup_enabled",
+        "price_key": "delivery_sdek_pickup_price_rub",
+    },
+    "russian_post_pickup": {
+        "title": "Почта России",
+        "enabled_key": "delivery_russian_post_pickup_enabled",
+        "price_key": "delivery_russian_post_pickup_price_rub",
+    },
+    "self_pickup": {
+        "title": "Самовывоз",
+        "enabled_key": "delivery_self_pickup_enabled",
+        "price_key": "delivery_self_pickup_price_rub",
+    },
+}
+_SELF_PICKUP_SETTING_STATES = {
+    "location": (
+        "delivery_self_pickup_location",
+        DeliverySettingsState.waiting_for_self_pickup_location,
+        "адрес самовывоза",
+    ),
+    "schedule": (
+        "delivery_self_pickup_schedule",
+        DeliverySettingsState.waiting_for_self_pickup_schedule,
+        "график самовывоза",
+    ),
+    "instructions": (
+        "delivery_self_pickup_instructions",
+        DeliverySettingsState.waiting_for_self_pickup_instructions,
+        "инструкцию самовывоза",
+    ),
+}
+
+
+def _delivery_price_text(value: str) -> str:
+    return value if value.isdecimal() else "не задана"
+
+
+def _self_pickup_configured(values: dict[str, str]) -> bool:
+    return all(
+        values.get(key, "").strip()
+        for key in (
+            "delivery_self_pickup_location",
+            "delivery_self_pickup_schedule",
+            "delivery_self_pickup_instructions",
+        )
+    )
+
+
+@router.callback_query(F.data == "payment_settings:delivery")
+async def admin_delivery_settings(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    values = await db.get_all_payment_settings()
+    enabled = values.get("delivery_enabled") == "1"
+    configured = delivery_encryption_is_available()
+    self_pickup_configured = _self_pickup_configured(values)
+    pickup_location = escape(values.get("delivery_self_pickup_location", "").strip() or "Не задан")
+    pickup_schedule = escape(values.get("delivery_self_pickup_schedule", "").strip() or "Не задан")
+    pickup_instructions = escape(
+        values.get("delivery_self_pickup_instructions", "").strip() or "Не задан"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔴 Отключить доставку" if enabled else "🟢 Включить доставку",
+        callback_data="delivery_toggle",
+    )
+    for method, contract in _DELIVERY_METHOD_SETTINGS.items():
+        method_enabled = values.get(contract["enabled_key"]) == "1"
+        builder.button(
+            text=("🔴 " if method_enabled else "🟢 ") + contract["title"],
+            callback_data=f"delivery_method_toggle:{method}",
+        )
+        builder.button(
+            text=f"💰 {contract['title']}: {_delivery_price_text(values.get(contract['price_key'], ''))} ₽",
+            callback_data=f"delivery_price:{method}",
+        )
+    builder.button(text="📍 Адрес самовывоза", callback_data="delivery_self_pickup:location")
+    builder.button(text="🕒 График самовывоза", callback_data="delivery_self_pickup:schedule")
+    builder.button(text="📝 Инструкция самовывоза", callback_data="delivery_self_pickup:instructions")
+    builder.button(text="◀️ В меню", callback_data="admin_menu")
+    builder.adjust(1)
+    methods_status = "\n".join(
+        f"• {contract['title']}: {'✅ включён' if values.get(contract['enabled_key']) == '1' else '❌ выключен'} · {_delivery_price_text(values.get(contract['price_key'], ''))} ₽"
+        for contract in _DELIVERY_METHOD_SETTINGS.values()
+    )
+    await callback.message.edit_text(
+        "🚚 <b>Настройки доставки</b>\n\n"
+        f"Общий статус: {'✅ включена' if enabled else '❌ выключена'}\n"
+        f"Шифрование адресов: {'✅ готово' if configured else '⚠️ не настроено'}\n"
+        f"Самовывоз: {'✅ адрес, график и инструкция заданы' if self_pickup_configured else '⚠️ заполните адрес, график и инструкцию'}\n"
+        f"📍 Адрес: {pickup_location}\n"
+        f"🕒 График: {pickup_schedule}\n"
+        f"📝 Инструкция: {pickup_instructions}\n\n"
+        f"{methods_status}\n\n"
+        "Почта России и СДЭК используют ручной ввод трек-номера. Ключи шифрования в Telegram не отображаются.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "delivery_toggle")
+async def delivery_toggle(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    current = await db.get_payment_setting("delivery_enabled", "0")
+    if current != "1" and not delivery_encryption_is_available():
+        await callback.answer(
+            "Сначала настройте шифрование доставки в .env.", show_alert=True
+        )
+        return
+    await db.set_payment_setting("delivery_enabled", "0" if current == "1" else "1")
+    await admin_delivery_settings(callback)
+
+
+@router.callback_query(F.data.regexp(r"^delivery_method_toggle:(sdek_pickup|russian_post_pickup|self_pickup)$"))
+async def delivery_method_toggle(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    method = callback.data.split(":", 1)[1]
+    contract = _DELIVERY_METHOD_SETTINGS[method]
+    values = await db.get_all_payment_settings()
+    current = values.get(contract["enabled_key"], "0")
+    if current != "1" and not delivery_encryption_is_available():
+        await callback.answer("Сначала настройте шифрование доставки в .env.", show_alert=True)
+        return
+    if method == "self_pickup" and current != "1" and not _self_pickup_configured(values):
+        await callback.answer("Сначала задайте адрес, график и инструкцию самовывоза.", show_alert=True)
+        return
+    await db.set_payment_setting(contract["enabled_key"], "0" if current == "1" else "1")
+    await admin_delivery_settings(callback)
+
+
+@router.callback_query(F.data.regexp(r"^delivery_price:(sdek_pickup|russian_post_pickup|self_pickup)$"))
+async def delivery_price_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await state.clear()
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    method = callback.data.split(":", 1)[1]
+    await state.set_state(DeliverySettingsState.waiting_for_price)
+    await state.update_data(delivery_method=method)
+    await callback.message.answer(
+        f"Введите фиксированную цену «{_DELIVERY_METHOD_SETTINGS[method]['title']}» в рублях (от 0 до 100000).\n\n/cancel для отмены."
+    )
+    await callback.answer()
+
+
+@router.message(DeliverySettingsState.waiting_for_price, F.text & ~F.text.startswith("/"))
+async def delivery_price_save(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+    data = await state.get_data()
+    method = data.get("delivery_method")
+    if method not in _DELIVERY_METHOD_SETTINGS:
+        await state.clear()
+        await message.answer("❌ Не удалось определить способ доставки.")
+        return
+    value = message.text.strip()
+    if not value.isdecimal() or int(value) > 100_000:
+        await message.answer("❌ Введите целую цену от 0 до 100000 ₽.")
+        return
+    await db.set_payment_setting(_DELIVERY_METHOD_SETTINGS[method]["price_key"], str(int(value)))
+    await state.clear()
+    await message.answer("✅ Цена доставки обновлена.")
+
+
+@router.callback_query(F.data.regexp(r"^delivery_self_pickup:(location|schedule|instructions)$"))
+async def delivery_self_pickup_setting_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await state.clear()
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    field = callback.data.split(":", 1)[1]
+    _, target_state, label = _SELF_PICKUP_SETTING_STATES[field]
+    await state.set_state(target_state)
+    await state.update_data(self_pickup_field=field)
+    await callback.message.answer(f"Введите {label} (до 500 символов).\n\n/cancel для отмены.")
+    await callback.answer()
+
+
+@router.message(DeliverySettingsState.waiting_for_self_pickup_location, F.text & ~F.text.startswith("/"))
+@router.message(DeliverySettingsState.waiting_for_self_pickup_schedule, F.text & ~F.text.startswith("/"))
+@router.message(DeliverySettingsState.waiting_for_self_pickup_instructions, F.text & ~F.text.startswith("/"))
+async def delivery_self_pickup_setting_save(message: Message, state: FSMContext):
+    if not await _require_admin_state(message, state):
+        return
+    data = await state.get_data()
+    field = data.get("self_pickup_field")
+    if field not in _SELF_PICKUP_SETTING_STATES:
+        await state.clear()
+        await message.answer("❌ Не удалось определить настройку.")
+        return
+    value = " ".join(message.text.split())
+    if not value or len(value) > 500:
+        await message.answer("❌ Введите непустой текст до 500 символов.")
+        return
+    setting_key, _, _ = _SELF_PICKUP_SETTING_STATES[field]
+    await db.set_payment_setting(setting_key, value)
+    await state.clear()
+    await message.answer("✅ Настройка самовывоза сохранена.")
+
+
+# ============================================
+# НАСТРОЙКИ TELEGRAM STARS
 async def show_stars_settings(callback: CallbackQuery):
     logger.debug(f" admin_stars_menu вызван")
     if not is_admin(callback.from_user.id):
@@ -301,7 +520,7 @@ async def show_stars_settings(callback: CallbackQuery):
         f"• Telegram конвертирует автоматически\n"
         f"• Вы получаете Stars на свой аккаунт\n"
         f"• Комиссия Telegram: ~15-30%\n\n"
-        f"⚠️ <b>Важно:</b> Stars можно использовать только для цифровых товаров!",
+        f"Stars доступны для заказов с доставкой и без неё.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -483,20 +702,24 @@ async def process_successful_payment(message: Message, bot: Bot):
         await message.answer(f"❌ {error}")
         return
     order_id = order['id']
-    await db.update_order_status(order_id, 'paid')
+    if not await db.update_order_status(
+        order_id, 'paid', expected_statuses=('awaiting_stars_payment',)
+    ):
+        await message.answer("ℹ️ Этот платёж уже обработан.")
+        return
 
-    items_list = "\n".join([f"• {item['title']}" for item in order['items']])
+    receipt = format_order_receipt_html(order)
 
     await message.answer(
         f"✅ <b>Оплата успешна!</b>\n\n"
         f"📦 Заказ #{order_id}\n"
-        f"{items_list}\n\n"
+        f"{receipt}\n\n"
         f"💰 Оплачено: {payment.total_amount} Stars\n\n"
         f"Спасибо за покупку! 🌿",
         parse_mode="HTML"
     )
 
-    for admin_id in settings.ADMIN_IDS:
+    for admin_id in recipient_ids_for_event_sync("payment"):
         try:
             await bot.send_message(
                 admin_id,
@@ -544,7 +767,11 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMCont
         return
 
     # Обновляем статус на "ожидает подтверждения"
-    await db.update_order_status(order_id, 'payment_pending')
+    if not await db.update_order_status(
+        order_id, 'payment_pending', expected_statuses=('awaiting_payment',)
+    ):
+        await callback.answer("Этот заказ уже обработан ✅", show_alert=True)
+        return
 
     await callback.message.edit_text(
         f"✅ <b>Отлично!</b>\n\n"
@@ -552,7 +779,7 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMCont
         f"Администратор проверит поступление и подтвердит заказ.\n\n"
         f"Обычно это занимает 5-15 минут 🕐\n\n"
         f"Номер заказа: <b>#{order_id}</b>\n"
-        f"Сумма: <b>{order['total']} ₽</b>\n\n"
+        f"{format_order_receipt_html(order)}\n\n"
         f"Если есть вопросы — нажмите 🆘 Поддержка",
         parse_mode="HTML"
     )
@@ -562,7 +789,7 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMCont
     admin_ids = []
     message_ids = []
     
-    for admin_id in settings.ADMIN_IDS:
+    for admin_id in recipient_ids_for_event_sync("payment"):
         try:
             builder = InlineKeyboardBuilder()
             builder.button(text="✅ Подтвердить оплату", callback_data=f"admin_paid_{order_id}")
@@ -571,8 +798,8 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMCont
                 admin_id,
                 f"💰 <b>Пользователь сообщил об оплате!</b>\n\n"
                 f"📦 Заказ: #{order_id}\n"
-                f"👤 Клиент: {order['user_name']} (ID: {order['user_id']})\n"
-                f"💵 Сумма: {order['total']} ₽\n\n"
+                f"👤 Клиент: {escape(order['user_name'])} (ID: {order['user_id']})\n"
+                f"{format_order_receipt_html(order)}\n\n"
                 f"Проверьте поступление и подтвердите:",
                 reply_markup=builder.as_markup(),
                 parse_mode="HTML"
@@ -583,9 +810,10 @@ async def user_confirm_payment(callback: CallbackQuery, bot: Bot, state: FSMCont
         except Exception as e:
             logger.warning(f"Ошибка отправки админу {admin_id}: {e}")
     
-    # Сохраняем ID сообщений в БД
+    # Сохраняем ID сообщений в БД и отключаем fallback-поллер только после доставки.
     if admin_ids and message_ids:
         await save_admin_notification_ids(order_id, admin_ids, message_ids)
+        await db.mark_new_order_notified(order_id)
 
     # Просим прислать фото чека для ускоренной проверки.
     # Скриншот придёт админу inline-превью с кнопкой подтверждения.
@@ -645,17 +873,15 @@ async def payment_receipt_photo(message: Message, bot: Bot, state: FSMContext):
     await state.clear()
 
     photo = message.photo[-1]
-    items_list = "\n".join([f"• {item['title']}" for item in order['items']])
     caption = (
         f"🖼 <b>Чек к заказу #{order_id}</b>\n\n"
-        f"👤 Клиент: {order['user_name']} (ID: {order['user_id']})\n"
-        f"💵 Сумма: {order['total']} ₽\n"
-        f"📦 Состав:\n{items_list}\n\n"
+        f"👤 Клиент: {escape(order['user_name'])} (ID: {order['user_id']})\n"
+        f"{format_order_receipt_html(order)}\n\n"
         f"Проверьте чек и подтвердите оплату:"
     )
 
     new_pairs = []
-    for admin_id in settings.ADMIN_IDS:
+    for admin_id in recipient_ids_for_event_sync("payment"):
         try:
             builder = InlineKeyboardBuilder()
             builder.button(text="✅ Подтвердить оплату", callback_data=f"admin_paid_{order_id}")
@@ -672,20 +898,20 @@ async def payment_receipt_photo(message: Message, bot: Bot, state: FSMContext):
         except Exception as e:
             logger.warning(f"Ошибка отправки чека админу {admin_id}: {e}")
 
-    # Текстовый квиток у админов заменяем фото-чеком, чтобы не дублировать.
-    try:
-        for notif in order.get('admin_notification_ids') or []:
-            admin_id = notif.get('admin_id')
-            msg_id = notif.get('message_id')
-            if admin_id and msg_id:
-                try:
-                    await bot.delete_message(chat_id=admin_id, message_id=msg_id)
-                except Exception:
-                    pass
-        if new_pairs:
+    # Текстовый квиток у админов заменяем фото-чеком, только если фото доставлено.
+    if new_pairs:
+        try:
+            for notif in order.get('admin_notification_ids') or []:
+                admin_id = notif.get('admin_id')
+                msg_id = notif.get('message_id')
+                if admin_id and msg_id:
+                    try:
+                        await bot.delete_message(chat_id=admin_id, message_id=msg_id)
+                    except Exception:
+                        pass
             await replace_admin_notification_ids(order_id, new_pairs)
-    except Exception as e:
-        logger.warning(f"Ошибка замены текстовых уведомлений заказа #{order_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка замены текстовых уведомлений заказа #{order_id}: {e}")
 
     if new_pairs:
         await message.answer(
@@ -754,8 +980,8 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
     logger.debug(f" admin_confirm_payment вызван: {callback.data}")
     logger.debug(f" От: {callback.from_user.id}")
 
-    if not is_admin(callback.from_user.id):
-        logger.warning(f"Пользователь {callback.from_user.id} не админ")
+    if not has_permission_sync(callback.from_user.id, "payment.reconcile"):
+        logger.warning("Payment confirmation denied")
         await callback.answer("❌ Нет прав", show_alert=True)
         return
 
@@ -781,38 +1007,21 @@ async def admin_confirm_payment(callback: CallbackQuery, bot: Bot):
 
     # Обновляем статус на "подтверждён"
     try:
-        await db.update_order_status(order_id, 'confirmed')
+        confirmed = await db.update_order_status(
+            order_id, 'confirmed', expected_statuses=('payment_pending',)
+        )
+        if not confirmed:
+            await callback.answer("Этот заказ уже обработан ✅", show_alert=True)
+            return
         logger.info(f"Статус заказа #{order_id} обновлён на 'confirmed'")
     except Exception as e:
         logger.warning(f"Ошибка обновления статуса: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
         return
 
-    # Обновляем сообщение СНАЧАЛА: clear_admin_notifications ниже удалит его,
-    # иначе edit упрётся в "message to edit not found". Для фото-чека — caption.
-    confirmed_text = (
-        f"✅ <b>Оплата заказа #{order_id} подтверждена!</b>\n\n"
-        f"👤 Клиент: {order['user_name']} (ID: {order['user_id']})\n"
-        f"💰 Сумма: {order['total']} ₽\n\n"
-        f"Пользователь уведомлён."
-    )
-    try:
-        if getattr(callback.message, 'photo', None):
-            await callback.message.edit_caption(confirmed_text, parse_mode="HTML")
-        else:
-            await callback.message.edit_text(confirmed_text, parse_mode="HTML")
-        logger.info(f"Сообщение обновлено")
-    except Exception as e:
-        logger.warning(f"Не удалось обновить сообщение: {e}")
-        # Продолжаем, даже если не удалось обновить сообщение
+    from handlers.admin_orders import notify_confirmed_order
 
-    # Удаляем уведомления у всех админов
-    try:
-        await clear_admin_notifications(order_id, bot)
-        logger.info(f"Уведомления админам для заказа #{order_id} удалены")
-    except Exception as e:
-        logger.warning(f"Не удалось удалить уведомления: {e}")
-
+    await notify_confirmed_order(bot, order_id)
     await callback.answer("✅ Оплата подтверждена!", show_alert=True)
 
     # Уведомляем пользователя

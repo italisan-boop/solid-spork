@@ -24,10 +24,16 @@ from handlers import (
     payments,
     user,
 )
-from handlers.admin_orders import new_orders_notify_loop
-from handlers.user import support_escalation_loop
+from db.backups import backup_database, claim_backup_lease
+from db.operational_events import OperationalEvent, record_event
+from handlers.admin_orders import (
+    inventory_notification_loop,
+    new_orders_notify_loop,
+    operational_alert_loop,
+)
+from handlers.user import order_support_notify_loop, support_escalation_loop
 from storage import SQLiteStorage
-from utils import setup_logger
+from utils import log_event, setup_logger
 
 
 WEBHOOK_PATH = "/webhook"
@@ -71,10 +77,65 @@ async def initialize_runtime():
     logger.info("Database initialized; active support dialogs: %s", len(active_support_users))
 
 
+async def delivery_pii_cleanup_loop():
+    while True:
+        try:
+            redacted = await db.redact_expired_delivery_pii()
+            if redacted:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    component="delivery_pii_cleanup",
+                    event="delivery_pii_redacted",
+                    outcome="succeeded",
+                )
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                component="delivery_pii_cleanup",
+                event="delivery_pii_redacted",
+                outcome="failed",
+                reason="database_error",
+                error_type=type(exc).__name__,
+            )
+        await asyncio.sleep(24 * 60 * 60)
+
+
+async def verified_backup_loop():
+    while True:
+        try:
+            if settings.BACKUP_DIR and await asyncio.to_thread(claim_backup_lease):
+                await asyncio.to_thread(backup_database)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    component="backup",
+                    event="scheduled_backup",
+                    outcome="succeeded",
+                )
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                component="backup",
+                event="scheduled_backup",
+                outcome="failed",
+                reason="backup_or_verification_failed",
+                error_type=type(exc).__name__,
+            )
+        await asyncio.sleep(max(60, settings.BACKUP_INTERVAL_SECONDS))
+
+
 def start_background_tasks():
     return [
         asyncio.create_task(new_orders_notify_loop(bot)),
+        asyncio.create_task(operational_alert_loop(bot)),
+        asyncio.create_task(inventory_notification_loop(bot)),
         asyncio.create_task(support_escalation_loop(bot)),
+        asyncio.create_task(order_support_notify_loop(bot)),
+        asyncio.create_task(delivery_pii_cleanup_loop()),
+        asyncio.create_task(verified_backup_loop()),
     ]
 
 
@@ -120,13 +181,41 @@ def webhook_configuration_error() -> str | None:
 async def webhook_update(request: web.Request):
     received_secret = request.headers.get(WEBHOOK_SECRET_HEADER, "")
     if not secrets.compare_digest(received_secret, settings.WEBHOOK_SECRET):
+        log_event(
+            logger, logging.WARNING, component="telegram_webhook", event="update",
+            outcome="rejected", reason="invalid_secret"
+        )
         return web.Response(status=403)
     try:
         payload = await request.json(loads=json.loads)
         update = Update.model_validate(payload, context={"bot": bot})
     except (TypeError, ValueError, json.JSONDecodeError):
+        log_event(
+            logger, logging.WARNING, component="telegram_webhook", event="update",
+            outcome="rejected", reason="invalid_payload"
+        )
         return web.Response(status=400)
-    await dp.feed_update(bot, update)
+    try:
+        await dp.feed_update(bot, update)
+    except Exception as exc:
+        log_event(
+            logger, logging.CRITICAL, component="telegram_webhook", event="dispatch",
+            outcome="failed", reason="dispatch_error", error_type=type(exc).__name__
+        )
+        try:
+            await record_event(
+                OperationalEvent(
+                    severity="critical", component="telegram_webhook", event="dispatch",
+                    outcome="failed", reason="dispatch_error", error_type=type(exc).__name__,
+                )
+            )
+        except Exception:
+            logger.error("Could not persist Telegram webhook failure")
+        return web.Response(status=503)
+    log_event(
+        logger, logging.INFO, component="telegram_webhook", event="dispatch",
+        outcome="succeeded"
+    )
     return web.Response()
 
 
@@ -158,7 +247,7 @@ async def webhook_shutdown(app: web.Application):
     await close_runtime()
 
 
-def create_webhook_app() -> web.Application:
+def create_webhook_app(wsgi_app=None) -> web.Application:
     try:
         from aiohttp_wsgi import WSGIHandler
     except ModuleNotFoundError as exc:
@@ -167,9 +256,10 @@ def create_webhook_app() -> web.Application:
             "python -m pip install -r requirements.txt"
         ) from exc
 
-    from server import app as flask_app
+    if wsgi_app is None:
+        from server import app as wsgi_app
 
-    wsgi_handler = WSGIHandler(flask_app)
+    wsgi_handler = WSGIHandler(wsgi_app)
 
     async def flask_fallback(request: web.Request):
         return await wsgi_handler(request)
@@ -182,11 +272,11 @@ def create_webhook_app() -> web.Application:
     return app
 
 
-def run_webhook():
-    web.run_app(create_webhook_app(), host=settings.HOST, port=settings.PORT)
+def run_webhook(wsgi_app=None):
+    web.run_app(create_webhook_app(wsgi_app), host=settings.HOST, port=settings.PORT)
 
 
-def main() -> int:
+def main(wsgi_app=None) -> int:
     if not settings.BOT_TOKEN:
         logger.error("BOT_TOKEN not found")
         return 1
@@ -198,7 +288,10 @@ def main() -> int:
         if error:
             logger.error("Invalid webhook configuration: %s", error)
             return 2
-        run_webhook()
+        if wsgi_app is None:
+            run_webhook()
+        else:
+            run_webhook(wsgi_app)
         return 0
     logger.error("RUN_MODE must be polling or webhook")
     return 2
