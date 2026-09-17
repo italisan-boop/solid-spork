@@ -17,6 +17,7 @@ SETTINGS = PlatformBotSettings(
     bot_token=TOKEN,
     admin_telegram_ids=frozenset({101}),
     console_url=URL,
+    proxy_url=None,
 )
 
 
@@ -39,6 +40,38 @@ class PlatformBotSettingsTests(unittest.TestCase):
 
         self.assertEqual("https://platform.example.test", settings.console_url)
         self.assertEqual(frozenset({101, 202}), settings.admin_telegram_ids)
+        self.assertIsNone(settings.proxy_url)
+
+    def test_loads_authenticated_http_proxy(self):
+        proxy_url = "http://proxy-user:proxy-password@203.0.113.10:3128"
+        with patch.dict(os.environ, {
+            "PLATFORM_BOT_TOKEN": TOKEN,
+            "PLATFORM_ADMIN_TELEGRAM_IDS": "101",
+            "PLATFORM_CONSOLE_URL": URL,
+            "PLATFORM_BOT_PROXY_URL": proxy_url,
+        }, clear=True):
+            settings = PlatformBotSettings.from_environment()
+
+        self.assertEqual(proxy_url, settings.proxy_url)
+
+    def test_rejects_invalid_proxy_urls(self):
+        for proxy_url in (
+            "https://user:password@203.0.113.10:3128",
+            "http://203.0.113.10:3128",
+            "http://user@203.0.113.10:3128",
+            "http://user:password@203.0.113.10",
+            "http://user:password@203.0.113.10:invalid",
+            "http://user:password@203.0.113.10:3128/path",
+            "http://user:password@203.0.113.10:3128?x=1",
+        ):
+            with self.subTest(proxy_url=proxy_url), patch.dict(os.environ, {
+                "PLATFORM_BOT_TOKEN": TOKEN,
+                "PLATFORM_ADMIN_TELEGRAM_IDS": "101",
+                "PLATFORM_CONSOLE_URL": URL,
+                "PLATFORM_BOT_PROXY_URL": proxy_url,
+            }, clear=True):
+                with self.assertRaises(ValueError):
+                    PlatformBotSettings.from_environment()
 
     def test_rejects_invalid_console_urls(self):
         for url in (
@@ -113,6 +146,31 @@ class PlatformBotHandlerTests(unittest.IsolatedAsyncioTestCase):
             close_bot_session=False,
         )
         bot.session.close.assert_awaited_once()
+
+    async def test_polling_uses_proxy_only_when_configured(self):
+        proxy_url = "http://proxy-user:proxy-password@203.0.113.10:3128"
+        settings = PlatformBotSettings(
+            bot_token=TOKEN,
+            admin_telegram_ids=frozenset({101}),
+            console_url=URL,
+            proxy_url=proxy_url,
+        )
+        dispatcher = MagicMock()
+        dispatcher.resolve_used_update_types.return_value = ["message"]
+        dispatcher.start_polling = AsyncMock()
+        session = MagicMock()
+        bot = MagicMock()
+        bot.delete_webhook = AsyncMock()
+        bot.session.close = AsyncMock()
+        with (
+            patch("controlplane.bot.create_platform_dispatcher", return_value=dispatcher),
+            patch("controlplane.bot.AiohttpSession", return_value=session) as session_factory,
+            patch("controlplane.bot.Bot", return_value=bot) as bot_factory,
+        ):
+            await run_polling(settings)
+
+        session_factory.assert_called_once_with(proxy=proxy_url)
+        bot_factory.assert_called_once_with(token=TOKEN, session=session)
 
 
 class PlatformConsoleHtmlTests(unittest.TestCase):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import CommandStart
 from aiogram.types import Message, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -44,7 +45,12 @@ def create_platform_dispatcher(settings: PlatformBotSettings) -> Dispatcher:
 
 async def run_polling(settings: PlatformBotSettings) -> None:
     dispatcher = create_platform_dispatcher(settings)
-    bot = Bot(token=settings.bot_token)
+    session = AiohttpSession(proxy=settings.proxy_url) if settings.proxy_url else None
+    bot = (
+        Bot(token=settings.bot_token, session=session)
+        if session
+        else Bot(token=settings.bot_token)
+    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(

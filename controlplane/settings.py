@@ -45,11 +45,37 @@ def _platform_console_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _platform_bot_proxy_url(value: str) -> str | None:
+    if not value:
+        return None
+    if any(character.isspace() for character in value):
+        raise ValueError("PLATFORM_BOT_PROXY_URL must be an HTTP proxy URL")
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("PLATFORM_BOT_PROXY_URL must be an HTTP proxy URL") from exc
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or not parsed.username
+        or not parsed.password
+        or port is None
+        or not 1 <= port <= 65535
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("PLATFORM_BOT_PROXY_URL must be an HTTP proxy URL")
+    return value.rstrip("/")
+
+
 @dataclass(frozen=True)
 class PlatformBotSettings:
     bot_token: str
     admin_telegram_ids: frozenset[int]
     console_url: str
+    proxy_url: str | None
 
     @classmethod
     def from_environment(cls) -> "PlatformBotSettings":
@@ -64,6 +90,9 @@ class PlatformBotSettings:
             admin_telegram_ids=_platform_admin_ids(admins_value),
             console_url=_platform_console_url(
                 os.getenv("PLATFORM_CONSOLE_URL", "").strip()
+            ),
+            proxy_url=_platform_bot_proxy_url(
+                os.getenv("PLATFORM_BOT_PROXY_URL", "").strip()
             ),
         )
 
