@@ -21,13 +21,13 @@ TOKEN = "123456:control-plane-test-token"
 PLATFORM_ADMIN_ID = 101
 
 
-def signed_headers(user_id: int) -> dict[str, str]:
+def signed_headers(user_id: int, token: str = TOKEN) -> dict[str, str]:
     pairs = [
         ("auth_date", str(int(time.time()))),
         ("user", json.dumps({"id": user_id, "first_name": "Platform"}, separators=(",", ":"))),
     ]
     check = "\n".join(f"{key}={value}" for key, value in sorted(pairs))
-    secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     signature = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return {"X-Telegram-Init-Data": urlencode([*pairs, ("hash", signature)])}
 
@@ -60,6 +60,10 @@ class ControlPlaneApiTests(unittest.TestCase):
         ).status_code)
         self.assertEqual(403, self.client.get(
             "/api/platform/session", headers=signed_headers(999)
+        ).status_code)
+        self.assertEqual(401, self.client.get(
+            "/api/platform/session",
+            headers=signed_headers(PLATFORM_ADMIN_ID, "123456:other-bot-token"),
         ).status_code)
 
     def tearDown(self):
