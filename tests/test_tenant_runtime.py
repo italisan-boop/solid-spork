@@ -55,7 +55,9 @@ class TenantSetupApiTests(unittest.TestCase):
         response = self.client.get("/setup")
         try:
             self.assertEqual(200, response.status_code)
-            self.assertIn("Первоначальная настройка", response.get_data(as_text=True))
+            page = response.get_data(as_text=True)
+            self.assertIn("Первоначальная настройка", page)
+            self.assertIn("telegram-web-app.js", page)
         finally:
             response.close()
 
