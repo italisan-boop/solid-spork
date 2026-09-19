@@ -450,7 +450,7 @@ class HostOperationsServer:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(str(socket_path))
             os.chown(socket_path, 0, self.settings.allowed_gid)
-            listener.chmod(0o660)
+            os.chmod(socket_path, 0o660)
             listener.listen()
             while True:
                 connection, _ = listener.accept()

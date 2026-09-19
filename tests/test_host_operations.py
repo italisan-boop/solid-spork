@@ -2,6 +2,7 @@ import unittest
 import uuid
 from pathlib import Path
 import tempfile
+from unittest.mock import MagicMock, patch
 
 from controlplane.host_operations import (
     HostOperationsError,
@@ -118,6 +119,24 @@ class HostOperationsServerTests(unittest.TestCase):
             (self.settings.runtime_root / self.tenant_id / "tenant.sock").as_posix(),
             route,
         )
+
+    def test_server_applies_mode_to_bound_socket_path(self):
+        listener = MagicMock()
+        listener.__enter__.return_value = listener
+        listener.accept.side_effect = KeyboardInterrupt
+        with (
+            patch("controlplane.host_operations.socket.AF_UNIX", new=1, create=True),
+            patch("controlplane.host_operations.socket.socket", return_value=listener),
+            patch("controlplane.host_operations.os.chown", create=True) as chown,
+            patch("controlplane.host_operations.os.chmod") as chmod,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.server.serve()
+        listener.bind.assert_called_once_with(str(self.settings.socket_path))
+        chown.assert_called_once_with(
+            self.settings.socket_path, 0, self.settings.allowed_gid
+        )
+        chmod.assert_called_once_with(self.settings.socket_path, 0o660)
 
     def test_rejects_extra_fields_unsupported_credentials_and_untrusted_paths(self):
         with self.assertRaisesRegex(HostOperationsError, "invalid host operation"):
