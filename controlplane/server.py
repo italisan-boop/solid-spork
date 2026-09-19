@@ -5,6 +5,7 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, make_response, request, send_from_directory
 
+from controlplane.deployments import deployment_status, request_deployment
 from controlplane.plan_policy import effective_entitlements, plan_defaults
 from controlplane.provisioning import ProvisioningError, provision_tenant
 from controlplane.settings import ControlPlaneSettings
@@ -18,8 +19,10 @@ from controlplane.tenants import (
     get_tenant,
     list_tenants,
     request_custom_domain,
+    sealed_secret_kinds,
     set_custom_domain_verification,
     set_lifecycle_state,
+    set_secret_envelopes,
     set_secret_reference,
     set_secret_references,
     soft_delete_tenant,
@@ -44,7 +47,9 @@ def _tenant_payload(control_database_path: str | Path, tenant, entitlements=None
         "entitlement_version": tenant.entitlement_version,
         "domains": tenant_domains(control_database_path, tenant.id),
         "configured_secret_kinds": configured_secret_kinds(control_database_path, tenant.id),
+        "sealed_secret_kinds": sealed_secret_kinds(control_database_path, tenant.id),
         "entitlement_overrides": entitlement_overrides(control_database_path, tenant.id),
+        "deployment": deployment_status(control_database_path, tenant.id),
     }
     if entitlements is not None:
         result["entitlements"] = {
@@ -55,9 +60,23 @@ def _tenant_payload(control_database_path: str | Path, tenant, entitlements=None
     return result
 
 
-def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
+def create_controlplane_app(
+    settings: ControlPlaneSettings,
+    *,
+    secret_sealer=None,
+) -> Flask:
     initialize(settings.database_path)
     app = Flask(__name__)
+
+    def managed_legacy_mutation_error():
+        if settings.managed_mode:
+            return jsonify({"error": "managed Console requires sealed secrets and deployment jobs"}), 409
+        return None
+
+    def legacy_managed_mutation_error():
+        if not settings.managed_mode:
+            return jsonify({"error": "legacy Console requires secret references and direct operations"}), 409
+        return None
 
     def require_platform_admin(handler):
         @wraps(handler)
@@ -92,6 +111,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
     def tenants():
         if request.method == "GET":
             return jsonify({
+                "managed_mode": settings.managed_mode,
                 "plan_defaults": plan_defaults(),
                 "tenants": [
                     _tenant_payload(
@@ -162,17 +182,27 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
         if not isinstance(payload, dict) or set(payload) != {"state"}:
             return jsonify({"error": "state is required"}), 400
         try:
-            set_custom_domain_verification(
+            result = set_custom_domain_verification(
                 settings.database_path,
                 tenant_id=tenant_id,
                 host=host,
                 verification_state=payload["state"],
                 actor_telegram_id=g.platform_admin_id,
+                managed_reconciliation=settings.managed_mode,
             )
         except ValueError as error:
             status = 404 if str(error) == "custom domain not found" else 400
             return jsonify({"error": str(error)}), status
-        return jsonify({"host": host, "verification_state": payload["state"]})
+        response = {
+            "host": result.host,
+            "verification_state": result.verification_state,
+            "changed": result.changed,
+            "reconciliation_queued": result.reconciliation_queued,
+        }
+        if result.reconciliation_queued:
+            response["deployment"] = deployment_status(settings.database_path, tenant_id)
+            return jsonify(response), 202
+        return jsonify(response)
 
     @app.put("/api/platform/tenants/<tenant_id>/plan")
     @require_platform_admin
@@ -186,6 +216,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
                 tenant_id=tenant_id,
                 plan=payload["plan"],
                 actor_telegram_id=g.platform_admin_id,
+                managed_reconciliation=settings.managed_mode,
             )
         except ValueError as error:
             status = 404 if str(error) == "tenant not found" else 400
@@ -213,6 +244,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
                 feature_overrides=payload["feature_overrides"],
                 limit_overrides=payload["limit_overrides"],
                 actor_telegram_id=g.platform_admin_id,
+                managed_reconciliation=settings.managed_mode,
             )
         except ValueError as error:
             status = 404 if str(error) == "tenant not found" else 400
@@ -237,6 +269,7 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
                 feature_overrides=payload["feature_overrides"],
                 limit_overrides=payload["limit_overrides"],
                 actor_telegram_id=g.platform_admin_id,
+                managed_reconciliation=settings.managed_mode,
             )
         except ValueError as error:
             status = 404 if str(error) == "tenant not found" else 400
@@ -247,9 +280,46 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
             "limits": dict(entitlements.limits),
         })
 
+    @app.put("/api/platform/tenants/<tenant_id>/secrets")
+    @require_platform_admin
+    def tenant_secrets(tenant_id: str):
+        legacy_error = legacy_managed_mutation_error()
+        if legacy_error is not None:
+            return legacy_error
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) not in (
+            {"secrets"},
+            {"secrets", "clear_bot_proxy"},
+        ):
+            return jsonify({"error": "secrets are required"}), 400
+        if not isinstance(payload["secrets"], dict) or not isinstance(
+            payload.get("clear_bot_proxy", False), bool
+        ):
+            return jsonify({"error": "invalid tenant secret request"}), 400
+        try:
+            selected = set_secret_envelopes(
+                settings.database_path,
+                tenant_id=tenant_id,
+                values=payload["secrets"],
+                actor_telegram_id=g.platform_admin_id,
+                sealer=secret_sealer,
+                clear_bot_proxy=payload.get("clear_bot_proxy", False),
+                managed_reconciliation=True,
+            )
+        except ValueError as error:
+            status = 404 if str(error) == "tenant not found" else 400
+            return jsonify({"error": str(error)}), status
+        return jsonify(_tenant_payload(
+            settings.database_path,
+            selected, effective_tenant_entitlements(settings.database_path, selected.id)
+        ))
+
     @app.put("/api/platform/tenants/<tenant_id>/secret-references")
     @require_platform_admin
     def secret_references_batch(tenant_id: str):
+        managed_error = managed_legacy_mutation_error()
+        if managed_error is not None:
+            return managed_error
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict) or set(payload) != {"references"}:
             return jsonify({"error": "references is required"}), 400
@@ -273,6 +343,9 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
     @app.put("/api/platform/tenants/<tenant_id>/secret-references/<secret_kind>")
     @require_platform_admin
     def secret_reference(tenant_id: str, secret_kind: str):
+        managed_error = managed_legacy_mutation_error()
+        if managed_error is not None:
+            return managed_error
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict) or set(payload) != {"reference", "version"}:
             return jsonify({"error": "reference and version are required"}), 400
@@ -290,9 +363,41 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
             return jsonify({"error": str(error)}), status
         return jsonify({"configured": True, "secret_kind": secret_kind})
 
+    @app.post("/api/platform/tenants/<tenant_id>/deployments")
+    @require_platform_admin
+    def request_managed_deployment(tenant_id: str):
+        legacy_error = legacy_managed_mutation_error()
+        if legacy_error is not None:
+            return legacy_error
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {"operation"}:
+            return jsonify({"error": "operation is required"}), 400
+        try:
+            job = request_deployment(
+                settings.database_path,
+                tenant_id=tenant_id,
+                operation=payload["operation"],
+                actor_telegram_id=g.platform_admin_id,
+            )
+        except ValueError as error:
+            status = 404 if str(error) == "tenant not found" else 409
+            return jsonify({"error": str(error)}), status
+        return jsonify({
+            "job": {
+                "id": job.id,
+                "operation": job.operation,
+                "desired_generation": job.desired_generation,
+                "state": "pending",
+            },
+            "deployment": deployment_status(settings.database_path, tenant_id),
+        }), 202
+
     @app.post("/api/platform/tenants/<tenant_id>/provision")
     @require_platform_admin
     def provision(tenant_id: str):
+        managed_error = managed_legacy_mutation_error()
+        if managed_error is not None:
+            return managed_error
         if request.get_data(cache=False):
             return jsonify({"error": "request body is not supported"}), 400
         try:
@@ -311,6 +416,9 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
     @app.post("/api/platform/tenants/<tenant_id>/activate")
     @require_platform_admin
     def activate_tenant(tenant_id: str):
+        managed_error = managed_legacy_mutation_error()
+        if managed_error is not None:
+            return managed_error
         if request.get_data(cache=False):
             return jsonify({"error": "request body is not supported"}), 400
         try:
@@ -330,6 +438,8 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
     @app.put("/api/platform/tenants/<tenant_id>/lifecycle")
     @require_platform_admin
     def lifecycle(tenant_id: str):
+        if settings.managed_mode:
+            return jsonify({"error": "managed lifecycle changes are unavailable"}), 409
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict) or set(payload) != {"state"}:
             return jsonify({"error": "state is required"}), 400
@@ -351,6 +461,8 @@ def create_controlplane_app(settings: ControlPlaneSettings) -> Flask:
     @app.delete("/api/platform/tenants/<tenant_id>")
     @require_platform_admin
     def delete_tenant(tenant_id: str):
+        if settings.managed_mode:
+            return jsonify({"error": "managed tenant deletion is unavailable"}), 409
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict) or set(payload) != {"confirm_slug"}:
             return jsonify({"error": "confirm_slug is required"}), 400

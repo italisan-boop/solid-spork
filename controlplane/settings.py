@@ -7,8 +7,15 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
+from controlplane.credentials import (
+    is_managed_platform_process,
+    read_console_credential,
+)
+from proxy_url import normalize_authenticated_http_proxy
 
-load_dotenv()
+
+if not is_managed_platform_process():
+    load_dotenv()
 
 
 def _platform_admin_ids(value: str) -> frozenset[int]:
@@ -45,29 +52,18 @@ def _platform_console_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _platform_bot_token() -> str:
+    if is_managed_platform_process():
+        return read_console_credential("platform_bot_token", required=True)
+    return os.getenv("PLATFORM_BOT_TOKEN", "").strip()
+
+
 def _platform_bot_proxy_url(value: str) -> str | None:
     if not value:
         return None
-    if any(character.isspace() for character in value):
-        raise ValueError("PLATFORM_BOT_PROXY_URL must be an HTTP proxy URL")
-    parsed = urlparse(value)
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("PLATFORM_BOT_PROXY_URL must be an HTTP proxy URL") from exc
-    if (
-        parsed.scheme != "http"
-        or not parsed.hostname
-        or not parsed.username
-        or not parsed.password
-        or port is None
-        or not 1 <= port <= 65535
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError("PLATFORM_BOT_PROXY_URL must be an HTTP proxy URL")
-    return value.rstrip("/")
+    return normalize_authenticated_http_proxy(
+        value, setting_name="PLATFORM_BOT_PROXY_URL"
+    )
 
 
 @dataclass(frozen=True)
@@ -79,7 +75,7 @@ class PlatformBotSettings:
 
     @classmethod
     def from_environment(cls) -> "PlatformBotSettings":
-        bot_token = os.getenv("PLATFORM_BOT_TOKEN", "").strip()
+        bot_token = _platform_bot_token()
         admins_value = os.getenv("PLATFORM_ADMIN_TELEGRAM_IDS", "").strip()
         if not bot_token:
             raise ValueError("PLATFORM_BOT_TOKEN is required")
@@ -107,6 +103,7 @@ class ControlPlaneSettings:
     admin_telegram_ids: frozenset[int]
     host: str
     port: int
+    managed_mode: bool = False
 
     @classmethod
     def from_environment(cls) -> "ControlPlaneSettings":
@@ -114,7 +111,7 @@ class ControlPlaneSettings:
         data_root_value = os.getenv("PLATFORM_TENANT_DATA_ROOT", "").strip()
         backup_root_value = os.getenv("PLATFORM_TENANT_BACKUP_ROOT", "").strip()
         base_domain = os.getenv("PLATFORM_TENANT_BASE_DOMAIN", "").strip()
-        bot_token = os.getenv("PLATFORM_BOT_TOKEN", "").strip()
+        bot_token = _platform_bot_token()
         admins_value = os.getenv("PLATFORM_ADMIN_TELEGRAM_IDS", "").strip()
         values = {
             "PLATFORM_DATABASE_PATH": database_value,
@@ -147,4 +144,5 @@ class ControlPlaneSettings:
             admin_telegram_ids=admin_ids,
             host=host,
             port=port,
+            managed_mode=os.getenv("BOOKAPP_MANAGED_CONSOLE", "").strip() == "1",
         )

@@ -4,10 +4,13 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from controlplane.plan_policy import Entitlements
-from controlplane.tenants import Tenant
 from db.schema import database_context
+
+if TYPE_CHECKING:
+    from controlplane.tenants import Tenant
 
 
 _CURRENT_TENANT_CONTEXT: ContextVar["TenantContext | None"] = ContextVar(
@@ -37,6 +40,19 @@ class TenantContext:
             owner_telegram_id=tenant.owner_telegram_id,
             entitlements=entitlements,
             runtime_generation=tenant.runtime_generation,
+        )
+
+    @classmethod
+    def from_managed_manifest(cls, manifest) -> "TenantContext":
+        return cls(
+            tenant_id=manifest.tenant_id,
+            canonical_host=manifest.canonical_host,
+            database_path=manifest.database_path,
+            media_root=manifest.media_root,
+            backup_root=manifest.backup_root,
+            owner_telegram_id=manifest.owner_telegram_id,
+            entitlements=manifest.entitlements,
+            runtime_generation=manifest.runtime_generation,
         )
 
     @contextmanager

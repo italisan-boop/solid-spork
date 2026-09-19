@@ -29,7 +29,7 @@ button { min-height:42px; border:0; border-radius:9px; padding:9px 13px; backgro
 <main>
   <header>
     <h1>Управление магазинами</h1>
-    <p>Создавайте изолированные витрины, назначайте тарифы и включайте модули. Console принимает только ссылки <code>env:ИМЯ_ПЕРЕМЕННОЙ</code>, а не реальные токены и ключи.</p>
+    <p>Создавайте изолированные витрины, назначайте тарифы и включайте модули. Tenant secrets вводятся один раз, шифруются локальным sealer и после сохранения не показываются.</p>
   </header>
   <div class="grid">
     <section class="card">
@@ -48,9 +48,9 @@ button { min-height:42px; border:0; border-radius:9px; padding:9px 13px; backgro
       <ol class="steps">
         <li>Создайте отдельного Telegram test-бота и выберите тестового владельца.</li>
         <li>Создайте уникальный черновик с <code>test-*</code> поддоменом.</li>
-        <li>Задайте переменные окружения на сервере, затем сохраните только ссылки <code>env:...</code> на Bot Token и Webhook Secret.</li>
-        <li>Подготовьте runtime, запустите worker, откройте canonical <code>/setup</code>, подтвердите владельца и активируйте магазин.</li>
-        <li>YooKassa и custom domain можно добавить позже; после изменения secret reference перезапустите worker.</li>
+        <li>Введите Bot Token и Webhook Secret в password-поля tenant card; Console сохраняет только envelope ciphertext.</li>
+        <li>Поставьте provisioning в очередь: root controller создаст isolated runtime и откроет canonical <code>/setup</code>.</li>
+        <li>Подтвердите владельца в боте и поставьте активацию в очередь. YooKassa и custom domain можно добавить позже.</li>
       </ol>
     </section>
   </div>
@@ -68,6 +68,7 @@ if (tg) { tg.ready(); tg.expand(); }
 const features = ['catalog','orders','branding','store_settings','staff','inventory','book_import','analytics','campaigns','broadcast'];
 const labels = {catalog:'Каталог',orders:'Заказы',branding:'Бренд',store_settings:'Настройки',staff:'Сотрудники',inventory:'Склад',book_import:'Импорт',analytics:'Аналитика',campaigns:'Кампании',broadcast:'Рассылки'};
 let planDefaults = {};
+let managedMode = false;
 let tenantRecords = new Map();
 function headers(extra = {}) { return initData ? {...extra, 'X-Telegram-Init-Data': initData} : extra; }
 async function api(path, options = {}) {
@@ -80,7 +81,6 @@ function status(element, text, kind = '') { element.textContent = text; element.
 function escapeHtml(value) { const node = document.createElement('span'); node.textContent = String(value); return node.innerHTML; }
 function domainState(state) { return {pending:'ожидает подтверждения',verified:'проверен',disabled:'отключён'}[state] || state; }
 function renderLimits(limits) { return Object.entries(limits).map(([name, value]) => `${escapeHtml(name)}: ${escapeHtml(value)}`).join(' · '); }
-function referenceName(tenant, suffix) { return `env:TENANT_${tenant.slug.replaceAll('-', '_').toUpperCase()}_${suffix}`; }
 function domainCard(domain) {
   const action = domain.is_canonical ? '' : domain.verification_state === 'pending'
     ? '<button type="button" class="secondary" data-domain-verify>Подтвердить DNS и routing</button>'
@@ -89,26 +89,56 @@ function domainCard(domain) {
       : '<button type="button" class="secondary" data-domain-verify>Подтвердить повторно</button>';
   return `<div class="domain" data-domain-host="${escapeHtml(domain.host)}"><span class="domain-host">${escapeHtml(domain.host)}</span><span class="domain-state">${domain.is_canonical ? 'canonical' : domainState(domain.verification_state)}</span>${action}</div>`;
 }
-function secretStatus(tenant, kind) { return tenant.configured_secret_kinds.includes(kind) ? 'Настроено' : 'Не настроено'; }
-function referenceInput(tenant, kind, title, suffix, optional = false) {
-  return `<label>${title}${optional ? ', необязательно' : ''} (${secretStatus(tenant, kind)})<input data-secret="${kind}" pattern="env:[A-Z][A-Z0-9_]{1,127}" title="Только env:ИМЯ_ПЕРЕМЕННОЙ" placeholder="${referenceName(tenant, suffix)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`;
+function secretStatus(tenant, kind) {
+  const configured = managedMode ? tenant.sealed_secret_kinds : tenant.configured_secret_kinds;
+  return configured.includes(kind) ? 'Настроено' : 'Не настроено';
+}
+function secretInput(tenant, kind, title, optional = false) {
+  return `<label>${title}${optional ? ', необязательно' : ''} (${secretStatus(tenant, kind)})<input data-secret-value="${kind}" type="password" maxlength="16384" placeholder="Введите новое значение" autocomplete="new-password" autocapitalize="off" spellcheck="false"></label>`;
+}
+function referenceInput(tenant, kind, title, optional = false) {
+  return `<label>${title}${optional ? ', необязательно' : ''} (${secretStatus(tenant, kind)})<input data-secret="${kind}" maxlength="160" placeholder="env:MY_SECRET" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`;
+}
+function deploymentText(deployment) {
+  if (!deployment) return 'Runtime ещё не поставлен в очередь.';
+  const stage = deployment.last_stage ? `, этап: ${deployment.last_stage}` : '';
+  const error = deployment.last_error_type ? `, ошибка: ${deployment.last_error_type}` : '';
+  return `Runtime: ${deployment.state}, generation ${deployment.applied_generation}/${deployment.desired_generation}${stage}${error}`;
 }
 function tenantCard(tenant) {
   const featureSet = new Set(tenant.entitlements.features);
   const checks = features.map(feature => `<label class="feature"><input type="checkbox" data-feature="${feature}" ${featureSet.has(feature) ? 'checked' : ''}>${labels[feature]}</label>`).join('');
   const domains = tenant.domains.map(domainCard).join('');
-  const canProvision = tenant.lifecycle_state === 'draft' || tenant.lifecycle_state === 'migration_failed';
-  const canDelete = tenant.lifecycle_state !== 'provisioning';
+  const busy = managedMode && ['pending', 'provisioning'].includes(tenant.deployment?.state);
+  const provisionSecrets = managedMode ? tenant.sealed_secret_kinds : tenant.configured_secret_kinds;
+  const hasRequiredSecrets = ['telegram_bot_token', 'telegram_webhook_secret'].every(kind => provisionSecrets.includes(kind));
+  const canProvision = !busy && hasRequiredSecrets && ['draft', 'migration_failed'].includes(tenant.lifecycle_state);
+  const canActivate = !busy && tenant.lifecycle_state === 'awaiting_owner_claim';
+  const canRedeploy = managedMode && !busy && ['awaiting_owner_claim', 'active'].includes(tenant.lifecycle_state);
+  const canDelete = !managedMode && tenant.lifecycle_state !== 'provisioning';
+  const canClearProxy = managedMode && tenant.sealed_secret_kinds.includes('bot_proxy_url');
+  const secretFields = managedMode
+    ? `${secretInput(tenant, 'telegram_bot_token', 'Bot Token')}${secretInput(tenant, 'telegram_webhook_secret', 'Webhook Secret')}${secretInput(tenant, 'bot_proxy_url', 'Bot API proxy', true)}`
+    : `${referenceInput(tenant, 'telegram_bot_token', 'Bot Token reference')}${referenceInput(tenant, 'telegram_webhook_secret', 'Webhook Secret reference')}${referenceInput(tenant, 'yookassa_credentials', 'YooKassa reference', true)}`;
+  const secretCopy = managedMode
+    ? '<p><b>Bot Token</b> и <b>Webhook Secret</b> обязательны до provisioning. Значения шифруются локальным sealer и не выводятся после сохранения.</p>'
+    : '<p>Укажите ссылки вида <code>env:NAME</code>. Legacy Console не принимает secret values и выполняет provisioning синхронно.</p>';
+  const actions = managedMode
+    ? `<div class="meta">${escapeHtml(deploymentText(tenant.deployment))}</div><div class="actions"><button type="button" data-save>Сохранить тариф и модули</button><button type="button" class="secondary" data-provision ${canProvision ? '' : 'disabled'}>Подготовить runtime</button>${canActivate ? '<button type="button" class="secondary" data-activate>Активировать магазин</button>' : ''}${canRedeploy ? '<button type="button" class="secondary" data-redeploy>Повторно развернуть</button>' : ''}</div>`
+    : `<div class="actions"><button type="button" data-save>Сохранить тариф и модули</button><button type="button" class="secondary" data-provision ${canProvision ? '' : 'disabled'}>Подготовить магазин</button>${canActivate ? '<button type="button" class="secondary" data-activate>Активировать магазин</button>' : ''}</div>`;
+  const deletion = canDelete
+    ? `<div class="danger-zone"><h3>Удаление магазина</h3><p>Подтвердите slug: <b>${escapeHtml(tenant.slug)}</b>. Данные сохраняются по политике legacy runtime.</p><input data-delete-slug placeholder="${escapeHtml(tenant.slug)}"><button type="button" class="danger" data-delete disabled>Удалить магазин</button></div>`
+    : managedMode ? '<div class="meta">Удаление managed tenant недоступно до реализации безопасного teardown.</div>' : '';
   return `<article class="tenant" data-tenant="${tenant.id}">
     <div class="tenant-head"><div><div class="tenant-name">${escapeHtml(tenant.display_name)}</div><div class="meta">владелец #${tenant.owner_telegram_id}</div></div><span class="pill">${escapeHtml(tenant.lifecycle_state)}</span></div>
     <label>Тариф<select data-plan><option value="start" ${tenant.plan === 'start' ? 'selected' : ''}>Старт</option><option value="business" ${tenant.plan === 'business' ? 'selected' : ''}>Бизнес</option><option value="pro" ${tenant.plan === 'pro' ? 'selected' : ''}>Pro</option></select></label>
     <div class="features">${checks}</div>
     <div class="meta" data-limits>Лимиты: ${renderLimits(tenant.entitlements.limits)}</div>
-    <div class="actions"><button type="button" data-save>Сохранить тариф и модули</button><button type="button" class="secondary" data-provision ${canProvision ? '' : 'disabled'}>Подготовить runtime</button>${tenant.lifecycle_state === 'awaiting_owner_claim' ? '<button type="button" class="secondary" data-activate>Активировать магазин</button>' : ''}</div>
+    ${actions}
     <div class="domains">${domains}</div>
-    <form class="secret-form" data-domain><p>Custom domain появляется как pending. Подтвердите его только после проверки DNS и Caddy routing.</p><label>Пользовательский домен<input name="host" placeholder="store.example.com"></label><button type="submit" class="secondary">Добавить домен</button></form>
-    <form class="secret-form" data-secrets><p><b>Bot Token</b> и <b>Webhook Secret</b> обязательны до provisioning. Вводите только <code>env:ИМЯ_ПЕРЕМЕННОЙ</code>; реальные секреты Console не принимает. <b>YooKassa</b> необязательна.</p>${referenceInput(tenant, 'telegram_bot_token', 'Bot Token', 'BOT_TOKEN')}${referenceInput(tenant, 'telegram_webhook_secret', 'Webhook Secret', 'WEBHOOK_SECRET')}${referenceInput(tenant, 'yookassa_credentials', 'YooKassa', 'YOOKASSA_JSON', true)}<button type="submit" class="secondary">Сохранить ссылки</button></form>
-    ${canDelete ? `<div class="danger-zone"><h3>Удаление магазина</h3><p>Витрина и domains отключатся сразу. База, media, backups и audit history сохранятся; остановите worker вручную. Для подтверждения введите slug <b>${escapeHtml(tenant.slug)}</b>.</p><input data-delete-slug placeholder="${escapeHtml(tenant.slug)}"><button type="button" class="danger" data-delete disabled>Удалить магазин</button></div>` : '<div class="meta">Удаление недоступно, пока provisioning выполняется.</div>'}
+    <form class="secret-form" data-domain><p>Custom domain появляется как pending. В managed mode проверка и отключение автоматически ставят reconciliation в очередь.</p><label>Пользовательский домен<input name="host" placeholder="store.example.com"></label><button type="submit" class="secondary">Добавить домен</button></form>
+    <form class="secret-form" data-secrets>${secretCopy}${secretFields}<button type="submit" class="secondary">${managedMode ? 'Сохранить secrets' : 'Сохранить references'}</button>${canClearProxy ? '<button type="button" class="secondary" data-clear-proxy>Очистить сохранённый proxy</button>' : ''}</form>
+    ${deletion}
     <div class="status" data-status role="status" aria-live="polite"></div>
   </article>`;
 }
@@ -131,6 +161,7 @@ async function loadTenants() {
   const target = document.getElementById('tenants'); const state = document.getElementById('listStatus');
   try {
     const payload = await api('/api/platform/tenants');
+    managedMode = payload.managed_mode === true;
     planDefaults = payload.plan_defaults;
     tenantRecords = new Map(payload.tenants.map(tenant => [tenant.id, tenant]));
     target.innerHTML = payload.tenants.map(tenantCard).join('') || '<p>Магазинов пока нет.</p>';
@@ -154,11 +185,15 @@ async function confirmAction(text) {
   if (tg?.showConfirm) return new Promise(resolve => tg.showConfirm(text, resolve));
   return window.confirm(text);
 }
+async function enqueueDeployment(id, operation) {
+  await api(`/api/platform/tenants/${id}/deployments`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({operation})});
+  return refreshTenant(id);
+}
 document.getElementById('createTenantForm').addEventListener('submit', async event => {
   event.preventDefault(); const form = event.currentTarget; const button = event.submitter || form.querySelector('button[type="submit"]'); const state = document.getElementById('createStatus'); const end = beginOperation(button, 'Создаём…'); status(state, 'Создаём черновик…', 'warning');
   try {
     const tenant = await api('/api/platform/tenants', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name:document.getElementById('displayName').value.trim(),slug:document.getElementById('slug').value.trim(),owner_telegram_id:Number(document.getElementById('ownerId').value),plan:document.getElementById('plan').value})});
-    form.reset(); await loadTenants(); status(state, `Черновик ${tenant.slug} создан. Сохраните две обязательные ссылки и подготовьте runtime.`, 'success');
+    form.reset(); await loadTenants(); status(state, `Черновик ${tenant.slug} создан. Сохраните два обязательных secret и поставьте runtime в очередь.`, 'success');
   } catch (error) { status(state, error.message, 'error'); } finally { end(); }
 });
 document.getElementById('tenants').addEventListener('change', event => {
@@ -180,41 +215,77 @@ document.getElementById('tenants').addEventListener('click', async event => {
       return;
     }
     if (event.target.matches('[data-provision]')) {
-      const end = beginOperation(button, 'Подготавливаем…'); status(state, 'Подготавливаем isolated runtime…', 'warning');
-      try { const updated = await api(`/api/platform/tenants/${id}/provision`, {method:'POST'}); upsertTenantCard(updated, 'Runtime подготовлен. Запустите tenant worker и откройте /setup.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      const end = beginOperation(button, managedMode ? 'Ставим в очередь…' : 'Подготавливаем…'); status(state, managedMode ? 'Provisioning поставлен в очередь root controller…' : 'Подготавливаем магазин…', 'warning');
+      try {
+        const updated = managedMode
+          ? await enqueueDeployment(id, 'provision')
+          : await api(`/api/platform/tenants/${id}/provision`, {method:'POST'});
+        upsertTenantCard(updated, managedMode ? 'Provisioning поставлен в очередь.' : 'Магазин подготовлен.');
+      } catch (error) { status(state, error.message, 'error'); } finally { end(); }
       return;
     }
     if (event.target.matches('[data-activate]')) {
-      const end = beginOperation(button, 'Активируем…'); status(state, 'Проверяем подтверждение владельца…', 'warning');
-      try { const updated = await api(`/api/platform/tenants/${id}/activate`, {method:'POST'}); upsertTenantCard(updated, 'Магазин активирован.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      const end = beginOperation(button, managedMode ? 'Ставим в очередь…' : 'Активируем…'); status(state, managedMode ? 'Проверяем owner claim в root controller…' : 'Проверяем owner claim…', 'warning');
+      try {
+        const updated = managedMode
+          ? await enqueueDeployment(id, 'activate')
+          : await api(`/api/platform/tenants/${id}/activate`, {method:'POST'});
+        upsertTenantCard(updated, managedMode ? 'Активация поставлена в очередь.' : 'Магазин активирован.');
+      } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      return;
+    }
+    if (event.target.matches('[data-redeploy]')) {
+      const end = beginOperation(button, 'Ставим в очередь…'); status(state, 'Повторное развёртывание поставлено в очередь…', 'warning');
+      try { const updated = await enqueueDeployment(id, 'redeploy'); upsertTenantCard(updated, 'Повторное развёртывание поставлено в очередь.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      return;
+    }
+    if (event.target.matches('[data-clear-proxy]')) {
+      if (!await confirmAction('Очистить сохранённый proxy?')) return;
+      const end = beginOperation(button, 'Очищаем…'); status(state, 'Очищаем сохранённый proxy…', 'warning');
+      try { const updated = await api(`/api/platform/tenants/${id}/secrets`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({secrets:{},clear_bot_proxy:true})}); upsertTenantCard(updated, 'Proxy очищен. Изменения runtime будут reconciled автоматически.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
       return;
     }
     if (event.target.matches('[data-domain-verify], [data-domain-disable]')) {
-      const domain = event.target.closest('[data-domain-host]').dataset.domainHost; const verified = event.target.matches('[data-domain-verify]');
-      if (!await confirmAction(verified ? `Подтвердить DNS и Caddy routing для ${domain}?` : `Отключить ${domain}?`)) return;
+      const domain = event.target.closest('[data-domain-host]').dataset.domainHost; const verified = event.target.matches('[data-domain-verify']);
+      const managedMessage = managedMode ? ' Изменение будет автоматически reconciled controller.' : '';
+      if (!await confirmAction(verified ? `Подтвердить домен ${domain}?${managedMessage}` : `Отключить ${domain}?${managedMessage}`)) return;
       const end = beginOperation(button, verified ? 'Подтверждаем…' : 'Отключаем…'); status(state, 'Сохраняем состояние домена…', 'warning');
-      try { await api(`/api/platform/tenants/${id}/domains/${encodeURIComponent(domain)}/verification`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:verified ? 'verified' : 'disabled'})}); await refreshTenant(id, verified ? 'Домен подтверждён.' : 'Домен отключён.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      try {
+        const result = await api(`/api/platform/tenants/${id}/domains/${encodeURIComponent(domain)}/verification`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:verified ? 'verified' : 'disabled'})});
+        const message = result.reconciliation_queued
+          ? 'Изменение домена поставлено в очередь reconciliation.'
+          : verified ? 'Домен подтверждён.' : 'Домен отключён.';
+        await refreshTenant(id, message);
+      } catch (error) { status(state, error.message, 'error'); } finally { end(); }
       return;
     }
     if (event.target.matches('[data-delete]')) {
-      const slug = card.querySelector('[data-delete-slug]').value.trim(); if (slug !== tenant.slug) return;
-      const end = beginOperation(button, 'Удаляем…'); status(state, 'Удаляем магазин и отключаем routing…', 'warning');
-      try { await api(`/api/platform/tenants/${id}`, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_slug:slug})}); await loadTenants(); status(document.getElementById('listStatus'), 'Магазин удалён. Если worker был запущен, остановите его вручную.', 'success'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      const slug = card.querySelector('[data-delete-slug]').value.trim(); if (slug !== tenant.slug || managedMode) return;
+      if (!await confirmAction(`Удалить магазин ${slug}?`)) return;
+      const end = beginOperation(button, 'Удаляем…'); status(state, 'Удаляем магазин…', 'warning');
+      try { await api(`/api/platform/tenants/${id}`, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_slug:slug})}); tenantRecords.delete(id); card.remove(); status(document.getElementById('listStatus'), 'Магазин удалён.', 'success'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
     }
   } catch (error) { status(state, error.message, 'error'); }
 });
 document.getElementById('tenants').addEventListener('submit', async event => {
   if (!event.target.matches('[data-secrets], [data-domain]')) return;
-  event.preventDefault(); const form = event.target; const card = form.closest('[data-tenant]'); const id = card.dataset.tenant; const state = card.querySelector('[data-status]'); const button = event.submitter || form.querySelector('button[type="submit"]');
+  event.preventDefault(); const form = event.target; const card = form.closest('[data-tenant]'); const id = card.dataset.tenant; const state = card.querySelector('[data-status]'); const button = event.submitter || form.querySelector('[type="submit"]');
   if (form.matches('[data-domain]')) {
     const end = beginOperation(button, 'Добавляем…'); status(state, 'Добавляем домен…', 'warning');
-    try { const host = form.elements.host.value.trim(); await api(`/api/platform/tenants/${id}/domains`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host})}); form.reset(); await refreshTenant(id, 'Домен ожидает подтверждения DNS и Caddy routing.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+    try { const host = form.elements.host.value.trim(); await api(`/api/platform/tenants/${id}/domains`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host})}); form.reset(); await refreshTenant(id, 'Домен ожидает подтверждения DNS.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+    return;
+  }
+  if (managedMode) {
+    const secrets = Object.fromEntries([...form.querySelectorAll('[data-secret-value]')].filter(input => input.value).map(input => [input.dataset.secretValue, input.value]));
+    if (!Object.keys(secrets).length) { status(state, 'Введите secret значение или используйте очистку proxy.', 'error'); return; }
+    const end = beginOperation(button, 'Сохраняем…'); status(state, 'Шифруем secrets…', 'warning');
+    try { const updated = await api(`/api/platform/tenants/${id}/secrets`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({secrets})}); upsertTenantCard(updated, 'Secrets сохранены. Изменения runtime будут reconciled автоматически.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
     return;
   }
   const references = Object.fromEntries([...form.querySelectorAll('[data-secret]')].filter(input => input.value.trim()).map(input => [input.dataset.secret, {reference:input.value.trim(), version:'v1'}]));
-  if (!Object.keys(references).length) { status(state, 'Введите хотя бы одну ссылку на переменную окружения.', 'error'); return; }
-  const end = beginOperation(button, 'Сохраняем…'); status(state, 'Сохраняем secret references…', 'warning');
-  try { const updated = await api(`/api/platform/tenants/${id}/secret-references`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({references})}); upsertTenantCard(updated, 'Secret references сохранены. Если worker уже запущен, перезапустите его.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+  if (!Object.keys(references).length) { status(state, 'Введите хотя бы одну secret reference.', 'error'); return; }
+  const end = beginOperation(button, 'Сохраняем…'); status(state, 'Сохраняем references…', 'warning');
+  try { const updated = await api(`/api/platform/tenants/${id}/secret-references`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({references})}); upsertTenantCard(updated, 'Secret references сохранены.'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
 });
 loadTenants();
 </script>

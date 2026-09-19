@@ -1,0 +1,36 @@
+[Unit]
+Description=BookApp managed deployment controller
+After=network-online.target bookapp-console.service bookapp-host-operations.service
+Wants=network-online.target
+Requires=bookapp-console.service bookapp-host-operations.service
+
+[Service]
+Type=simple
+User=platform-controller
+Group=platform-control
+Environment=BOOKAPP_MANAGED_CONTROLLER=1
+EnvironmentFile=/etc/bookapp/controller.env
+WorkingDirectory=/opt/bookapp/releases/current
+ExecStart=/opt/bookapp/releases/current/.venv/bin/python -m controlplane.controller
+LoadCredential=controller_kek:/etc/bookapp/keys/controller-kek
+LoadCredential=controller_signing_key:/etc/bookapp/keys/controller-manifest-signing.key
+Restart=on-failure
+RestartSec=5
+UMask=0007
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/bookapp/control
+
+[Install]
+WantedBy=multi-user.target

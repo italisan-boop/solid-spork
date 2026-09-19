@@ -55,7 +55,6 @@ from db.fulfillment import (
     set_picked_quantity_sync,
 )
 from db.schema import DB_PATH, connect, initialize_database
-from dotenv import load_dotenv
 from utils import log_event, setup_logger
 from utils.delivery_crypto import (
     DeliveryCryptoError,
@@ -72,14 +71,11 @@ from content_defaults import TEMPLATES
 from storage.book_media import media_variants_for_book_sync, resolve_media_variant_sync
 from telegram_auth import TelegramInitDataError, validate_telegram_init_data
 
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = settings.BOT_TOKEN
 _BOT_USERNAME_CACHE: tuple[str, str, float] | None = None
 _BOT_USERNAME_CACHE_TTL_SECONDS = 600
 
-# Читаем ID админов
-ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "")
-ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip()]
+ADMIN_IDS = settings.ADMIN_IDS
 
 app = Flask(__name__, static_folder='.')
 logger = setup_logger(__name__)
@@ -174,6 +170,16 @@ def require_telegram_admin(handler):
     return require_telegram_permission("admin.access")(handler)
 
 
+def _telegram_request_options(timeout: int) -> dict[str, object]:
+    options: dict[str, object] = {"timeout": timeout}
+    if settings.BOT_PROXY_URL:
+        options["proxies"] = {
+            "http": settings.BOT_PROXY_URL,
+            "https": settings.BOT_PROXY_URL,
+        }
+    return options
+
+
 def _current_bot_username() -> str | None:
     global _BOT_USERNAME_CACHE
     token = BOT_TOKEN or ""
@@ -185,7 +191,7 @@ def _current_bot_username() -> str | None:
         return _BOT_USERNAME_CACHE[1]
     try:
         response = requests.get(
-            f"https://api.telegram.org/bot{token}/getMe", timeout=5
+            f"https://api.telegram.org/bot{token}/getMe", **_telegram_request_options(5)
         )
         payload = response.json()
     except (requests.RequestException, ValueError):
@@ -1289,7 +1295,7 @@ def send_telegram_message(chat_id, text):
             'chat_id': chat_id,
             'text': text,
             'parse_mode': 'HTML'
-        }, timeout=10)
+        }, **_telegram_request_options(10))
         return response.json()
     except Exception as e:
         print(f"❌ Ошибка отправки в Telegram: {e}")
@@ -1312,7 +1318,7 @@ def send_stars_invoice(chat_id, order_id, title, description, stars_amount):
         'prices': json.dumps([{'label': f'Заказ #{order_id}', 'amount': stars_amount}])
     }
     try:
-        response = requests.post(url, json=data, timeout=10)
+        response = requests.post(url, json=data, **_telegram_request_options(10))
         result = response.json()
         _record_operational_event(
             "info" if result.get("ok") else "error",
@@ -1343,7 +1349,7 @@ def send_telegram_with_keyboard(chat_id, text, buttons):
         'reply_markup': {'inline_keyboard': buttons}
     }
     try:
-        response = requests.post(url, json=data, timeout=10)
+        response = requests.post(url, json=data, **_telegram_request_options(10))
         result = response.json()
         log_event(
             logger,

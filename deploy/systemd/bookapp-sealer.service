@@ -1,0 +1,23 @@
+[Unit]
+Description=BookApp one-way tenant secret sealer
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=platform-control
+EnvironmentFile=/etc/bookapp/sealer.env
+RuntimeDirectory=bookapp-sealer
+RuntimeDirectoryMode=0750
+WorkingDirectory=/opt/bookapp/releases/current
+ExecStart=/opt/bookapp/releases/current/.venv/bin/python -m controlplane.sealer
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/run/bookapp-sealer
+
+[Install]
+WantedBy=multi-user.target

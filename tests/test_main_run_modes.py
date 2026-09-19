@@ -1,4 +1,6 @@
 import os
+import tempfile
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -38,6 +40,19 @@ class RunModeDispatchTests(TestCase):
                 with self.assertRaisesRegex(ValueError, "BOT_PROXY_URL"):
                     Settings()
 
+    def test_direct_telegram_requests_use_tenant_proxy_only_when_configured(self):
+        proxy_url = "http://proxy-user:proxy-password@203.0.113.10:3128"
+        with patch.object(server.settings, "BOT_PROXY_URL", proxy_url):
+            self.assertEqual(
+                {
+                    "timeout": 10,
+                    "proxies": {"http": proxy_url, "https": proxy_url},
+                },
+                server._telegram_request_options(10),
+            )
+        with patch.object(server.settings, "BOT_PROXY_URL", None):
+            self.assertEqual({"timeout": 10}, server._telegram_request_options(10))
+
     def test_create_bot_uses_proxy_only_when_configured(self):
         proxy_url = "http://proxy-user:proxy-password@203.0.113.10:3128"
         proxied_session = object()
@@ -60,6 +75,18 @@ class RunModeDispatchTests(TestCase):
             self.assertIs(direct_bot, main.create_bot("123456:test-token"))
         session_factory.assert_not_called()
         bot_factory.assert_called_once_with(token="123456:test-token")
+
+    def test_run_webhook_uses_configured_unix_socket(self):
+        with tempfile.TemporaryDirectory() as directory:
+            socket_path = Path(directory) / "tenant.sock"
+            app = object()
+            with (
+                patch.object(main.settings, "UNIX_SOCKET_PATH", str(socket_path)),
+                patch("main.create_webhook_app", return_value=app),
+                patch("main.web.run_app") as run_app,
+            ):
+                main.run_webhook()
+        run_app.assert_called_once_with(app, path=str(socket_path))
 
     def test_webhook_configuration_requires_explicit_secure_values(self):
         with patch.multiple(
@@ -183,7 +210,35 @@ class UnifiedWebhookAppTests(IsolatedAsyncioTestCase):
         self.assertEqual(200, books.status)
         self.assertIn("books", await books.json())
 
-    async def test_webhook_route_wins_over_flask_fallback(self):
+    async def test_injected_managed_health_survives_aiohttp_wsgi_bridge(self):
+        tenant_id = "96cb8d20-8a4f-460f-8117-9328780b052c"
+
+        def managed_wsgi(environ, start_response):
+            self.assertEqual("/health", environ["PATH_INFO"])
+            start_response("200 OK", [("Content-Type", "application/json")])
+            return [
+                (
+                    '{"tenant_id":"' + tenant_id + '","generation":7}'
+                ).encode("utf-8")
+            ]
+
+        with patch("main.webhook_startup", new_callable=AsyncMock), patch(
+            "main.webhook_shutdown", new_callable=AsyncMock
+        ):
+            app = main.create_webhook_app(managed_wsgi)
+        test_server = TestServer(app)
+        client = TestClient(test_server)
+        try:
+            await client.start_server()
+            response = await client.get("/health", headers={"Host": "localhost"})
+            self.assertEqual(200, response.status)
+            self.assertEqual(
+                {"tenant_id": tenant_id, "generation": 7}, await response.json()
+            )
+        finally:
+            await client.close()
+
+    async def test_webhook_accepts_valid_secret_after_rejecting_missing_secret(self):
         with (
             patch.object(main.settings, "WEBHOOK_SECRET", "valid_secret"),
             patch.object(main.dp, "feed_update", new_callable=AsyncMock) as feed_update,

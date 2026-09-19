@@ -5,73 +5,72 @@
 import os
 from dotenv import load_dotenv
 from typing import List
-from urllib.parse import urlparse
 
-# Загружаем переменные окружения
-load_dotenv()
+from proxy_url import normalize_authenticated_http_proxy
+from runtime.credentials import is_managed_runtime, read_runtime_credential
+from runtime.manifest import load_managed_runtime_manifest
 
 
-def _bot_proxy_url(value: str) -> str | None:
-    if not value:
-        return None
-    if any(character.isspace() for character in value):
-        raise ValueError("BOT_PROXY_URL must be an HTTP proxy URL")
-    parsed = urlparse(value)
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("BOT_PROXY_URL must be an HTTP proxy URL") from exc
-    if (
-        parsed.scheme != "http"
-        or not parsed.hostname
-        or not parsed.username
-        or not parsed.password
-        or port is None
-        or not 1 <= port <= 65535
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError("BOT_PROXY_URL must be an HTTP proxy URL")
-    return value.rstrip("/")
+if not is_managed_runtime():
+    load_dotenv()
 
 
 class Settings:
     """Класс настроек приложения."""
     
     def __init__(self):
-        # Токен бота
-        self.BOT_TOKEN = os.getenv("BOT_TOKEN")
-        self.BOT_PROXY_URL = _bot_proxy_url(os.getenv("BOT_PROXY_URL", "").strip())
+        self.MANAGED_RUNTIME = is_managed_runtime()
+        manifest = load_managed_runtime_manifest() if self.MANAGED_RUNTIME else None
+        if manifest is not None:
+            self.BOT_TOKEN = read_runtime_credential("telegram_bot_token", required=True)
+            self.BOT_PROXY_URL = normalize_authenticated_http_proxy(
+                (read_runtime_credential("bot_proxy_url") or "").strip(),
+                setting_name="BOT_PROXY_URL",
+            )
+            self.WEBAPP_URL = (
+                f"https://{manifest.canonical_host}/setup"
+                if manifest.lifecycle_state == "awaiting_owner_claim"
+                else f"https://{manifest.canonical_host}"
+            )
+            self.RUN_MODE = "webhook"
+            self.WEBHOOK_URL = f"https://{manifest.canonical_host}/webhook"
+            self.WEBHOOK_SECRET = read_runtime_credential(
+                "telegram_webhook_secret", required=True
+            )
+            self.YOOKASSA_SHOP_ID = ""
+            self.YOOKASSA_SECRET_KEY = ""
+            self.YOOKASSA_RETURN_URL = ""
+            self.OWNER_TELEGRAM_ID = manifest.owner_telegram_id
+            self.ADMIN_IDS: List[int] = []
+            self.DATABASE_PATH = str(manifest.database_path)
+            self.BOOK_MEDIA_ROOT = str(manifest.media_root)
+            self.BACKUP_DIR = str(manifest.backup_root)
+            self.UNIX_SOCKET_PATH = str(manifest.socket_path)
+        else:
+            self.BOT_TOKEN = os.getenv("BOT_TOKEN")
+            self.BOT_PROXY_URL = normalize_authenticated_http_proxy(
+                os.getenv("BOT_PROXY_URL", "").strip(), setting_name="BOT_PROXY_URL"
+            )
+            self.WEBAPP_URL = os.getenv("WEBAPP_URL", "https://example.com")
+            self.RUN_MODE = os.getenv("RUN_MODE", "polling").strip().lower()
+            self.WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
+            self.WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
+            self.YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
+            self.YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
+            self.YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "").strip()
+            owner_id_raw = os.getenv("OWNER_TELEGRAM_ID", "").strip()
+            if owner_id_raw and (not owner_id_raw.isdigit() or int(owner_id_raw) <= 0):
+                raise ValueError("OWNER_TELEGRAM_ID must be a positive Telegram ID")
+            self.OWNER_TELEGRAM_ID = int(owner_id_raw) if owner_id_raw else None
+            admin_ids_str = os.getenv("ADMIN_IDS", "")
+            self.ADMIN_IDS = [
+                int(x.strip()) for x in admin_ids_str.split(",") if x.strip()
+            ]
+            self.DATABASE_PATH = os.getenv("DATABASE_PATH", "").strip()
+            self.BOOK_MEDIA_ROOT = os.getenv("BOOK_MEDIA_ROOT", "").strip()
+            self.BACKUP_DIR = os.getenv("BACKUP_DIR", "").strip()
+            self.UNIX_SOCKET_PATH = os.getenv("UNIX_SOCKET_PATH", "").strip()
 
-        # URL веб-приложения
-        self.WEBAPP_URL = os.getenv("WEBAPP_URL", "https://example.com")
-        
-        # Транспорт доставки Telegram updates: polling или webhook.
-        self.RUN_MODE = os.getenv("RUN_MODE", "polling").strip().lower()
-        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-        self.WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
-        self.YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
-        self.YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
-        self.YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "").strip()
-        
-        # Владелец — неизменяемый bootstrap-аккаунт из окружения. Пока он не
-        # настроен, ADMIN_IDS остаётся временным совместимым источником прав.
-        owner_id_raw = os.getenv("OWNER_TELEGRAM_ID", "").strip()
-        if owner_id_raw and (not owner_id_raw.isdigit() or int(owner_id_raw) <= 0):
-            raise ValueError("OWNER_TELEGRAM_ID must be a positive Telegram ID")
-        self.OWNER_TELEGRAM_ID = int(owner_id_raw) if owner_id_raw else None
-
-        # Список legacy-администраторов для контролируемого перехода на роли.
-        admin_ids_str = os.getenv("ADMIN_IDS", "")
-        self.ADMIN_IDS: List[int] = [
-            int(x.strip()) for x in admin_ids_str.split(",") if x.strip()
-        ]
-        
-        # Обязательный абсолютный путь к общей SQLite-базе.
-        self.DATABASE_PATH = os.getenv("DATABASE_PATH", "").strip()
-        self.BOOK_MEDIA_ROOT = os.getenv("BOOK_MEDIA_ROOT", "").strip()
-        
         # Настройки HTTP listener-а текущего запуска.
         self.HOST = os.getenv("HOST", "0.0.0.0").strip()
         self.PORT = int(os.getenv("PORT", "8000"))
@@ -84,7 +83,6 @@ class Settings:
         if self.LOG_FORMAT not in {"text", "json"}:
             self.LOG_FORMAT = "text"
         self.REPORT_TIMEZONE = os.getenv("REPORT_TIMEZONE", "Europe/Moscow").strip()
-        self.BACKUP_DIR = os.getenv("BACKUP_DIR", "").strip()
         self.BACKUP_DAILY_RETENTION = int(os.getenv("BACKUP_DAILY_RETENTION", "14"))
         self.BACKUP_MONTHLY_RETENTION = int(os.getenv("BACKUP_MONTHLY_RETENTION", "3"))
         self.BACKUP_INTERVAL_SECONDS = int(

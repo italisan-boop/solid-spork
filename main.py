@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import secrets
+from pathlib import Path
 from urllib.parse import urlparse
 
 from aiohttp import web
@@ -281,7 +282,14 @@ def create_webhook_app(wsgi_app=None) -> web.Application:
 
 
 def run_webhook(wsgi_app=None):
-    web.run_app(create_webhook_app(wsgi_app), host=settings.HOST, port=settings.PORT)
+    app = create_webhook_app(wsgi_app)
+    if settings.UNIX_SOCKET_PATH:
+        socket_path = Path(settings.UNIX_SOCKET_PATH)
+        socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        socket_path.unlink(missing_ok=True)
+        web.run_app(app, path=str(socket_path))
+        return
+    web.run_app(app, host=settings.HOST, port=settings.PORT)
 
 
 def main(wsgi_app=None) -> int:

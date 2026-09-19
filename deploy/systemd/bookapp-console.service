@@ -1,0 +1,36 @@
+[Unit]
+Description=BookApp managed platform console
+After=network-online.target bookapp-sealer.service
+Wants=network-online.target bookapp-sealer.service
+
+[Service]
+Type=simple
+User=platform-console
+Group=platform-control
+Environment=BOOKAPP_MANAGED_CONSOLE=1
+Environment=PLATFORM_SEALER_SOCKET=/run/bookapp-sealer/sealer.sock
+Environment=PLATFORM_HOST=127.0.0.1
+EnvironmentFile=/etc/bookapp/console.env
+WorkingDirectory=/opt/bookapp/releases/current
+ExecStart=/opt/bookapp/releases/current/.venv/bin/python -m controlplane
+LoadCredential=platform_bot_token:/etc/bookapp/platform-bot-token
+Restart=on-failure
+RestartSec=5
+UMask=0007
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/bookapp/control
+
+[Install]
+WantedBy=multi-user.target

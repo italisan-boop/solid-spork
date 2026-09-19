@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from controlplane.deployments import queue_runtime_reconciliation
 from controlplane.plan_policy import Entitlements, Plan, effective_entitlements, parse_plan
+from proxy_url import normalize_authenticated_http_proxy
 from controlplane.schema import connect, resolve_path
+from controlplane.secret_envelopes import (
+    SecretEnvelope,
+    SecretEnvelopeError,
+    UnixSocketSealer,
+)
 from controlplane.secret_store import SecretResolutionError, validate_secret_reference
 
 
@@ -17,9 +25,11 @@ _HOST_PATTERN = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9]
 _SECRET_KINDS = {
     "telegram_bot_token",
     "telegram_webhook_secret",
+    "bot_proxy_url",
     "yookassa_credentials",
     "delivery_encryption_keys",
 }
+_OWNER_CLAIM_VERDICTS = frozenset({"claimed", "missing", "owner_mismatch"})
 
 
 @dataclass(frozen=True)
@@ -36,6 +46,14 @@ class Tenant:
     backup_root: Path
     runtime_generation: int
     entitlement_version: int
+
+
+@dataclass(frozen=True)
+class DomainVerificationUpdate:
+    host: str
+    verification_state: str
+    changed: bool
+    reconciliation_queued: bool
 
 
 def normalize_host(value: object) -> str:
@@ -240,22 +258,179 @@ def tenant_domains(control_database_path: str | Path, tenant_id: str) -> list[di
 def configured_secret_kinds(control_database_path: str | Path, tenant_id: str) -> list[str]:
     database = connect(control_database_path)
     try:
+        envelope_rows = database.execute(
+            """
+            SELECT secret_kind FROM tenant_secret_envelopes
+            WHERE tenant_id = ?
+            """,
+            (tenant_id,),
+        ).fetchall()
+        configured = {row[0] for row in envelope_rows}
         rows = database.execute(
             """
             SELECT secret_kind, reference FROM tenant_secret_references
             WHERE tenant_id = ?
-            ORDER BY secret_kind ASC
             """,
             (tenant_id,),
         ).fetchall()
-        configured = []
         for secret_kind, reference in rows:
             try:
                 validate_secret_reference(reference)
             except SecretResolutionError:
                 continue
-            configured.append(secret_kind)
-        return configured
+            configured.add(secret_kind)
+        return sorted(configured)
+    finally:
+        database.close()
+
+
+def sealed_secret_kinds(control_database_path: str | Path, tenant_id: str) -> list[str]:
+    database = connect(control_database_path)
+    try:
+        rows = database.execute(
+            """
+            SELECT secret_kind FROM tenant_secret_envelopes
+            WHERE tenant_id = ?
+            ORDER BY secret_kind
+            """,
+            (tenant_id,),
+        ).fetchall()
+        return [row[0] for row in rows]
+    finally:
+        database.close()
+
+def set_secret_envelopes(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    values: dict[str, object],
+    actor_telegram_id: int,
+    sealer=None,
+    clear_bot_proxy: bool = False,
+    managed_reconciliation: bool = False,
+) -> Tenant:
+    supported_kinds = {
+        "telegram_bot_token",
+        "telegram_webhook_secret",
+        "bot_proxy_url",
+    }
+    if (
+        not isinstance(clear_bot_proxy, bool)
+        or (not values and not clear_bot_proxy)
+        or not set(values).issubset(supported_kinds)
+        or (clear_bot_proxy and "bot_proxy_url" in values)
+    ):
+        raise ValueError("unsupported tenant secret kind")
+    if any(not isinstance(value, str) or not value for value in values.values()):
+        raise ValueError("invalid tenant secret value")
+    normalized_values = dict(values)
+    if "bot_proxy_url" in normalized_values:
+        normalized_values["bot_proxy_url"] = normalize_authenticated_http_proxy(
+            normalized_values["bot_proxy_url"], setting_name="bot_proxy_url"
+        )
+
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        snapshot = _ensure_mutable_tenant(database, tenant_id)
+        generation = snapshot["runtime_generation"] + 1
+        expected_lifecycle_state = snapshot["lifecycle_state"]
+    finally:
+        database.close()
+
+    socket_path = os.getenv("PLATFORM_SEALER_SOCKET", "").strip()
+    if normalized_values and not sealer and not socket_path:
+        raise ValueError("tenant secret sealer is unavailable")
+    active_sealer = sealer or UnixSocketSealer(socket_path)
+    try:
+        envelopes = {
+            secret_kind: active_sealer.seal(tenant_id, secret_kind, generation, value)
+            for secret_kind, value in normalized_values.items()
+        }
+    except (SecretEnvelopeError, OSError) as exc:
+        raise ValueError("tenant secret sealer is unavailable") from exc
+
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        tenant = _ensure_mutable_tenant(database, tenant_id)
+        if (
+            tenant["runtime_generation"] + 1 != generation
+            or tenant["lifecycle_state"] != expected_lifecycle_state
+        ):
+            raise ValueError("tenant configuration changed; retry")
+        for secret_kind, envelope in envelopes.items():
+            database.execute(
+                """
+                INSERT INTO tenant_secret_envelopes (
+                    tenant_id, secret_kind, generation, algorithm, ciphertext,
+                    data_nonce, wrapped_key, wrap_nonce, key_version,
+                    configured_by_platform_admin_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, secret_kind) DO UPDATE SET
+                    generation = excluded.generation,
+                    algorithm = excluded.algorithm,
+                    ciphertext = excluded.ciphertext,
+                    data_nonce = excluded.data_nonce,
+                    wrapped_key = excluded.wrapped_key,
+                    wrap_nonce = excluded.wrap_nonce,
+                    key_version = excluded.key_version,
+                    configured_at = CURRENT_TIMESTAMP,
+                    configured_by_platform_admin_id = excluded.configured_by_platform_admin_id
+                """,
+                (
+                    tenant_id,
+                    secret_kind,
+                    generation,
+                    envelope.algorithm,
+                    envelope.ciphertext,
+                    envelope.data_nonce,
+                    envelope.wrapped_key,
+                    envelope.wrap_nonce,
+                    envelope.key_version,
+                    actor_telegram_id,
+                ),
+            )
+        if clear_bot_proxy:
+            database.execute(
+                """
+                DELETE FROM tenant_secret_envelopes
+                WHERE tenant_id = ? AND secret_kind = 'bot_proxy_url'
+                """,
+                (tenant_id,),
+            )
+        database.execute(
+            """
+            UPDATE platform_tenants
+            SET runtime_generation = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (generation, tenant_id),
+        )
+        row = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        if managed_reconciliation:
+            queue_runtime_reconciliation(
+                database, tenant=row, actor_telegram_id=actor_telegram_id
+            )
+        _audit(
+            database,
+            actor_telegram_id=actor_telegram_id,
+            action="tenant.secrets.enveloped",
+            tenant_id=tenant_id,
+            details={
+                "kinds": sorted(envelopes),
+                "cleared_bot_proxy": clear_bot_proxy,
+                "generation": generation,
+            },
+        )
+        database.commit()
+        return _tenant(row)
+    except Exception:
+        database.rollback()
+        raise
     finally:
         database.close()
 
@@ -340,7 +515,8 @@ def set_custom_domain_verification(
     host: str,
     verification_state: str,
     actor_telegram_id: int,
-) -> None:
+    managed_reconciliation: bool = False,
+) -> DomainVerificationUpdate:
     if verification_state not in {"verified", "disabled"}:
         raise ValueError("invalid domain verification state")
     normalized_host = normalize_host(host)
@@ -348,26 +524,59 @@ def set_custom_domain_verification(
     database.row_factory = sqlite3.Row
     try:
         database.execute("BEGIN IMMEDIATE")
-        _ensure_mutable_tenant(database, tenant_id)
-        cursor = database.execute(
+        tenant = _ensure_mutable_tenant(database, tenant_id)
+        domain = database.execute(
             """
-            UPDATE tenant_domains
-            SET verification_state = ?,
-                verified_at = CASE WHEN ? = 'verified' THEN CURRENT_TIMESTAMP ELSE NULL END
+            SELECT verification_state FROM tenant_domains
             WHERE tenant_id = ? AND host = ? AND is_canonical = 0
             """,
-            (verification_state, verification_state, tenant_id, normalized_host),
-        )
-        if cursor.rowcount != 1:
+            (tenant_id, normalized_host),
+        ).fetchone()
+        if domain is None:
             raise ValueError("custom domain not found")
-        _audit(
-            database,
-            actor_telegram_id=actor_telegram_id,
-            action="tenant.domain.verification.updated",
-            tenant_id=tenant_id,
-            details={"host": normalized_host, "state": verification_state},
-        )
+        changed = domain["verification_state"] != verification_state
+        reconciliation_queued = False
+        if changed:
+            database.execute(
+                """
+                UPDATE tenant_domains
+                SET verification_state = ?,
+                    verified_at = CASE WHEN ? = 'verified' THEN CURRENT_TIMESTAMP ELSE NULL END
+                WHERE tenant_id = ? AND host = ? AND is_canonical = 0
+                """,
+                (verification_state, verification_state, tenant_id, normalized_host),
+            )
+            if managed_reconciliation and tenant["lifecycle_state"] == "active":
+                database.execute(
+                    """
+                    UPDATE platform_tenants
+                    SET runtime_generation = runtime_generation + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (tenant_id,),
+                )
+                refreshed = database.execute(
+                    "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+                ).fetchone()
+                queue_runtime_reconciliation(
+                    database, tenant=refreshed, actor_telegram_id=actor_telegram_id
+                )
+                reconciliation_queued = True
+            _audit(
+                database,
+                actor_telegram_id=actor_telegram_id,
+                action="tenant.domain.verification.updated",
+                tenant_id=tenant_id,
+                details={"host": normalized_host, "state": verification_state},
+            )
         database.commit()
+        return DomainVerificationUpdate(
+            host=normalized_host,
+            verification_state=verification_state,
+            changed=changed,
+            reconciliation_queued=reconciliation_queued,
+        )
     except Exception:
         database.rollback()
         raise
@@ -448,6 +657,7 @@ def update_entitlements(
     feature_overrides: dict[str, object],
     limit_overrides: dict[str, object],
     actor_telegram_id: int,
+    managed_reconciliation: bool = False,
 ) -> Entitlements:
     database = connect(control_database_path)
     database.row_factory = sqlite3.Row
@@ -476,11 +686,20 @@ def update_entitlements(
         database.execute(
             """
             UPDATE platform_tenants
-            SET entitlement_version = entitlement_version + 1, updated_at = CURRENT_TIMESTAMP
+            SET entitlement_version = entitlement_version + 1,
+                runtime_generation = runtime_generation + 1,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
             (tenant_id,),
         )
+        refreshed = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        if managed_reconciliation:
+            queue_runtime_reconciliation(
+                database, tenant=refreshed, actor_telegram_id=actor_telegram_id
+            )
         _audit(
             database,
             actor_telegram_id=actor_telegram_id,
@@ -503,6 +722,7 @@ def update_plan(
     tenant_id: str,
     plan: Plan | str,
     actor_telegram_id: int,
+    managed_reconciliation: bool = False,
 ) -> Tenant:
     target_plan = parse_plan(plan)
     database = connect(control_database_path)
@@ -521,6 +741,13 @@ def update_plan(
         )
         if cursor.rowcount != 1:
             raise ValueError("tenant not found")
+        row = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        if managed_reconciliation:
+            queue_runtime_reconciliation(
+                database, tenant=row, actor_telegram_id=actor_telegram_id
+            )
         _audit(
             database,
             actor_telegram_id=actor_telegram_id,
@@ -528,9 +755,6 @@ def update_plan(
             tenant_id=tenant_id,
             details={"plan": target_plan.value},
         )
-        row = database.execute(
-            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
-        ).fetchone()
         database.commit()
         return _tenant(row)
     except Exception:
@@ -548,6 +772,7 @@ def update_tenant_configuration(
     feature_overrides: dict[str, object],
     limit_overrides: dict[str, object],
     actor_telegram_id: int,
+    managed_reconciliation: bool = False,
 ) -> Tenant:
     target_plan = parse_plan(plan)
     if not isinstance(feature_overrides, dict) or not isinstance(limit_overrides, dict):
@@ -595,6 +820,10 @@ def update_tenant_configuration(
         row = database.execute(
             "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
         ).fetchone()
+        if managed_reconciliation:
+            queue_runtime_reconciliation(
+                database, tenant=row, actor_telegram_id=actor_telegram_id
+            )
         database.commit()
         return _tenant(row)
     except Exception:
@@ -709,11 +938,70 @@ def set_secret_reference(
     )
 
 
+def complete_managed_provisioning(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    actor_telegram_id: int,
+    tenant_database_path: str | Path | None = None,
+) -> Tenant:
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        row = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("tenant not found")
+        tenant = _tenant(row)
+        if tenant.lifecycle_state not in {"draft", "migration_failed"}:
+            raise ValueError("tenant is not ready for managed provisioning")
+        if tenant_database_path is None:
+            database_path = tenant.database_path
+            if not database_path.is_file():
+                raise ValueError("tenant database is unavailable")
+        else:
+            database_path = Path(tenant_database_path).resolve()
+            if (
+                tenant.database_path.resolve() != database_path
+                or not database_path.is_file()
+            ):
+                raise ValueError("tenant database is unavailable")
+        cursor = database.execute(
+            """
+            UPDATE platform_tenants
+            SET lifecycle_state = 'awaiting_owner_claim', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND lifecycle_state IN ('draft', 'migration_failed')
+            """,
+            (tenant_id,),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("tenant provisioning state changed")
+        _audit(
+            database,
+            actor_telegram_id=actor_telegram_id,
+            action="tenant.managed_provisioning.completed",
+            tenant_id=tenant_id,
+        )
+        completed = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        database.commit()
+        return _tenant(completed)
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
 def activate_after_owner_claim(
     control_database_path: str | Path,
     *,
     tenant_id: str,
     actor_telegram_id: int,
+    tenant_database_path: str | Path | None = None,
 ) -> Tenant:
     database = connect(control_database_path)
     database.row_factory = sqlite3.Row
@@ -727,11 +1015,16 @@ def activate_after_owner_claim(
         tenant = _tenant(row)
         if tenant.lifecycle_state != "awaiting_owner_claim":
             raise ValueError("tenant is not awaiting owner claim")
-        if not tenant.database_path.is_file():
+        database_path = (
+            tenant.database_path
+            if tenant_database_path is None
+            else Path(tenant_database_path).resolve()
+        )
+        if tenant.database_path.resolve() != database_path or not database_path.is_file():
             raise ValueError("tenant database is unavailable")
         tenant_database: sqlite3.Connection | None = None
         try:
-            tenant_database = sqlite3.connect(tenant.database_path)
+            tenant_database = sqlite3.connect(database_path)
             claim = tenant_database.execute(
                 "SELECT telegram_user_id FROM tenant_owner_claims WHERE id = 1"
             ).fetchone()
@@ -770,6 +1063,57 @@ def activate_after_owner_claim(
     finally:
         database.close()
 
+
+def activate_managed_after_owner_claim(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    actor_telegram_id: int,
+    claim_verdict: str,
+) -> Tenant:
+    if claim_verdict not in _OWNER_CLAIM_VERDICTS:
+        raise ValueError("tenant owner claim is unavailable")
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        row = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("tenant not found")
+        tenant = _tenant(row)
+        if tenant.lifecycle_state != "awaiting_owner_claim":
+            raise ValueError("tenant is not awaiting owner claim")
+        if claim_verdict == "missing":
+            raise ValueError("tenant owner has not claimed the store")
+        if claim_verdict == "owner_mismatch":
+            raise ValueError("tenant owner claim does not match configured owner")
+        database.execute(
+            """
+            UPDATE platform_tenants
+            SET lifecycle_state = 'active', runtime_generation = runtime_generation + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND lifecycle_state = 'awaiting_owner_claim'
+            """,
+            (tenant_id,),
+        )
+        _audit(
+            database,
+            actor_telegram_id=actor_telegram_id,
+            action="tenant.activated_after_owner_claim",
+            tenant_id=tenant_id,
+        )
+        activated = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        database.commit()
+        return _tenant(activated)
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
 
 def soft_delete_tenant(
     control_database_path: str | Path,

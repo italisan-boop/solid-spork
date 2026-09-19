@@ -1,3 +1,4 @@
+from dataclasses import replace
 import hashlib
 import hmac
 import json
@@ -17,9 +18,14 @@ from controlplane.plan_policy import (
     Plan,
     plan_defaults,
 )
+from controlplane.secret_envelopes import EnvelopeCipher
 from controlplane.server import create_controlplane_app
 from controlplane.settings import ControlPlaneSettings
-from controlplane.tenants import effective_tenant_entitlements, get_tenant
+from controlplane.tenants import (
+    effective_tenant_entitlements,
+    get_tenant,
+    set_secret_envelopes,
+)
 from db.schema import connect as connect_tenant_database
 from runtime.factory import TenantResolutionError, tenant_context_for_host
 
@@ -58,9 +64,60 @@ class ControlPlaneApiTests(unittest.TestCase):
             host="127.0.0.1",
             port=8100,
         )
-        self.client = create_controlplane_app(self.settings).test_client()
+        self.secret_sealer = EnvelopeCipher(b"e" * 32, "test")
+        self.client = create_controlplane_app(
+            self.settings, secret_sealer=self.secret_sealer
+        ).test_client()
+        self.managed_client = create_controlplane_app(
+            replace(self.settings, managed_mode=True), secret_sealer=self.secret_sealer
+        ).test_client()
 
-    def test_platform_console_requires_signed_platform_session(self):
+    def test_managed_console_rejects_legacy_mutations(self):
+        managed_client = create_controlplane_app(
+            replace(self.settings, managed_mode=True), secret_sealer=self.secret_sealer
+        ).test_client()
+        response = managed_client.post(
+            "/api/platform/tenants",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={
+                "display_name": "Managed store",
+                "slug": "managed-store",
+                "owner_telegram_id": 202,
+                "plan": "business",
+            },
+        )
+        self.assertEqual(201, response.status_code)
+        tenant_id = response.get_json()["id"]
+        for path, method, payload in (
+            (
+                f"/api/platform/tenants/{tenant_id}/secret-references",
+                "put",
+                {"references": {}},
+            ),
+            (f"/api/platform/tenants/{tenant_id}/provision", "post", None),
+            (f"/api/platform/tenants/{tenant_id}/activate", "post", None),
+            (f"/api/platform/tenants/{tenant_id}/lifecycle", "put", {"state": "suspended"}),
+            (
+                f"/api/platform/tenants/{tenant_id}",
+                "delete",
+                {"confirm_slug": "managed-store"},
+            ),
+        ):
+            response = getattr(managed_client, method)(
+                path,
+                headers=signed_headers(PLATFORM_ADMIN_ID),
+                json=payload,
+            )
+            self.assertEqual(409, response.status_code)
+        response = managed_client.post(
+            f"/api/platform/tenants/{tenant_id}/deployments",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"operation": "provision"},
+        )
+        self.assertEqual(409, response.status_code)
+        self.assertIn("secrets", response.get_json()["error"])
+
+    def test_platform_session_requires_authenticated_admin(self):
         response = self.client.get("/")
         try:
             self.assertEqual(200, response.status_code)
@@ -78,23 +135,133 @@ class ControlPlaneApiTests(unittest.TestCase):
             headers=signed_headers(PLATFORM_ADMIN_ID, "123456:other-bot-token"),
         ).status_code)
 
+    def test_sealing_does_not_hold_sqlite_writer_lock(self):
+        tenant = self.create_managed_tenant(slug="nonblocking-sealer-store")
+        cipher = self.secret_sealer
+        database_path = self.settings.database_path
+
+        class ConcurrentWriterSealer:
+            def seal(self, tenant_id, secret_kind, generation, value):
+                connection = sqlite3.connect(database_path, timeout=0.1)
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    connection.rollback()
+                finally:
+                    connection.close()
+                return cipher.seal(tenant_id, secret_kind, generation, value)
+
+        updated = set_secret_envelopes(
+            self.settings.database_path,
+            tenant_id=tenant["id"],
+            values={"bot_proxy_url": "http://user:password@203.0.113.10:3128"},
+            actor_telegram_id=PLATFORM_ADMIN_ID,
+            sealer=ConcurrentWriterSealer(),
+            managed_reconciliation=True,
+        )
+        self.assertIn("bot_proxy_url", self.managed_client.get(
+            f"/api/platform/tenants/{updated.id}",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+        ).get_json()["configured_secret_kinds"])
+
+    def test_sealing_rejects_snapshot_changed_during_rpc(self):
+        tenant = self.create_managed_tenant(slug="stale-sealer-store")
+        cipher = self.secret_sealer
+        database_path = self.settings.database_path
+
+        class MutatingSealer:
+            def seal(self, tenant_id, secret_kind, generation, value):
+                connection = sqlite3.connect(database_path)
+                try:
+                    connection.execute(
+                        "UPDATE platform_tenants SET runtime_generation = runtime_generation + 1 WHERE id = ?",
+                        (tenant_id,),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+                return cipher.seal(tenant_id, secret_kind, generation, value)
+
+        with self.assertRaisesRegex(ValueError, "configuration changed"):
+            set_secret_envelopes(
+                self.settings.database_path,
+                tenant_id=tenant["id"],
+                values={"bot_proxy_url": "http://user:password@203.0.113.10:3128"},
+                actor_telegram_id=PLATFORM_ADMIN_ID,
+                sealer=MutatingSealer(),
+                managed_reconciliation=True,
+            )
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            envelopes = connection.execute(
+                "SELECT COUNT(*) FROM tenant_secret_envelopes WHERE tenant_id = ?",
+                (tenant["id"],),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(0, envelopes)
+
+    def test_legacy_console_accepts_tenant_proxy_reference(self):
+        tenant = self.create_tenant(slug="legacy-proxy-reference")
+        response = self.client.put(
+            f"/api/platform/tenants/{tenant['id']}/secret-references/bot_proxy_url",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={
+                "reference": "env:CONTROLPLANE_TEST_TENANT_PROXY",
+                "version": "v1",
+            },
+        )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            {"configured": True, "secret_kind": "bot_proxy_url"}, response.get_json()
+        )
+
+    def test_legacy_console_rejects_managed_mutations_and_reports_mode(self):
+        tenant = self.create_tenant()
+        headers = signed_headers(PLATFORM_ADMIN_ID)
+        self.assertEqual(
+            409,
+            self.client.put(
+                f"/api/platform/tenants/{tenant['id']}/secrets",
+                headers=headers,
+                json={"secrets": {"bot_proxy_url": "http://user:password@203.0.113.10:3128"}},
+            ).status_code,
+        )
+        self.assertEqual(
+            409,
+            self.client.post(
+                f"/api/platform/tenants/{tenant['id']}/deployments",
+                headers=headers,
+                json={"operation": "provision"},
+            ).status_code,
+        )
+        self.assertFalse(
+            self.client.get("/api/platform/tenants", headers=headers).get_json()["managed_mode"]
+        )
+        self.assertTrue(
+            self.managed_client.get("/api/platform/tenants", headers=headers).get_json()["managed_mode"]
+        )
+
     def tearDown(self):
         self._temporary_directory.cleanup()
         self._environment_patch.stop()
 
-    def create_tenant(self, *, plan="business"):
-        response = self.client.post(
+    def create_tenant(self, *, plan="business", client=None, slug="client-store"):
+        active_client = client or self.client
+        response = active_client.post(
             "/api/platform/tenants",
             headers=signed_headers(PLATFORM_ADMIN_ID),
             json={
                 "display_name": "Магазин клиента",
-                "slug": "client-store",
+                "slug": slug,
                 "owner_telegram_id": 202,
                 "plan": plan,
             },
         )
         self.assertEqual(201, response.status_code)
         return response.get_json()
+
+    def create_managed_tenant(self, *, plan="business", slug="managed-client-store"):
+        return self.create_tenant(plan=plan, client=self.managed_client, slug=slug)
 
     def configure_required_secret_references(self, tenant_id: str):
         references = {
@@ -156,6 +323,126 @@ class ControlPlaneApiTests(unittest.TestCase):
         self.assertEqual((tenant["id"], tenant["canonical_host"], 202), metadata)
         self.assertEqual(("Магазин клиента",), settings)
         self.assertEqual(0, book_count)
+
+    def test_console_seals_secret_values_without_leaking_plaintext(self):
+        tenant = self.create_managed_tenant()
+        token = "234567:sealed-tenant-token"
+        webhook_secret = "sealed-webhook-secret"
+        response = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/secrets",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"secrets": {
+                "telegram_bot_token": token,
+                "telegram_webhook_secret": webhook_secret,
+            }},
+        )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            ["telegram_bot_token", "telegram_webhook_secret"],
+            response.get_json()["configured_secret_kinds"],
+        )
+        self.assertNotIn(token, response.get_data(as_text=True))
+        self.assertNotIn(webhook_secret, response.get_data(as_text=True))
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            stored = connection.execute(
+                """
+                SELECT ciphertext, data_nonce, wrapped_key, wrap_nonce, key_version
+                FROM tenant_secret_envelopes
+                WHERE tenant_id = ?
+                """,
+                (tenant["id"],),
+            ).fetchall()
+            audit = connection.execute(
+                """
+                SELECT details_json FROM platform_audit_events
+                WHERE tenant_id = ? AND action = 'tenant.secrets.enveloped'
+                """,
+                (tenant["id"],),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(2, len(stored))
+        self.assertTrue(all(token not in row and webhook_secret not in row for row in stored))
+        self.assertNotIn(token, audit)
+        self.assertNotIn(webhook_secret, audit)
+
+    def test_console_seals_valid_tenant_proxy_without_returning_it(self):
+        tenant = self.create_managed_tenant()
+        proxy_url = "http://proxy-user:proxy-password@203.0.113.10:3128"
+        saved = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/secrets",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"secrets": {"bot_proxy_url": proxy_url}},
+        )
+        self.assertEqual(200, saved.status_code)
+        self.assertIn("bot_proxy_url", saved.get_json()["configured_secret_kinds"])
+        self.assertNotIn(proxy_url, saved.get_data(as_text=True))
+        invalid = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/secrets",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"secrets": {"bot_proxy_url": "https://proxy.example.test:443"}},
+        )
+        self.assertEqual(400, invalid.status_code)
+
+    def test_console_can_clear_optional_proxy_envelope(self):
+        tenant = self.create_managed_tenant()
+        path = f"/api/platform/tenants/{tenant['id']}/secrets"
+        saved = self.managed_client.put(
+            path,
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"secrets": {"bot_proxy_url": "http://user:password@203.0.113.10:3128"}},
+        )
+        self.assertEqual(200, saved.status_code)
+        cleared = self.managed_client.put(
+            path,
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"secrets": {}, "clear_bot_proxy": True},
+        )
+        self.assertEqual(200, cleared.status_code)
+        self.assertNotIn("bot_proxy_url", cleared.get_json()["configured_secret_kinds"])
+
+    def test_console_queues_managed_deployment_without_provisioning_in_request(self):
+        tenant = self.create_managed_tenant()
+        response = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/secrets",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"secrets": {
+                "telegram_bot_token": "234567:queued-tenant-token",
+                "telegram_webhook_secret": "queued-webhook-secret",
+            }},
+        )
+        self.assertEqual(200, response.status_code)
+        queued = self.managed_client.post(
+            f"/api/platform/tenants/{tenant['id']}/deployments",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"operation": "provision"},
+        )
+        self.assertEqual(202, queued.status_code)
+        payload = queued.get_json()
+        self.assertEqual("pending", payload["job"]["state"])
+        self.assertEqual("provision", payload["job"]["operation"])
+        self.assertEqual("pending", payload["deployment"]["state"])
+        self.assertFalse(get_tenant(self.settings.database_path, tenant["id"]).database_path.exists())
+        self.assertNotIn("queued-tenant-token", queued.get_data(as_text=True))
+        duplicate = self.managed_client.post(
+            f"/api/platform/tenants/{tenant['id']}/deployments",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"operation": "provision"},
+        )
+        self.assertEqual(409, duplicate.status_code)
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            actor = connection.execute(
+                """
+                SELECT created_by_platform_admin_id FROM tenant_deployment_jobs
+                WHERE id = ?
+                """,
+                (payload["job"]["id"],),
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual((PLATFORM_ADMIN_ID,), actor)
 
     def test_secret_reference_rotation_invalidates_tenant_runtime(self):
         tenant = self.create_tenant()
@@ -510,7 +797,87 @@ class ControlPlaneApiTests(unittest.TestCase):
         self.assertEqual(before + 1, details["runtime_generation"])
         self.assertNotIn("TEST_YOOKASSA_JSON", json.dumps(details))
 
-    def test_custom_domain_states_are_visible_and_can_be_disabled(self):
+    def test_managed_runtime_mutations_coalesce_and_domain_disable_queues_withdrawal(self):
+        tenant = self.create_managed_tenant(slug="managed-domain-store")
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            connection.execute(
+                "UPDATE platform_tenants SET lifecycle_state = 'active' WHERE id = ?",
+                (tenant["id"],),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        headers = signed_headers(PLATFORM_ADMIN_ID)
+        requested = self.managed_client.post(
+            f"/api/platform/tenants/{tenant['id']}/domains",
+            headers=headers,
+            json={"host": "books.managed.example"},
+        )
+        self.assertEqual(201, requested.status_code)
+        before = get_tenant(self.settings.database_path, tenant["id"])
+        verified = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/domains/books.managed.example/verification",
+            headers=headers,
+            json={"state": "verified"},
+        )
+        self.assertEqual(202, verified.status_code)
+        self.assertTrue(verified.get_json()["reconciliation_queued"])
+        after_verified = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertEqual(before.runtime_generation + 1, after_verified.runtime_generation)
+        disabled = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/domains/books.managed.example/verification",
+            headers=headers,
+            json={"state": "disabled"},
+        )
+        self.assertEqual(202, disabled.status_code)
+        after_disabled = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertEqual(after_verified.runtime_generation + 1, after_disabled.runtime_generation)
+        repeated = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/domains/books.managed.example/verification",
+            headers=headers,
+            json={"state": "disabled"},
+        )
+        self.assertEqual(200, repeated.status_code)
+        self.assertFalse(repeated.get_json()["changed"])
+        self.assertEqual(after_disabled.runtime_generation, get_tenant(self.settings.database_path, tenant["id"]).runtime_generation)
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            jobs = connection.execute(
+                "SELECT operation, desired_generation FROM tenant_deployment_jobs WHERE tenant_id = ? AND state = 'pending'",
+                (tenant["id"],),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual([("redeploy", after_disabled.runtime_generation)], jobs)
+
+    def test_managed_entitlements_advance_runtime_generation_and_queue_redeploy(self):
+        tenant = self.create_managed_tenant(slug="managed-entitlements-store")
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            connection.execute(
+                "UPDATE platform_tenants SET lifecycle_state = 'active' WHERE id = ?",
+                (tenant["id"],),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        before = get_tenant(self.settings.database_path, tenant["id"])
+        response = self.managed_client.put(
+            f"/api/platform/tenants/{tenant['id']}/entitlements",
+            headers=signed_headers(PLATFORM_ADMIN_ID),
+            json={"feature_overrides": {FEATURE_BROADCAST: False}, "limit_overrides": {}},
+        )
+        self.assertEqual(200, response.status_code)
+        after = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertEqual(before.runtime_generation + 1, after.runtime_generation)
+        self.assertEqual(before.entitlement_version + 1, after.entitlement_version)
+        details = self.managed_client.get(
+            f"/api/platform/tenants/{tenant['id']}", headers=signed_headers(PLATFORM_ADMIN_ID)
+        ).get_json()
+        self.assertEqual(after.runtime_generation, details["deployment"]["desired_generation"])
+
+
         tenant = self.create_tenant()
         requested = self.client.post(
             f"/api/platform/tenants/{tenant['id']}/domains",

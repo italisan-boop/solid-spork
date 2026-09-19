@@ -1,0 +1,25 @@
+[Unit]
+Description=BookApp root host operations helper
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=platform-control
+EnvironmentFile=/etc/bookapp/host-operations.env
+RuntimeDirectory=bookapp-host-operations
+RuntimeDirectoryMode=0750
+WorkingDirectory=/opt/bookapp/releases/current
+ExecStart=/opt/bookapp/releases/current/.venv/bin/python -m controlplane.host_operations
+Restart=on-failure
+RestartSec=5
+UMask=0007
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bookapp /run/bookapp-host-operations /etc
+
+[Install]
+WantedBy=multi-user.target
