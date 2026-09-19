@@ -16,10 +16,21 @@ def resolve_path(value: str | Path) -> Path:
     return path.resolve()
 
 
+def _ensure_shared_control_database_access(path: Path) -> None:
+    for candidate in (
+        path,
+        path.with_name(f"{path.name}-shm"),
+        path.with_name(f"{path.name}-wal"),
+    ):
+        if candidate.is_file():
+            candidate.chmod(0o660)
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     resolved = resolve_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     database = sqlite3.connect(str(resolved), timeout=10)
+    _ensure_shared_control_database_access(resolved)
     database.execute("PRAGMA foreign_keys = ON")
     database.execute("PRAGMA busy_timeout = 10000")
     return database
@@ -123,6 +134,7 @@ def initialize(path: str | Path) -> None:
         database = connect(path)
         try:
             database.execute("PRAGMA journal_mode = WAL")
+            _ensure_shared_control_database_access(resolve_path(path))
             database.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS control_schema_migrations (

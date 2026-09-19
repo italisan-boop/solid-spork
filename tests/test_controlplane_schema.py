@@ -1,4 +1,6 @@
+import os
 import sqlite3
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +9,14 @@ from controlplane.schema import initialize
 
 
 class ControlPlaneSchemaMigrationTests(unittest.TestCase):
+    def test_control_database_allows_platform_control_group_writes(self):
+        if os.name != "posix":
+            self.skipTest("control database modes require POSIX")
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "control.sqlite"
+            initialize(database_path)
+            self.assertEqual(0o660, stat.S_IMODE(database_path.stat().st_mode))
+
     def test_upgrades_existing_secret_envelope_constraint_for_tenant_proxy(self):
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "control.sqlite"
