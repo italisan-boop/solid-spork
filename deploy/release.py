@@ -217,6 +217,8 @@ def _collect_release_files(repo_root: Path, allowlist: Iterable[PurePosixPath]) 
         if folded_path in casefolded_paths:
             raise ReleaseError("release allowlist has case-colliding paths")
         casefolded_paths.add(folded_path)
+        if relative_path.suffix in _DEPLOYMENT_SCRIPT_SUFFIXES and b"\r\n" in source_path.read_bytes():
+            raise ReleaseError("release shell scripts must use LF line endings")
         collected.append(
             ReleaseFile(
                 path=relative_path,

@@ -4,9 +4,11 @@ from pathlib import Path
 
 class ManagedBootstrapAssetsTests(unittest.TestCase):
     def test_bootstrap_is_idempotent_and_does_not_enable_services(self):
-        script = (
+        script_path = (
             Path(__file__).parent.parent / "deploy" / "bootstrap-managed-platform.sh"
-        ).read_text(encoding="utf-8")
+        )
+        self.assertNotIn(b"\r\n", script_path.read_bytes())
+        script = script_path.read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", script)
         self.assertIn("ensure_user platform-console platform-console", script)
         self.assertIn("ensure_user platform-bot platform-bot", script)

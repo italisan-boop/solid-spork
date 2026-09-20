@@ -191,6 +191,11 @@ class ReleaseGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "invalid"):
             self._build(self._output_directory("traversal"))
 
+    def test_rejects_crlf_shell_script_input(self):
+        self._write("deploy/start.sh", b"#!/usr/bin/env bash\r\nexec python app.py\r\n")
+        with self.assertRaisesRegex(ReleaseError, "LF line endings"):
+            self._build(self._output_directory("crlf-script"), require_clean_tree=False)
+
     def test_symbolic_release_input_is_rejected(self):
         target = self.repository / "linked.py"
         try:
