@@ -155,11 +155,9 @@ class LinuxPrivilegedOperations:
         }
         for root in sorted(tenant_storage_roots):
             root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            root.chmod(0o700)
             self._grant_tenant_storage_access(root, uid)
         runtime_root = runtime_directory.parent
         runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        runtime_root.chmod(0o700)
         self._grant_tenant_storage_access(runtime_root, uid)
         self._grant_caddy_runtime_access(runtime_root, runtime_directory)
         for path in (database_path.parent, media_root, backup_root, runtime_directory):
