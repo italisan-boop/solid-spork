@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat
 import threading
 from pathlib import Path
 
@@ -16,20 +18,71 @@ def resolve_path(value: str | Path) -> Path:
     return path.resolve()
 
 
-def _ensure_shared_control_database_access(path: Path) -> None:
-    for candidate in (
+def _control_database_artifacts(path: Path) -> tuple[Path, Path, Path]:
+    return (
         path,
         path.with_name(f"{path.name}-shm"),
         path.with_name(f"{path.name}-wal"),
-    ):
-        if candidate.is_file():
-            candidate.chmod(0o660)
+    )
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
+def _ensure_shared_control_database_access(path: Path) -> None:
+    if os.name != "posix":
+        return
+    directory = path.parent
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for candidate in _control_database_artifacts(path):
+            try:
+                descriptor = os.open(
+                    candidate.name,
+                    os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+            except FileNotFoundError:
+                continue
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    stat.S_ISREG(metadata.st_mode)
+                    and metadata.st_nlink == 1
+                    and stat.S_IMODE(metadata.st_mode) != 0o660
+                ):
+                    try:
+                        os.fchmod(descriptor, 0o660)
+                    except PermissionError:
+                        pass
+            finally:
+                os.close(descriptor)
+    finally:
+        os.close(directory_fd)
+
+
+class _ControlDatabaseConnection(sqlite3.Connection):
+    control_database_path: Path
+
+    def execute(self, sql: str, parameters=(), /) -> sqlite3.Cursor:
+        was_in_transaction = self.in_transaction
+        result = super().execute(sql, parameters)
+        if not was_in_transaction and self.in_transaction:
+            _ensure_shared_control_database_access(self.control_database_path)
+        return result
+
+    def executemany(self, sql: str, parameters, /) -> sqlite3.Cursor:
+        was_in_transaction = self.in_transaction
+        result = super().executemany(sql, parameters)
+        if not was_in_transaction and self.in_transaction:
+            _ensure_shared_control_database_access(self.control_database_path)
+        return result
+
+
+def connect(path: str | Path) -> _ControlDatabaseConnection:
     resolved = resolve_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    database = sqlite3.connect(str(resolved), timeout=10)
+    database = sqlite3.connect(
+        str(resolved), timeout=10, factory=_ControlDatabaseConnection
+    )
+    database.control_database_path = resolved
     _ensure_shared_control_database_access(resolved)
     database.execute("PRAGMA foreign_keys = ON")
     database.execute("PRAGMA busy_timeout = 10000")

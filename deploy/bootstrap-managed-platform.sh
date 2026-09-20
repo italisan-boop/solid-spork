@@ -65,6 +65,44 @@ ensure_release_virtualenv() {
   fi
 }
 
+repair_control_database_access() {
+  "$PYTHON_BIN" - "$STATE_ROOT/control/control.sqlite" <<'PY'
+import grp
+import os
+import stat
+import sys
+from pathlib import Path
+
+
+database = Path(sys.argv[1])
+directory_fd = os.open(
+    database.parent,
+    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+)
+try:
+    group_id = grp.getgrnam("platform-control").gr_gid
+    for name in (database.name, f"{database.name}-shm", f"{database.name}-wal"):
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+        except FileNotFoundError:
+            continue
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise SystemExit("control database artifact is invalid")
+            os.fchown(descriptor, -1, group_id)
+            os.fchmod(descriptor, 0o660)
+        finally:
+            os.close(descriptor)
+finally:
+    os.close(directory_fd)
+PY
+}
+
 write_sealer_environment() {
   local target="$ETC_ROOT/sealer.env"
   if [ -e "$target" ] || [ -L "$target" ]; then
@@ -180,6 +218,7 @@ ensure_user platform-controller platform-control
 install -d -o root -g root -m 0750 "$ETC_ROOT" "$KEY_ROOT"
 install -d -o root -g root -m 0711 "$STATE_ROOT"
 install -d -o platform-console -g platform-control -m 2770 "$STATE_ROOT/control"
+repair_control_database_access
 install -d -o root -g root -m 0700 \
   "$STATE_ROOT/tenants" \
   "$STATE_ROOT/backups" \

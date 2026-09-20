@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from controlplane.schema import initialize
+from controlplane.schema import connect, initialize
 
 
 class ControlPlaneSchemaMigrationTests(unittest.TestCase):
@@ -14,8 +14,24 @@ class ControlPlaneSchemaMigrationTests(unittest.TestCase):
             self.skipTest("control database modes require POSIX")
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "control.sqlite"
-            initialize(database_path)
-            self.assertEqual(0o660, stat.S_IMODE(database_path.stat().st_mode))
+            previous_umask = os.umask(0o022)
+            try:
+                initialize(database_path)
+                database = connect(database_path)
+                try:
+                    database.execute("BEGIN IMMEDIATE")
+                    for candidate in (
+                        database_path,
+                        database_path.with_name("control.sqlite-shm"),
+                        database_path.with_name("control.sqlite-wal"),
+                    ):
+                        self.assertTrue(candidate.is_file())
+                        self.assertEqual(0o660, stat.S_IMODE(candidate.stat().st_mode))
+                finally:
+                    database.rollback()
+                    database.close()
+            finally:
+                os.umask(previous_umask)
 
     def test_upgrades_existing_secret_envelope_constraint_for_tenant_proxy(self):
         with tempfile.TemporaryDirectory() as directory:
