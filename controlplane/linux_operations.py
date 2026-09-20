@@ -25,6 +25,8 @@ _REQUIRED_RUNTIME_CREDENTIALS = frozenset({
 })
 _OPTIONAL_RUNTIME_CREDENTIALS = frozenset({"bot_proxy_url"})
 _RUNTIME_CREDENTIALS = _REQUIRED_RUNTIME_CREDENTIALS | _OPTIONAL_RUNTIME_CREDENTIALS
+_HEALTH_CHECK_ATTEMPTS = 30
+_HEALTH_CHECK_RETRY_DELAY_SECONDS = 1
 
 
 class LinuxOperationsError(RuntimeError):
@@ -313,7 +315,7 @@ class LinuxPrivilegedOperations:
         if runtime_generation <= 0:
             raise LinuxOperationsError("invalid runtime generation")
         socket_path = (self.paths.runtime_root / tenant_id / "tenant.sock").resolve()
-        for attempt in range(6):
+        for attempt in range(_HEALTH_CHECK_ATTEMPTS):
             try:
                 _run(["systemctl", "is-active", "--quiet", tenant_unit_name(tenant_id)])
                 result = _run(
@@ -333,8 +335,8 @@ class LinuxPrivilegedOperations:
                     capture_output=True,
                 )
             except LinuxOperationsError:
-                if attempt < 5:
-                    time.sleep(1)
+                if attempt < _HEALTH_CHECK_ATTEMPTS - 1:
+                    time.sleep(_HEALTH_CHECK_RETRY_DELAY_SECONDS)
                     continue
                 raise LinuxOperationsError("tenant health response is invalid") from None
             try:

@@ -210,6 +210,29 @@ class LinuxPrivilegedOperationsTests(unittest.TestCase):
             with self.assertRaisesRegex(LinuxOperationsError, "health response"):
                 self._operations().check_tenant_health(tenant_id, 7)
 
+    def test_private_tenant_health_retries_while_unit_starts(self):
+        tenant_id = "2b1e9b57-7698-4388-a3f6-50c9d61e5bfb"
+        with (
+            patch(
+                "controlplane.linux_operations._run",
+                side_effect=[
+                    LinuxOperationsError("unit is starting"),
+                    LinuxOperationsError("unit is starting"),
+                    SimpleNamespace(stdout=""),
+                    SimpleNamespace(
+                        stdout=(
+                            '{"tenant_id":"2b1e9b57-7698-4388-a3f6-50c9d61e5bfb",'
+                            '"generation":7}'
+                        )
+                    ),
+                ],
+            ),
+            patch("controlplane.linux_operations.time.sleep") as sleep,
+        ):
+            self._operations().check_tenant_health(tenant_id, 7)
+        self.assertEqual(2, sleep.call_count)
+        sleep.assert_called_with(1)
+
     def test_database_initialization_records_tenant_metadata(self):
         database_path = self.root / "tenants" / "tenant-id" / "app.sqlite"
         database_path.parent.mkdir(parents=True)
