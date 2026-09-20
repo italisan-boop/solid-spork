@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -188,6 +189,23 @@ class RootDeploymentAdapterTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual((0, "tenant.managed_provisioning.completed"), audit)
+
+    def test_provision_completion_does_not_probe_tenant_database_from_controller(self):
+        job = DeploymentJob(
+            id="privilege-boundary-job",
+            tenant_id=self.tenant.id,
+            operation="provision",
+            desired_generation=self.tenant.runtime_generation,
+        )
+        with patch(
+            "controlplane.tenants.Path.is_file",
+            side_effect=AssertionError("controller must not inspect tenant storage"),
+        ):
+            self.adapter.reconcile(job)
+        self.assertEqual(
+            "awaiting_owner_claim",
+            get_tenant(self.control_database, self.tenant.id).lifecycle_state,
+        )
 
     def test_provision_uses_real_managed_local_health_before_route_publication(self):
         self.operations.health_app = self._managed_health_app()

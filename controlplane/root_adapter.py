@@ -226,7 +226,6 @@ class RootDeploymentAdapter:
                 self.control_database_path,
                 tenant_id=tenant.id,
                 actor_telegram_id=job.actor_telegram_id,
-                tenant_database_path=storage.database_path,
             ),
         )
 

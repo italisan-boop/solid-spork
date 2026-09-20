@@ -943,7 +943,6 @@ def complete_managed_provisioning(
     *,
     tenant_id: str,
     actor_telegram_id: int,
-    tenant_database_path: str | Path | None = None,
 ) -> Tenant:
     database = connect(control_database_path)
     database.row_factory = sqlite3.Row
@@ -957,17 +956,6 @@ def complete_managed_provisioning(
         tenant = _tenant(row)
         if tenant.lifecycle_state not in {"draft", "migration_failed"}:
             raise ValueError("tenant is not ready for managed provisioning")
-        if tenant_database_path is None:
-            database_path = tenant.database_path
-            if not database_path.is_file():
-                raise ValueError("tenant database is unavailable")
-        else:
-            database_path = Path(tenant_database_path).resolve()
-            if (
-                tenant.database_path.resolve() != database_path
-                or not database_path.is_file()
-            ):
-                raise ValueError("tenant database is unavailable")
         cursor = database.execute(
             """
             UPDATE platform_tenants
