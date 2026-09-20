@@ -246,7 +246,7 @@ document.getElementById('tenants').addEventListener('click', async event => {
       return;
     }
     if (event.target.matches('[data-domain-verify], [data-domain-disable]')) {
-      const domain = event.target.closest('[data-domain-host]').dataset.domainHost; const verified = event.target.matches('[data-domain-verify']);
+      const domain = event.target.closest('[data-domain-host]').dataset.domainHost; const verified = event.target.matches('[data-domain-verify]');
       const managedMessage = managedMode ? ' Изменение будет автоматически reconciled controller.' : '';
       if (!await confirmAction(verified ? `Подтвердить домен ${domain}?${managedMessage}` : `Отключить ${domain}?${managedMessage}`)) return;
       const end = beginOperation(button, verified ? 'Подтверждаем…' : 'Отключаем…'); status(state, 'Сохраняем состояние домена…', 'warning');

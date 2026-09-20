@@ -187,6 +187,7 @@ class PlatformConsoleHtmlTests(unittest.TestCase):
         self.assertIn("plan_defaults", page)
         self.assertIn("applyPlan(card, event.target.value)", page)
         self.assertIn("data-domain-verify", page)
+        self.assertIn("event.target.matches('[data-domain-verify]')", page)
         self.assertIn("data-delete-slug", page)
         self.assertIn("let managedMode = false", page)
         self.assertIn("managedMode = payload.managed_mode === true", page)
