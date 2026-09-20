@@ -3,14 +3,18 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from handlers.admin_books import (
+    apply_bulk_category,
     _build_books_list_view,
     confirm_archive_selection,
     confirm_purge_code,
     issue_purge_code,
+    process_new_stock,
     render_archive_list,
     render_books_list_for_message,
     start_archive_selection,
+    start_category_selection,
     toggle_archive_selection,
+    toggle_category_selection,
 )
 from states import AdminBooksState
 from utils.otp_confirm import ACTION_PURGE_ARCHIVED_BOOKS
@@ -58,6 +62,66 @@ class AdminBookDeletionHandlerTests(unittest.IsolatedAsyncioTestCase):
         state.update_data.assert_awaited_once_with(selected_book_ids=[7])
         show_list.assert_awaited_once_with(callback, state, page=2)
 
+    async def test_stock_editor_uses_absolute_inventory_setter(self):
+        state = self.state({"edit_book_id": 7})
+        message = self.message("10")
+        with patch(
+            "handlers.admin_books.set_stock_quantity",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as set_stock:
+            await process_new_stock(message, state)
+        set_stock.assert_awaited_once_with(7, 10, 101)
+        state.clear.assert_awaited_once()
+        self.assertIn("✅ Остаток изменён: 10 шт.", message.answer.await_args.args[0])
+
+    async def test_bulk_category_selection_and_apply_clear_state(self):
+        state = self.state({"current_page": 2})
+        callback = self.callback("admin_books_category_select")
+        with patch("handlers.admin_books.show_books_list", new_callable=AsyncMock) as show_list:
+            await start_category_selection(callback, state)
+        state.update_data.assert_awaited_once_with(
+            book_selection_mode="category", selected_book_ids=[]
+        )
+        show_list.assert_awaited_once_with(callback, state, page=2)
+
+        state = self.state(
+            {
+                "book_selection_mode": "category",
+                "selected_book_ids": [],
+                "current_page": 2,
+            }
+        )
+        callback = self.callback("admin_books_category_toggle_7")
+        with (
+            patch("handlers.admin_books.get_book", new_callable=AsyncMock, return_value={"id": 7}),
+            patch("handlers.admin_books.show_books_list", new_callable=AsyncMock) as show_list,
+        ):
+            await toggle_category_selection(callback, state)
+        state.update_data.assert_awaited_once_with(selected_book_ids=[7])
+        show_list.assert_awaited_once_with(callback, state, page=2)
+
+        state = self.state(
+            {
+                "book_selection_mode": "category",
+                "selected_book_ids": [3, 7],
+                "current_page": 1,
+            }
+        )
+        callback = self.callback("admin_books_category_confirm_4")
+        with (
+            patch(
+                "handlers.admin_books.reassign_active_books_category",
+                new_callable=AsyncMock,
+                return_value={"updated_ids": [3], "skipped_ids": [7]},
+            ) as reassign,
+            patch("handlers.admin_books.show_books_list", new_callable=AsyncMock) as show_list,
+        ):
+            await apply_bulk_category(callback, state)
+        reassign.assert_awaited_once_with([3, 7], 4)
+        state.update_data.assert_awaited_once_with(book_selection_mode=None, selected_book_ids=[])
+        show_list.assert_awaited_once_with(callback, state, page=1)
+
     async def test_bulk_archive_uses_repository_result_and_clears_selection(self):
         state = self.state({"book_selection_mode": "archive", "selected_book_ids": [3, 7], "current_page": 1})
         callback = self.callback("admin_books_archive_selected_confirm")
@@ -96,6 +160,7 @@ class AdminBookDeletionHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("&lt;Очень длинное название &amp; книги&gt;", text)
         self.assertIn("admin_add_book", callbacks)
         self.assertIn("admin_books_archive_select", callbacks)
+        self.assertIn("admin_books_category_select", callbacks)
 
     async def test_search_message_renderer_uses_shared_books_view(self):
         state = self.state({"sort_by": "default", "search_query": "needle", "current_page": 0})

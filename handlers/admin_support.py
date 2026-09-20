@@ -29,6 +29,7 @@ from handlers.user import (
     _release_ticket,
     _build_history_text,
     _ticket_action_markup,
+    set_support_mode,
 )
 from states import SupportReplyState
 from utils import format_local_time
@@ -317,8 +318,15 @@ async def cb_support_release(callback: CallbackQuery):
     await callback.answer(_short_alert(status), show_alert=True)
 
 
-# ============================================================
-# 5. Кнопка «🎧 Поддержка» — список открытых тикетов
+@router.callback_query(F.data.regexp(r"^support_close:\d+$"))
+async def cb_support_close(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    user_id = int(callback.data.split(":", 1)[1])
+    await set_support_mode(user_id, False)
+    await cb_support_menu(callback)
+
 # ============================================================
 
 async def _get_active_support_user_ids() -> list[int]:

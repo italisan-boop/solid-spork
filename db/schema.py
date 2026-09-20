@@ -10,7 +10,7 @@ from config import settings
 from content_defaults import TEMPLATES
 
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 _CONNECTION_TIMEOUT_SECONDS = 10
 _INITIALIZATION_LOCK = threading.Lock()
 _CURRENT_DATABASE_PATH: ContextVar[Path | None] = ContextVar(
@@ -211,7 +211,8 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             book_id INTEGER NOT NULL,
             order_id INTEGER,
             action TEXT NOT NULL CHECK (action IN (
-                'opening_balance', 'manual_adjustment', 'reservation_created',
+                'opening_balance', 'manual_adjustment', 'stock_mode_changed',
+                'reservation_created',
                 'reservation_released', 'sale_committed', 'sale_reversed'
             )),
             stock_delta INTEGER NOT NULL DEFAULT 0,
@@ -222,7 +223,9 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             reason TEXT NOT NULL DEFAULT '',
             source_key TEXT UNIQUE,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CHECK (stock_delta != 0 OR reserved_delta != 0),
+            CHECK (
+                stock_delta != 0 OR reserved_delta != 0 OR action = 'stock_mode_changed'
+            ),
             FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE RESTRICT,
             FOREIGN KEY (order_id) REFERENCES orders (id)
         );
@@ -661,6 +664,86 @@ def _migrate_order_support_requests(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_inventory_movements(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'inventory_movements'"
+    ).fetchone()
+    if row is None:
+        return
+    table_sql = row[0].lower()
+    if "stock_mode_changed" in table_sql and "action = 'stock_mode_changed'" in table_sql:
+        return
+    connection.execute(
+        """
+        CREATE TABLE inventory_movements_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            order_id INTEGER,
+            action TEXT NOT NULL CHECK (action IN (
+                'opening_balance', 'manual_adjustment', 'stock_mode_changed',
+                'reservation_created', 'reservation_released', 'sale_committed',
+                'sale_reversed'
+            )),
+            stock_delta INTEGER NOT NULL DEFAULT 0,
+            reserved_delta INTEGER NOT NULL DEFAULT 0,
+            stock_after INTEGER,
+            reserved_after INTEGER NOT NULL DEFAULT 0,
+            actor_admin_id INTEGER,
+            reason TEXT NOT NULL DEFAULT '',
+            source_key TEXT UNIQUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK (
+                stock_delta != 0 OR reserved_delta != 0 OR action = 'stock_mode_changed'
+            ),
+            FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE RESTRICT,
+            FOREIGN KEY (order_id) REFERENCES orders (id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO inventory_movements_new (
+            id, book_id, order_id, action, stock_delta, reserved_delta,
+            stock_after, reserved_after, actor_admin_id, reason, source_key,
+            created_at
+        )
+        SELECT
+            id, book_id, order_id, action, stock_delta, reserved_delta,
+            stock_after, reserved_after, actor_admin_id, reason, source_key,
+            created_at
+        FROM inventory_movements
+        """
+    )
+    connection.execute("DROP TABLE inventory_movements")
+    connection.execute("ALTER TABLE inventory_movements_new RENAME TO inventory_movements")
+    connection.execute(
+        "CREATE INDEX idx_inventory_movements_book_id "
+        "ON inventory_movements (book_id, id DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX idx_inventory_movements_order_id "
+        "ON inventory_movements (order_id, id DESC)"
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER inventory_movements_no_update
+        BEFORE UPDATE ON inventory_movements
+        BEGIN
+            SELECT RAISE(ABORT, 'inventory movements are immutable');
+        END
+        """
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER inventory_movements_no_delete
+        BEFORE DELETE ON inventory_movements
+        BEGIN
+            SELECT RAISE(ABORT, 'inventory movements are immutable');
+        END
+        """
+    )
+
+
 def _cleanup_expired_support_messages(connection: sqlite3.Connection) -> None:
     connection.execute(
         "DELETE FROM support_messages WHERE date(created_at) < date('now', '-90 days')"
@@ -882,6 +965,7 @@ def initialize_database(
             connection.execute("BEGIN IMMEDIATE")
             _create_tables(connection)
             _migrate_columns(connection)
+            _migrate_inventory_movements(connection)
             _migrate_order_deliveries(connection)
             _migrate_order_support_requests(connection)
             _create_operational_indexes(connection)

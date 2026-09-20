@@ -188,6 +188,55 @@ async def archive_books(book_ids) -> dict[str, list[int]]:
     }
 
 
+async def reassign_active_books_category(book_ids, category_id: int) -> dict[str, list[int]]:
+    ids = _normalize_book_ids(book_ids)
+    if isinstance(category_id, bool) or not isinstance(category_id, int) or category_id <= 0:
+        raise ValueError("category ID must be a positive integer")
+    if not ids:
+        return {"updated_ids": [], "skipped_ids": []}
+    placeholders = ",".join("?" for _ in ids)
+    async with connection() as db:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT name FROM categories WHERE id = ? AND is_active = 1",
+                (category_id,),
+            )
+            category = await cursor.fetchone()
+            if category is None:
+                raise ValueError("category is unavailable")
+            cursor = await db.execute(
+                f"""
+                SELECT id FROM books
+                WHERE id IN ({placeholders})
+                  AND is_active = 1
+                  AND COALESCE(is_archived, 0) = 0
+                """,
+                ids,
+            )
+            updated_ids = sorted(row[0] for row in await cursor.fetchall())
+            if updated_ids:
+                selected = ",".join("?" for _ in updated_ids)
+                await db.execute(
+                    f"""
+                    UPDATE books
+                    SET category = ?, category_id = ?
+                    WHERE id IN ({selected})
+                      AND is_active = 1
+                      AND COALESCE(is_archived, 0) = 0
+                    """,
+                    (category[0], category_id, *updated_ids),
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    updated = set(updated_ids)
+    return {
+        "updated_ids": updated_ids,
+        "skipped_ids": [book_id for book_id in ids if book_id not in updated],
+    }
+
 async def delete_book(book_id: int) -> bool:
     """Мягко удалить (архивировать) одну активную книгу."""
     result = await archive_books([book_id])

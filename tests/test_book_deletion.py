@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import db.connection as db_connection
 import db.schema as schema
-from db.books import archive_books, get_archived_books, purge_archived_books, restore_book
+from db.books import (
+    archive_books,
+    get_archived_books,
+    purge_archived_books,
+    reassign_active_books_category,
+    restore_book,
+)
 
 
 class BookDeletionRepositoryTests(unittest.IsolatedAsyncioTestCase):
@@ -92,6 +98,48 @@ class BookDeletionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await purge_archived_books([book_id, 0])
         self.assertEqual((1, 0), self._book_state(book_id))
+
+    async def test_bulk_category_reassignment_updates_active_books_atomically(self):
+        first = self._book("first")
+        archived = self._book("archived")
+        await archive_books([archived])
+        category_id = self._execute(
+            "INSERT INTO categories (name, emoji, sort_order) VALUES ('Bulk target', '📂', 99)"
+        )
+
+        result = await reassign_active_books_category(
+            [first, archived, 999999, first], category_id
+        )
+
+        self.assertEqual([first], result["updated_ids"])
+        self.assertEqual([archived, 999999], result["skipped_ids"])
+        connection = schema.connect(self.database_path)
+        try:
+            category = connection.execute(
+                "SELECT category, category_id FROM books WHERE id = ?", (first,)
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(("Bulk target", category_id), category)
+
+    async def test_bulk_category_reassignment_rejects_inactive_target_without_updates(self):
+        book_id = self._book("unchanged")
+        category_id = self._execute(
+            "INSERT INTO categories (name, emoji, sort_order) VALUES ('Inactive', '', 100)"
+        )
+        self._execute("UPDATE categories SET is_active = 0 WHERE id = ?", (category_id,))
+
+        with self.assertRaisesRegex(ValueError, "category is unavailable"):
+            await reassign_active_books_category([book_id], category_id)
+
+        connection = schema.connect(self.database_path)
+        try:
+            category = connection.execute(
+                "SELECT category_id FROM books WHERE id = ?", (book_id,)
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertIn(category, {None, 0})
 
     def test_schema_creates_book_order_items_index(self):
         connection = sqlite3.connect(self.database_path)

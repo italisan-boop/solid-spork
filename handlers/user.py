@@ -183,7 +183,9 @@ def _ticket_action_markup(user_id: int):
         builder.button(text="🔓 Отпустить", callback_data=f"support_release:{user_id}")
     else:
         builder.button(text="🔒 Взять в работу", callback_data=f"support_claim:{user_id}")
-    builder.adjust(2)
+    builder.button(text="✅ Закрыть тикет", callback_data=f"support_close:{user_id}")
+    builder.button(text="◀️ К поддержке", callback_data="admin_support_menu")
+    builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 
@@ -1402,6 +1404,8 @@ async def _send_admin_reply(
     if not is_admin(admin_id):
         return False, "❌ Нет прав администратора."
     claimed_by = support_claims.get(user_id)
+    if claimed_by is None and not await _is_in_support(user_id):
+        return False, "❌ Тикет уже закрыт."
     if claimed_by is not None and claimed_by != admin_id:
         return False, (
             f"🚫 Тикет пользователя <code>{user_id}</code> ведёт другой админ "

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from handlers.admin_support import (
     _build_support_menu_markup,
     _support_reply_markup,
+    cb_support_close,
     cb_support_dialog_history,
     cb_support_dialogs,
 )
@@ -59,6 +60,8 @@ class SupportKeyboardTests(unittest.TestCase):
         self.assertIn("🔓 Отпустить", labels(_ticket_action_markup(42)))
         support_claims.pop(42)
         self.assertIn("🔒 Взять в работу", labels(_ticket_action_markup(42)))
+        self.assertIn("support_close:42", callbacks(_ticket_action_markup(42)))
+        self.assertIn("admin_support_menu", callbacks(_ticket_action_markup(42)))
 
 
 class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
@@ -73,6 +76,29 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         support_claims.clear()
         support_forward_msgs.clear()
+
+    async def test_close_ticket_uses_target_support_state_and_returns_to_menu(self):
+        callback = self.callback("support_close:42")
+        with (
+            patch("handlers.admin_support.is_admin", return_value=True),
+            patch("handlers.admin_support.set_support_mode", new_callable=AsyncMock) as set_mode,
+            patch("handlers.admin_support.cb_support_menu", new_callable=AsyncMock) as menu,
+        ):
+            await cb_support_close(callback)
+        set_mode.assert_awaited_once_with(42, False)
+        menu.assert_awaited_once_with(callback)
+
+    async def test_close_ticket_rejects_non_admin_before_state_mutation(self):
+        callback = self.callback("support_close:42", user_id=999)
+        with (
+            patch("handlers.admin_support.is_admin", return_value=False),
+            patch("handlers.admin_support.set_support_mode", new_callable=AsyncMock) as set_mode,
+            patch("handlers.admin_support.cb_support_menu", new_callable=AsyncMock) as menu,
+        ):
+            await cb_support_close(callback)
+        set_mode.assert_not_awaited()
+        menu.assert_not_awaited()
+        callback.answer.assert_awaited_once_with("❌ Нет прав", show_alert=True)
 
     async def test_all_dialogs_are_history_only(self):
         callback = self.callback("support_dialogs:0")

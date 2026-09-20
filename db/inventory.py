@@ -47,6 +47,14 @@ def _refresh_low_stock_state(
 ) -> None:
     stock_quantity = _stock_quantity(connection, book_id)
     if stock_quantity is None:
+        connection.execute(
+            """
+            UPDATE inventory_low_stock_state
+            SET is_low = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE book_id = ?
+            """,
+            (book_id,),
+        )
         return
     reserved_quantity = _reserved_quantity(connection, book_id)
     row = connection.execute(
@@ -94,11 +102,12 @@ def _enqueue_back_in_stock(
     connection: sqlite3.Connection, book_id: int, movement_id: int, was_available: int
 ) -> None:
     stock_quantity = _stock_quantity(connection, book_id)
-    if stock_quantity is None or was_available > 0:
+    if was_available > 0:
         return
-    available = stock_quantity - _reserved_quantity(connection, book_id)
-    if available <= 0:
-        return
+    if stock_quantity is not None:
+        available = stock_quantity - _reserved_quantity(connection, book_id)
+        if available <= 0:
+            return
     subscribers = connection.execute(
         """
         SELECT user_id FROM back_in_stock_subscriptions
@@ -134,9 +143,10 @@ def _record_movement(
     reason: str = "",
     source_key: str | None = None,
     was_available: int | None = None,
+    record_unlimited_stock: bool = False,
 ) -> None:
     stock_after = _stock_quantity(connection, book_id)
-    if stock_after is None:
+    if stock_after is None and not record_unlimited_stock:
         return
     reserved_after = _reserved_quantity(connection, book_id)
     cursor = connection.execute(
@@ -423,6 +433,103 @@ async def adjust_stock(
 ) -> bool:
     return await asyncio.to_thread(
         adjust_stock_sync, book_id, quantity, admin_id, reason
+    )
+
+
+def set_stock_quantity_sync(
+    book_id: int,
+    stock_quantity: int | None,
+    admin_id: int,
+    *,
+    actor_role: str = "owner",
+) -> bool:
+    if isinstance(stock_quantity, bool) or (
+        stock_quantity is not None and (
+            not isinstance(stock_quantity, int) or stock_quantity < 0
+        )
+    ):
+        raise ValueError("stock quantity must be a non-negative integer or unlimited")
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        row = database.execute(
+            "SELECT stock_quantity FROM books WHERE id = ?", (book_id,)
+        ).fetchone()
+        if row is None:
+            database.rollback()
+            return False
+        previous = row[0]
+        reserved = _reserved_quantity(database, book_id)
+        if stock_quantity is not None and stock_quantity < reserved:
+            raise InventoryUnavailableError("stock cannot be lower than reservations")
+        if previous == stock_quantity:
+            database.commit()
+            return True
+        if previous is not None and stock_quantity is None and reserved:
+            raise InventoryUnavailableError("stock mode cannot change while reservations exist")
+        was_available = previous - reserved if previous is not None else None
+        database.execute(
+            "UPDATE books SET stock_quantity = ? WHERE id = ?",
+            (stock_quantity, book_id),
+        )
+        if previous is not None and stock_quantity is not None:
+            _record_movement(
+                database,
+                book_id=book_id,
+                action="manual_adjustment",
+                stock_delta=stock_quantity - previous,
+                actor_admin_id=admin_id,
+                reason="recount",
+                was_available=was_available,
+            )
+            action = "inventory.stock.adjusted"
+            details = {
+                "old_stock": previous,
+                "new_stock": stock_quantity,
+                "reason_code": "recount",
+            }
+        else:
+            _record_movement(
+                database,
+                book_id=book_id,
+                action="stock_mode_changed",
+                actor_admin_id=admin_id,
+                reason="unlimited" if stock_quantity is None else "finite",
+                was_available=was_available,
+                record_unlimited_stock=stock_quantity is None,
+            )
+            action = "inventory.stock.mode_changed"
+            details = {
+                "old_stock": previous,
+                "new_stock": stock_quantity,
+                "reason_code": "unlimited" if stock_quantity is None else "finite",
+            }
+        from db.audit import append_audit_event
+
+        append_audit_event(
+            database,
+            actor_user_id=admin_id,
+            actor_role=actor_role,
+            source="telegram",
+            action=action,
+            entity_type="book",
+            entity_id=book_id,
+            details=details,
+        )
+        database.commit()
+        return True
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+async def set_stock_quantity(
+    book_id: int, stock_quantity: int | None, admin_id: int
+) -> bool:
+    return await asyncio.to_thread(
+        set_stock_quantity_sync, book_id, stock_quantity, admin_id
     )
 
 

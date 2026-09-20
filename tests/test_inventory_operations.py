@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -13,6 +14,7 @@ import db.connection as db_connection
 import db.schema as schema
 import server
 from config import settings
+from db.inventory import set_stock_quantity_sync
 
 
 TEST_TOKEN = "123456:inventory-operation-test-token"
@@ -98,6 +100,99 @@ class InventoryOperationApiTests(unittest.TestCase):
             ],
             movements,
         )
+
+    def test_absolute_stock_editor_supports_finite_and_unlimited_values(self):
+        self.assertTrue(set_stock_quantity_sync(1, 7, OWNER_ID))
+        self.assertEqual(7, self.stock_quantity())
+        self.assertTrue(set_stock_quantity_sync(1, None, OWNER_ID))
+        self.assertIsNone(self.stock_quantity())
+        self.assertTrue(set_stock_quantity_sync(1, 4, OWNER_ID))
+        self.assertEqual(4, self.stock_quantity())
+
+        connection = schema.connect(self.database_path)
+        try:
+            movements = connection.execute(
+                "SELECT action, stock_after, reason FROM inventory_movements WHERE book_id = 1 ORDER BY id"
+            ).fetchall()
+            audit_actions = connection.execute(
+                "SELECT action FROM audit_events WHERE entity_type = 'book' AND entity_id = 1 ORDER BY id"
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual(
+            [
+                ("manual_adjustment", 7, "recount"),
+                ("stock_mode_changed", None, "unlimited"),
+                ("stock_mode_changed", 4, "finite"),
+            ],
+            movements,
+        )
+        self.assertEqual(
+            [
+                ("inventory.stock.adjusted",),
+                ("inventory.stock.mode_changed",),
+                ("inventory.stock.mode_changed",),
+            ],
+            audit_actions,
+        )
+
+    def test_inventory_movement_migration_preserves_history_and_immutability(self):
+        connection = schema.connect(self.database_path)
+        try:
+            connection.execute("DROP TRIGGER inventory_movements_no_update")
+            connection.execute("DROP TRIGGER inventory_movements_no_delete")
+            connection.execute("DROP TABLE inventory_movements")
+            connection.execute(
+                """
+                CREATE TABLE inventory_movements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    book_id INTEGER NOT NULL,
+                    order_id INTEGER,
+                    action TEXT NOT NULL CHECK (action IN (
+                        'opening_balance', 'manual_adjustment', 'reservation_created',
+                        'reservation_released', 'sale_committed', 'sale_reversed'
+                    )),
+                    stock_delta INTEGER NOT NULL DEFAULT 0,
+                    reserved_delta INTEGER NOT NULL DEFAULT 0,
+                    stock_after INTEGER,
+                    reserved_after INTEGER NOT NULL DEFAULT 0,
+                    actor_admin_id INTEGER,
+                    reason TEXT NOT NULL DEFAULT '',
+                    source_key TEXT UNIQUE,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CHECK (stock_delta != 0 OR reserved_delta != 0),
+                    FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE RESTRICT,
+                    FOREIGN KEY (order_id) REFERENCES orders (id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO inventory_movements (
+                    book_id, action, stock_delta, stock_after, reason
+                ) VALUES (1, 'opening_balance', 10, 10, 'legacy')
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        schema.initialize_database(self.database_path)
+
+        connection = schema.connect(self.database_path)
+        try:
+            row = connection.execute(
+                "SELECT action, stock_delta, stock_after, reason FROM inventory_movements"
+            ).fetchone()
+            table_sql = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'inventory_movements'"
+            ).fetchone()[0]
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("UPDATE inventory_movements SET reason = 'changed' WHERE id = 1")
+        finally:
+            connection.close()
+        self.assertEqual(("opening_balance", 10, 10, "legacy"), row)
+        self.assertIn("stock_mode_changed", table_sql)
 
     def test_inventory_order_follows_catalog_order_after_stock_changes(self):
         connection = schema.connect(self.database_path)

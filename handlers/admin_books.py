@@ -7,9 +7,9 @@ import asyncio
 import json
 from authz import has_permission_sync
 from config.settings import settings
-from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, archive_books, restore_book, get_archived_books, get_archived_books_count, classify_archived_book_ids, purge_archived_books, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
+from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, archive_books, reassign_active_books_category, restore_book, get_archived_books, get_archived_books_count, classify_archived_book_ids, purge_archived_books, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
 from db.categories import get_all_categories, add_category, get_category_by_id, category_display, NO_CATEGORY_NAME
-from db.inventory import InventoryUnavailableError, adjust_stock
+from db.inventory import InventoryUnavailableError, set_stock_quantity
 from runtime.features import QuotaExceededError
 from storage.book_media import (
     BookMediaError,
@@ -1118,20 +1118,31 @@ async def _build_books_list_view(state: FSMContext, page: int):
             callback_data="admin_books_archive_review",
         )
         builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
+    elif selection_mode == "category":
+        builder.button(
+            text=f"📂 Сменить категорию ({len(selected_book_ids)})",
+            callback_data="admin_books_category_choose",
+        )
+        builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
     else:
         builder.button(text="➕ Добавить книгу", callback_data="admin_add_book")
         builder.button(
             text="☑️ Выбрать несколько для архива",
             callback_data="admin_books_archive_select",
         )
+        builder.button(
+            text="📂 Сменить категорию нескольким",
+            callback_data="admin_books_category_select",
+        )
 
     for book in books:
         title = _short_book_title(book["title"], BOOK_BUTTON_TITLE_LIMIT)
-        if selection_mode == "archive":
+        if selection_mode in {"archive", "category"}:
             selected = book["id"] in selected_book_ids
+            operation = "archive" if selection_mode == "archive" else "category"
             builder.button(
                 text=f"{'☑️' if selected else '☐'} {title}",
-                callback_data=f"admin_books_archive_toggle_{book['id']}",
+                callback_data=f"admin_books_{operation}_toggle_{book['id']}",
             )
         else:
             builder.button(
@@ -1155,7 +1166,7 @@ async def _build_books_list_view(state: FSMContext, page: int):
     builder.button(text="🗂 Архив", callback_data="admin_books_archive")
     builder.button(text="🔙 В меню админа", callback_data="admin_menu")
 
-    row_sizes: list[int] = [2]
+    row_sizes: list[int] = [2] if selection_mode else [2, 1]
     row_sizes.extend([1] * len(books))
     if nav_count:
         row_sizes.append(nav_count)
@@ -1329,7 +1340,119 @@ async def confirm_archive_selection(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "admin_books_selection_cancel")
+@router.callback_query(F.data == "admin_books_category_select")
+async def start_category_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if data.get("book_selection_mode") != "category":
+        await state.update_data(book_selection_mode="category", selected_book_ids=[])
+        data = await state.get_data()
+    await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
+    await callback.answer("Выберите книги для смены категории")
+
+
+@router.callback_query(F.data.regexp(r"^admin_books_category_toggle_\d+$"))
+async def toggle_category_selection(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if data.get("book_selection_mode") != "category":
+        await callback.answer("Откройте выбор книг заново", show_alert=True)
+        return
+    book_id = int(callback.data.rsplit("_", 1)[-1])
+    selected = set(data.get("selected_book_ids", []))
+    if book_id in selected:
+        selected.remove(book_id)
+    else:
+        if len(selected) >= MAX_BOOK_SELECTION:
+            await callback.answer(
+                f"Можно выбрать не более {MAX_BOOK_SELECTION} книг", show_alert=True
+            )
+            return
+        if not await get_book(book_id):
+            await callback.answer("Книга больше недоступна", show_alert=True)
+            return
+        selected.add(book_id)
+    await state.update_data(selected_book_ids=sorted(selected))
+    await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_books_category_choose")
+async def choose_bulk_category(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_book_ids", [])
+    if data.get("book_selection_mode") != "category" or not selected:
+        await callback.answer("Выберите хотя бы одну книгу", show_alert=True)
+        return
+    categories = await get_all_categories()
+    if not categories:
+        await callback.answer("Нет доступных категорий", show_alert=True)
+        return
+    builder = InlineKeyboardBuilder()
+    for category in categories:
+        label = category_display(category)
+        builder.button(
+            text=f"{label['emoji']} {label['name']}",
+            callback_data=f"admin_books_category_target_{category['id']}",
+        )
+    builder.button(text="◀️ К выбору книг", callback_data="admin_books_category_select")
+    builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
+    builder.adjust(*([1] * (len(categories) + 2)))
+    await callback.message.edit_text(
+        f"📂 <b>Выберите категорию для {len(selected)} книг</b>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^admin_books_category_target_\d+$"))
+async def confirm_bulk_category_target(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_book_ids", [])
+    if data.get("book_selection_mode") != "category" or not selected:
+        await callback.answer("Выбор книг устарел", show_alert=True)
+        return
+    category_id = int(callback.data.rsplit("_", 1)[-1])
+    category = await get_category_by_id(category_id)
+    if category is None:
+        await callback.answer("Категория больше недоступна", show_alert=True)
+        return
+    label = category_display(category)
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"✅ Сменить категорию у {len(selected)} книг",
+        callback_data=f"admin_books_category_confirm_{category_id}",
+    )
+    builder.button(text="◀️ К категориям", callback_data="admin_books_category_choose")
+    builder.button(text="✖ Отменить выбор", callback_data="admin_books_selection_cancel")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        f"⚠️ <b>Перенести {len(selected)} книг в категорию «{escape(label['name'], quote=False)}»?</b>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^admin_books_category_confirm_\d+$"))
+async def apply_bulk_category(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_book_ids", [])
+    if data.get("book_selection_mode") != "category" or not selected:
+        await callback.answer("Выбор книг устарел", show_alert=True)
+        return
+    category_id = int(callback.data.rsplit("_", 1)[-1])
+    try:
+        result = await reassign_active_books_category(selected, category_id)
+    except ValueError:
+        await callback.answer("Категория больше недоступна", show_alert=True)
+        return
+    await state.update_data(book_selection_mode=None, selected_book_ids=[])
+    await show_books_list(callback, state, page=data.get("current_page", 0) or 0)
+    await callback.answer(
+        f"Категория изменена: {len(result['updated_ids'])}; пропущено: {len(result['skipped_ids'])}",
+        show_alert=True,
+    )
+
 async def cancel_book_selection(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.update_data(book_selection_mode=None, selected_book_ids=[])
@@ -1844,12 +1967,18 @@ async def process_new_stock(message: Message, state: FSMContext):
             return
     data = await state.get_data()
     book_id = data.get("edit_book_id")
+    if not isinstance(book_id, int):
+        await state.clear()
+        await message.answer("❌ Книга не найдена.")
+        return
     try:
-        changed = await adjust_stock(
-            book_id, stock_quantity, message.from_user.id, "admin stock adjustment"
-        )
+        changed = await set_stock_quantity(book_id, stock_quantity, message.from_user.id)
     except InventoryUnavailableError:
-        await message.answer("❌ Остаток нельзя сделать меньше уже зарезервированных экземпляров.")
+        await message.answer("❌ Остаток нельзя сделать меньше уже зарезервированных экземпляров или переключить в «безлимит» до их обработки.")
+        return
+    except ValueError:
+        await state.clear()
+        await message.answer("❌ Не удалось изменить остаток. Откройте книгу заново.")
         return
     if not changed:
         await message.answer("❌ Книга не найдена.")
