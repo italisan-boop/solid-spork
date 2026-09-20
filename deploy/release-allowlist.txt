@@ -51,6 +51,7 @@ db/stars.py
 db/support_history.py
 db/users.py
 deploy/bootstrap-managed-platform.sh
+deploy/caddy/bookapp-logging.caddy
 deploy/caddy/bookapp-tenants.import
 deploy/generate-requirements-lock.sh
 deploy/systemd/bookapp-console.service

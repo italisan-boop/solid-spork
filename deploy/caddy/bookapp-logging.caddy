@@ -1,0 +1,9 @@
+{
+	log {
+		format filter {
+			fields {
+				request>headers delete
+			}
+		}
+	}
+}

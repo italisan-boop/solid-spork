@@ -39,6 +39,7 @@ class UnitTemplateTests(unittest.TestCase):
         unit = render_tenant_dropin(self.paths, self.tenant_id, storage)
         self.assertIn(f"User=tenant-{uuid.UUID(self.tenant_id).hex[:16]}", unit)
         self.assertIn("BOOKAPP_MANAGED_RUNTIME=1", unit)
+        self.assertIn("UMask=0007", unit)
         self.assertIn("LoadCredential=telegram_bot_token:", unit)
         self.assertIn("LoadCredential=bot_proxy_url:", unit)
         self.assertNotIn("PLATFORM_DATABASE_PATH", unit)

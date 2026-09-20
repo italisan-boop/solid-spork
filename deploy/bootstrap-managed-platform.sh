@@ -7,6 +7,7 @@ readonly KEY_ROOT=/etc/bookapp/keys
 readonly STATE_ROOT=/var/lib/bookapp
 readonly SYSTEMD_ROOT=/etc/systemd/system
 readonly CADDY_IMPORT=/etc/caddy/bookapp-tenants.import
+readonly CADDY_LOGGING=/etc/caddy/bookapp-logging.caddy
 readonly CADDY_ROUTE_ROOT=/etc/caddy/bookapp-tenants
 readonly SOURCE_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 readonly PYTHON_BIN="${BOOKAPP_PYTHON_BIN:-python3.12}"
@@ -266,6 +267,9 @@ install_if_identical_or_missing \
   "$SOURCE_ROOT/systemd/bookapp-tenant@.service" \
   "$SYSTEMD_ROOT/bookapp-tenant@.service"
 install_if_identical_or_missing \
+  "$SOURCE_ROOT/caddy/bookapp-logging.caddy" \
+  "$CADDY_LOGGING"
+install_if_identical_or_missing \
   "$SOURCE_ROOT/caddy/bookapp-tenants.import" \
   "$CADDY_IMPORT"
 systemctl daemon-reload
@@ -281,8 +285,8 @@ Before enabling anything, create root-owned, mode 0400 files:
 The bootstrap generated root-only sealer.env and controller.env; review their
 absolute paths before enabling services.
 
-Add `import /etc/caddy/bookapp-tenants.import` once to the main Caddyfile,
-then validate Caddy. Test the complete flow only with a newly-created disposable
-tenant before enabling it for production. Do not adopt a legacy tenant through
-this bootstrap.
+Add these imports once to the main Caddyfile, before any site blocks:
+  import /etc/caddy/bookapp-logging.caddy
+  import /etc/caddy/bookapp-tenants.import
+Then validate Caddy. Test the complete flow only with a newly-created disposable tenant before enabling it for production. Do not adopt a legacy tenant through this bootstrap.
 EOF

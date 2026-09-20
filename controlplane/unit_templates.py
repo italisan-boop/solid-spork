@@ -97,7 +97,7 @@ def render_tenant_dropin(
             credentials / "telegram_webhook_secret"
         ),
         "LoadCredential=bot_proxy_url:" + str(credentials / "bot_proxy_url"),
-        "UMask=0077",
+        "UMask=0007",
         "NoNewPrivileges=yes",
         "PrivateTmp=yes",
         "PrivateDevices=yes",
