@@ -15,6 +15,7 @@ _SECRET_KINDS = frozenset({
     "telegram_bot_token",
     "telegram_webhook_secret",
     "bot_proxy_url",
+    "delivery_encryption_keys",
 })
 _MAX_VALUE_LENGTH = 16_384
 _MAX_MESSAGE_LENGTH = 65_536

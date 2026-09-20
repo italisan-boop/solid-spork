@@ -26,6 +26,7 @@ _CREDENTIAL_NAMES = frozenset({
     "telegram_bot_token",
     "telegram_webhook_secret",
     "bot_proxy_url",
+    "delivery_encryption_keys",
 })
 
 
@@ -281,9 +282,14 @@ class UnixSocketPrivilegedOperations:
     def install_tenant_unit(self, *, tenant_id: str) -> None:
         self._request("install_unit", tenant_id=_tenant_id(tenant_id))
 
-    def start_tenant_unit(self, tenant_id: str) -> None:
-        self._request("start_unit", tenant_id=_tenant_id(tenant_id))
+    def stop_tenant_unit(self, tenant_id: str) -> None:
+        self._request("stop_unit", tenant_id=_tenant_id(tenant_id))
 
+    def withdraw_tenant_route(self, tenant_id: str) -> None:
+        self._request("withdraw_route", tenant_id=_tenant_id(tenant_id))
+
+    def remove_tenant_runtime_material(self, tenant_id: str) -> None:
+        self._request("remove_runtime_material", tenant_id=_tenant_id(tenant_id))
     def check_tenant_health(self, tenant_id: str, runtime_generation: int) -> None:
         self._request(
             "check_health",
@@ -411,6 +417,21 @@ class HostOperationsServer:
             if set(payload) != {"operation", "tenant_id"}:
                 raise HostOperationsError("invalid host operation")
             self.operations.start_tenant_unit(tenant_unit_name(tenant_id))
+            return {}
+        if operation == "stop_unit":
+            if set(payload) != {"operation", "tenant_id"}:
+                raise HostOperationsError("invalid host operation")
+            self.operations.stop_tenant_unit(tenant_id)
+            return {}
+        if operation == "withdraw_route":
+            if set(payload) != {"operation", "tenant_id"}:
+                raise HostOperationsError("invalid host operation")
+            self.operations.withdraw_tenant_route(tenant_id)
+            return {}
+        if operation == "remove_runtime_material":
+            if set(payload) != {"operation", "tenant_id"}:
+                raise HostOperationsError("invalid host operation")
+            self.operations.remove_tenant_runtime_material(tenant_id)
             return {}
         if operation == "check_health":
             if set(payload) != {"operation", "tenant_id", "runtime_generation"}:

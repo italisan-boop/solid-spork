@@ -23,7 +23,10 @@ _REQUIRED_RUNTIME_CREDENTIALS = frozenset({
     "telegram_bot_token",
     "telegram_webhook_secret",
 })
-_OPTIONAL_RUNTIME_CREDENTIALS = frozenset({"bot_proxy_url"})
+_OPTIONAL_RUNTIME_CREDENTIALS = frozenset({
+    "bot_proxy_url",
+    "delivery_encryption_keys",
+})
 _RUNTIME_CREDENTIALS = _REQUIRED_RUNTIME_CREDENTIALS | _OPTIONAL_RUNTIME_CREDENTIALS
 _HEALTH_CHECK_ATTEMPTS = 30
 _HEALTH_CHECK_RETRY_DELAY_SECONDS = 1
@@ -303,11 +306,52 @@ class LinuxPrivilegedOperations:
         _run(["systemctl", "daemon-reload"])
         _run(["systemctl", "enable", unit_name])
 
-    def start_tenant_unit(self, unit_name: str) -> None:
-        if not _UNIT_PATTERN.fullmatch(unit_name):
-            raise LinuxOperationsError("invalid tenant unit")
-        _run(["systemctl", "restart", unit_name])
+    def stop_tenant_unit(self, tenant_id: str) -> None:
+        tenant_id = _tenant_id(tenant_id)
+        unit_name = tenant_unit_name(tenant_id)
+        _run(["systemctl", "stop", unit_name])
+        _run(["systemctl", "disable", unit_name])
 
+    def remove_tenant_runtime_material(self, tenant_id: str) -> None:
+        tenant_id = _tenant_id(tenant_id)
+        unit_name = tenant_unit_name(tenant_id)
+        unit_directory = (self.paths.unit_root / f"{unit_name}.d").resolve()
+        if unit_directory.parent != self.paths.unit_root.resolve() or unit_directory.is_symlink():
+            raise LinuxOperationsError("invalid tenant unit directory")
+        if unit_directory.is_dir():
+            dropin = unit_directory / "runtime.conf"
+            if dropin.is_symlink():
+                raise LinuxOperationsError("invalid tenant unit drop-in")
+            dropin.unlink(missing_ok=True)
+            try:
+                unit_directory.rmdir()
+            except OSError as exc:
+                raise LinuxOperationsError("tenant unit directory is not empty") from exc
+
+        known_credentials = {
+            "telegram_bot_token",
+            "telegram_webhook_secret",
+            "bot_proxy_url",
+            "delivery_encryption_keys",
+            "yookassa_credentials",
+            "runtime.json",
+            "runtime.sig",
+        }
+        for root in (self.paths.credential_root, self.paths.runtime_root):
+            target = (root / tenant_id).resolve()
+            if target.parent != root.resolve() or target.is_symlink():
+                raise LinuxOperationsError("invalid tenant runtime target")
+            if not target.is_dir():
+                continue
+            for name in known_credentials | {"tenant.sock"}:
+                candidate = target / name
+                if candidate.is_symlink():
+                    raise LinuxOperationsError("invalid tenant runtime artifact")
+                candidate.unlink(missing_ok=True)
+            try:
+                target.rmdir()
+            except OSError as exc:
+                raise LinuxOperationsError("tenant runtime directory is not empty") from exc
     def check_tenant_health(self, tenant_id: str, runtime_generation: int) -> None:
         _tenant_id(tenant_id)
         if runtime_generation <= 0:
@@ -363,4 +407,23 @@ class LinuxPrivilegedOperations:
                 target.unlink(missing_ok=True)
             else:
                 _atomic_write(target, previous, 0o644)
+            raise
+
+    def withdraw_tenant_route(self, tenant_id: str) -> None:
+        tenant_id = _tenant_id(tenant_id)
+        target = (self.paths.caddy_route_root / f"{tenant_id}.caddy").resolve()
+        if target.parent != self.paths.caddy_route_root.resolve() or target.is_symlink():
+            raise LinuxOperationsError("invalid tenant route target")
+        if not target.is_file():
+            return
+        previous = target.read_bytes()
+        expected_socket = str((self.paths.runtime_root / tenant_id / "tenant.sock").resolve())
+        if expected_socket.encode("utf-8") not in previous:
+            raise LinuxOperationsError("tenant route target is not owned by tenant")
+        target.unlink()
+        try:
+            _run(["caddy", "validate", "--config", str(self.paths.caddy_config)])
+            _run(["systemctl", "reload", "caddy"])
+        except Exception:
+            _atomic_write(target, previous, 0o644)
             raise

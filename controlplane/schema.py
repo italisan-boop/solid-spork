@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 8
 _LOCK = threading.Lock()
 
 
@@ -89,11 +89,26 @@ def connect(path: str | Path) -> _ControlDatabaseConnection:
     return database
 
 
+def _upgrade_platform_tenant_kind(database: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in database.execute("PRAGMA table_info(platform_tenants)").fetchall()
+    }
+    if columns and "tenant_kind" not in columns:
+        database.execute(
+            """
+            ALTER TABLE platform_tenants
+            ADD COLUMN tenant_kind TEXT NOT NULL DEFAULT 'legacy'
+            CHECK (tenant_kind IN ('legacy', 'managed'))
+            """
+        )
+
+
 def _upgrade_tenant_secret_envelopes(database: sqlite3.Connection) -> None:
     row = database.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tenant_secret_envelopes'"
     ).fetchone()
-    if row is None or "bot_proxy_url" in row[0]:
+    if row is None or "delivery_encryption_keys" in row[0]:
         return
     database.execute("ALTER TABLE tenant_secret_envelopes RENAME TO tenant_secret_envelopes_legacy")
     database.execute(
@@ -101,7 +116,8 @@ def _upgrade_tenant_secret_envelopes(database: sqlite3.Connection) -> None:
         CREATE TABLE tenant_secret_envelopes (
             tenant_id TEXT NOT NULL,
             secret_kind TEXT NOT NULL CHECK (secret_kind IN (
-                'telegram_bot_token', 'telegram_webhook_secret', 'bot_proxy_url'
+                'telegram_bot_token', 'telegram_webhook_secret', 'bot_proxy_url',
+                'delivery_encryption_keys'
             )),
             generation INTEGER NOT NULL CHECK (generation > 0),
             algorithm TEXT NOT NULL,
@@ -171,6 +187,48 @@ def _upgrade_tenant_secret_references(database: sqlite3.Connection) -> None:
     database.execute("DROP TABLE tenant_secret_references_legacy")
 
 
+def _upgrade_tenant_deployment_jobs(database: sqlite3.Connection) -> None:
+    row = database.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tenant_deployment_jobs'"
+    ).fetchone()
+    if row is None or "teardown" in row[0]:
+        return
+    database.execute(
+        "ALTER TABLE tenant_deployment_jobs RENAME TO tenant_deployment_jobs_legacy"
+    )
+    database.execute(
+        """
+        CREATE TABLE tenant_deployment_jobs (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            operation TEXT NOT NULL CHECK (operation IN (
+                'provision', 'activate', 'redeploy', 'teardown'
+            )),
+            desired_generation INTEGER NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'failed', 'succeeded')),
+            outcome_json TEXT NOT NULL DEFAULT '{}',
+            created_by_platform_admin_id INTEGER NOT NULL,
+            claimed_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tenant_id) REFERENCES platform_tenants (id) ON DELETE RESTRICT
+        )
+        """
+    )
+    database.execute(
+        """
+        INSERT INTO tenant_deployment_jobs (
+            id, tenant_id, operation, desired_generation, state, outcome_json,
+            created_by_platform_admin_id, claimed_at, completed_at, created_at
+        )
+        SELECT id, tenant_id, operation, desired_generation, state, outcome_json,
+               created_by_platform_admin_id, claimed_at, completed_at, created_at
+        FROM tenant_deployment_jobs_legacy
+        """
+    )
+    database.execute("DROP TABLE tenant_deployment_jobs_legacy")
+
+
 def _upgrade_runtime_deployments(database: sqlite3.Connection) -> None:
     columns = {
         row[1]
@@ -208,6 +266,7 @@ def initialize(path: str | Path) -> None:
                     database_path TEXT NOT NULL UNIQUE,
                     media_root TEXT NOT NULL UNIQUE,
                     backup_root TEXT NOT NULL UNIQUE,
+                    tenant_kind TEXT NOT NULL DEFAULT 'legacy' CHECK (tenant_kind IN ('legacy', 'managed')),
                     runtime_generation INTEGER NOT NULL DEFAULT 1,
                     entitlement_version INTEGER NOT NULL DEFAULT 1,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -260,7 +319,8 @@ def initialize(path: str | Path) -> None:
                 CREATE TABLE IF NOT EXISTS tenant_secret_envelopes (
                     tenant_id TEXT NOT NULL,
                     secret_kind TEXT NOT NULL CHECK (secret_kind IN (
-                        'telegram_bot_token', 'telegram_webhook_secret', 'bot_proxy_url'
+                        'telegram_bot_token', 'telegram_webhook_secret', 'bot_proxy_url',
+                        'delivery_encryption_keys'
                     )),
                     generation INTEGER NOT NULL CHECK (generation > 0),
                     algorithm TEXT NOT NULL,
@@ -292,7 +352,7 @@ def initialize(path: str | Path) -> None:
                 CREATE TABLE IF NOT EXISTS tenant_deployment_jobs (
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
-                    operation TEXT NOT NULL CHECK (operation IN ('provision', 'activate', 'redeploy')),
+                    operation TEXT NOT NULL CHECK (operation IN ('provision', 'activate', 'redeploy', 'teardown')),
                     desired_generation INTEGER NOT NULL,
                     state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
                     outcome_json TEXT NOT NULL DEFAULT '{}',
@@ -323,7 +383,9 @@ def initialize(path: str | Path) -> None:
                 """
             )
             database.execute("BEGIN IMMEDIATE")
+            _upgrade_platform_tenant_kind(database)
             _upgrade_tenant_secret_envelopes(database)
+            _upgrade_tenant_deployment_jobs(database)
             _upgrade_tenant_secret_references(database)
             _upgrade_runtime_deployments(database)
             database.execute(

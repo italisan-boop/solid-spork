@@ -2,6 +2,7 @@
 Конфигурация приложения.
 Загружает переменные окружения и предоставляет доступ к настройкам.
 """
+import json
 import os
 from dotenv import load_dotenv
 from typing import List
@@ -13,11 +14,37 @@ from runtime.manifest import load_managed_runtime_manifest
 
 if not is_managed_runtime():
     load_dotenv()
+def _managed_delivery_encryption_settings() -> tuple[str, str]:
+    value = read_runtime_credential("delivery_encryption_keys")
+    if value is None:
+        return "", ""
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return "", ""
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"version", "active_key_id", "keys"}
+        or isinstance(payload["version"], bool)
+        or not isinstance(payload["version"], int)
+        or payload["version"] != 1
+        or not isinstance(payload["active_key_id"], str)
+        or not isinstance(payload["keys"], dict)
+        or not all(
+            isinstance(key_id, str) and isinstance(encoded_key, str)
+            for key_id, encoded_key in payload["keys"].items()
+        )
+    ):
+        return "", ""
+    return (
+        payload["active_key_id"],
+        json.dumps(payload["keys"], separators=(",", ":"), sort_keys=True),
+    )
 
 
 class Settings:
     """Класс настроек приложения."""
-    
+
     def __init__(self):
         self.MANAGED_RUNTIME = is_managed_runtime()
         manifest = load_managed_runtime_manifest() if self.MANAGED_RUNTIME else None
@@ -101,12 +128,18 @@ class Settings:
         self.MANUAL_DETAILS_RESEND_COOLDOWN_SECONDS = int(
             os.getenv("MANUAL_DETAILS_RESEND_COOLDOWN_SECONDS", "60")
         )
-        self.DELIVERY_ENCRYPTION_ACTIVE_KEY_ID = os.getenv(
-            "DELIVERY_ENCRYPTION_ACTIVE_KEY_ID", ""
-        ).strip()
-        self.DELIVERY_ENCRYPTION_KEYS_JSON = os.getenv(
-            "DELIVERY_ENCRYPTION_KEYS_JSON", ""
-        ).strip()
+        if self.MANAGED_RUNTIME:
+            (
+                self.DELIVERY_ENCRYPTION_ACTIVE_KEY_ID,
+                self.DELIVERY_ENCRYPTION_KEYS_JSON,
+            ) = _managed_delivery_encryption_settings()
+        else:
+            self.DELIVERY_ENCRYPTION_ACTIVE_KEY_ID = os.getenv(
+                "DELIVERY_ENCRYPTION_ACTIVE_KEY_ID", ""
+            ).strip()
+            self.DELIVERY_ENCRYPTION_KEYS_JSON = os.getenv(
+                "DELIVERY_ENCRYPTION_KEYS_JSON", ""
+            ).strip()
         self.DELIVERY_PII_RETENTION_DAYS = int(
             os.getenv("DELIVERY_PII_RETENTION_DAYS", "90")
         )

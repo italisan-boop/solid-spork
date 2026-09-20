@@ -18,6 +18,7 @@ from controlplane.tenants import (
     activate_managed_after_owner_claim,
     complete_managed_provisioning,
     effective_tenant_entitlements,
+    ensure_delivery_encryption_envelope,
     get_tenant,
 )
 from controlplane.unit_templates import ControllerPaths, TenantStoragePaths
@@ -72,6 +73,15 @@ class PrivilegedDeploymentOperations(Protocol):
     def check_tenant_health(self, tenant_id: str, runtime_generation: int) -> None:
         ...
 
+    def withdraw_tenant_route(self, tenant_id: str) -> None:
+        ...
+
+    def stop_tenant_unit(self, tenant_id: str) -> None:
+        ...
+
+    def remove_tenant_runtime_material(self, tenant_id: str) -> None:
+        ...
+
     def publish_tenant_route(self, *, tenant_id: str, hosts: list[str]) -> None:
         ...
 
@@ -109,6 +119,14 @@ class RootDeploymentAdapter:
             raise DeploymentFailure("credentials_materialized", "GenerationSuperseded")
         return current
 
+    def _current_deleting_tenant(self, tenant, generation: int):
+        current = get_tenant(self.control_database_path, tenant.id)
+        if current is None or current.tenant_kind != "managed":
+            raise DeploymentFailure("teardown_route", "TenantMissing")
+        if current.lifecycle_state != "deleting" or current.runtime_generation != generation:
+            raise DeploymentFailure("teardown_route", "GenerationSuperseded")
+        return current
+
     def _publish_route_if_current(self, tenant, generation: int, hosts: list[str]) -> None:
         database = connect(self.control_database_path)
         try:
@@ -131,6 +149,15 @@ class RootDeploymentAdapter:
         tenant = get_tenant(self.control_database_path, job.tenant_id)
         if tenant is None:
             raise ValueError("tenant not found")
+        if job.operation == "teardown":
+            if tenant.lifecycle_state == "deleted":
+                return DeploymentReconciliation(
+                    stage="teardown_completed",
+                    applied_generation=tenant.runtime_generation,
+                )
+            if tenant.lifecycle_state != "deleting" or tenant.tenant_kind != "managed":
+                raise ValueError("tenant is not ready for managed teardown")
+            return self._teardown(tenant)
         storage = self._validated_storage_paths(tenant)
 
         if job.operation == "provision":
@@ -171,6 +198,29 @@ class RootDeploymentAdapter:
             self._validated_storage_paths(latest),
             previous_hosts=published_route_hosts(self.control_database_path, latest.id),
             route_first=job.operation == "redeploy",
+        )
+
+    def _teardown(self, tenant) -> DeploymentReconciliation:
+        generation = tenant.runtime_generation
+        self._current_deleting_tenant(tenant, generation)
+        self._run_stage(
+            "teardown_route",
+            lambda: self.operations.withdraw_tenant_route(tenant.id),
+        )
+        self._current_deleting_tenant(tenant, generation)
+        self._run_stage(
+            "teardown_unit",
+            lambda: self.operations.stop_tenant_unit(tenant.id),
+        )
+        self._current_deleting_tenant(tenant, generation)
+        self._run_stage(
+            "teardown_material",
+            lambda: self.operations.remove_tenant_runtime_material(tenant.id),
+        )
+        self._current_deleting_tenant(tenant, generation)
+        return DeploymentReconciliation(
+            stage="teardown_completed",
+            applied_generation=generation,
         )
 
     def _validated_storage_paths(self, tenant) -> TenantStoragePaths:
@@ -238,6 +288,14 @@ class RootDeploymentAdapter:
         route_first: bool,
     ) -> DeploymentReconciliation:
         generation = tenant.runtime_generation
+        self._run_stage(
+            "credentials_materialized",
+            lambda: ensure_delivery_encryption_envelope(
+                self.control_database_path,
+                tenant_id=tenant.id,
+                cipher=self.cipher,
+            ),
+        )
         material = self._run_stage(
             "credentials_materialized",
             lambda: materialize_runtime(

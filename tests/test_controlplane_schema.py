@@ -9,6 +9,24 @@ from controlplane.schema import connect, initialize
 
 
 class ControlPlaneSchemaMigrationTests(unittest.TestCase):
+    def test_current_schema_contains_managed_tenant_and_teardown_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "control.sqlite"
+            initialize(database_path)
+            database = sqlite3.connect(database_path)
+            try:
+                tenant_columns = {
+                    row[1]
+                    for row in database.execute("PRAGMA table_info(platform_tenants)")
+                }
+                jobs_schema = database.execute(
+                    "SELECT sql FROM sqlite_master WHERE name = 'tenant_deployment_jobs'"
+                ).fetchone()[0]
+            finally:
+                database.close()
+        self.assertIn("tenant_kind", tenant_columns)
+        self.assertIn("teardown", jobs_schema)
+
     def test_control_database_allows_platform_control_group_writes(self):
         if os.name != "posix":
             self.skipTest("control database modes require POSIX")
@@ -33,7 +51,7 @@ class ControlPlaneSchemaMigrationTests(unittest.TestCase):
             finally:
                 os.umask(previous_umask)
 
-    def test_upgrades_existing_secret_envelope_constraint_for_tenant_proxy(self):
+    def test_upgrades_existing_secret_envelope_constraint_for_delivery_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "control.sqlite"
             database = sqlite3.connect(database_path)
@@ -71,6 +89,7 @@ class ControlPlaneSchemaMigrationTests(unittest.TestCase):
             finally:
                 database.close()
         self.assertIn("bot_proxy_url", schema)
+        self.assertIn("delivery_encryption_keys", schema)
 
     def test_upgrades_secret_reference_constraint_for_tenant_proxy(self):
         with tempfile.TemporaryDirectory() as directory:

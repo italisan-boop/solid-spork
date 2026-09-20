@@ -115,7 +115,8 @@ function tenantCard(tenant) {
   const canProvision = !busy && hasRequiredSecrets && ['draft', 'migration_failed'].includes(tenant.lifecycle_state);
   const canActivate = !busy && tenant.lifecycle_state === 'awaiting_owner_claim';
   const canRedeploy = managedMode && !busy && ['awaiting_owner_claim', 'active'].includes(tenant.lifecycle_state);
-  const canDelete = !managedMode && tenant.lifecycle_state !== 'provisioning';
+  const canDelete = !managedMode && tenant.tenant_kind === 'legacy' && tenant.lifecycle_state !== 'provisioning';
+  const canManagedDelete = managedMode && tenant.tenant_kind === 'managed' && !['provisioning', 'deleted'].includes(tenant.lifecycle_state);
   const canClearProxy = managedMode && tenant.sealed_secret_kinds.includes('bot_proxy_url');
   const secretFields = managedMode
     ? `${secretInput(tenant, 'telegram_bot_token', 'Bot Token')}${secretInput(tenant, 'telegram_webhook_secret', 'Webhook Secret')}${secretInput(tenant, 'bot_proxy_url', 'Bot API proxy', true)}`
@@ -128,7 +129,9 @@ function tenantCard(tenant) {
     : `<div class="actions"><button type="button" data-save>Сохранить тариф и модули</button><button type="button" class="secondary" data-provision ${canProvision ? '' : 'disabled'}>Подготовить магазин</button>${canActivate ? '<button type="button" class="secondary" data-activate>Активировать магазин</button>' : ''}</div>`;
   const deletion = canDelete
     ? `<div class="danger-zone"><h3>Удаление магазина</h3><p>Подтвердите slug: <b>${escapeHtml(tenant.slug)}</b>. Данные сохраняются по политике legacy runtime.</p><input data-delete-slug placeholder="${escapeHtml(tenant.slug)}"><button type="button" class="danger" data-delete disabled>Удалить магазин</button></div>`
-    : managedMode ? '<div class="meta">Удаление managed tenant недоступно до реализации безопасного teardown.</div>' : '';
+    : canManagedDelete
+      ? `<div class="danger-zone"><h3>Удаление managed-магазина</h3><p>Runtime, route и секреты будут остановлены и удалены root controller. Данные магазина сохраняются.</p><input data-delete-slug placeholder="${escapeHtml(tenant.slug)}"><button type="button" class="danger" data-delete disabled>${tenant.lifecycle_state === 'deleting' ? 'Повторить teardown' : 'Удалить магазин'}</button></div>`
+      : managedMode && tenant.tenant_kind === 'managed' ? '<div class="meta">Удаление недоступно в текущем состоянии магазина.</div>' : '';
   return `<article class="tenant" data-tenant="${tenant.id}">
     <div class="tenant-head"><div><div class="tenant-name">${escapeHtml(tenant.display_name)}</div><div class="meta">владелец #${tenant.owner_telegram_id}</div></div><span class="pill">${escapeHtml(tenant.lifecycle_state)}</span></div>
     <label>Тариф<select data-plan><option value="start" ${tenant.plan === 'start' ? 'selected' : ''}>Старт</option><option value="business" ${tenant.plan === 'business' ? 'selected' : ''}>Бизнес</option><option value="pro" ${tenant.plan === 'pro' ? 'selected' : ''}>Pro</option></select></label>
@@ -260,10 +263,18 @@ document.getElementById('tenants').addEventListener('click', async event => {
       return;
     }
     if (event.target.matches('[data-delete]')) {
-      const slug = card.querySelector('[data-delete-slug]').value.trim(); if (slug !== tenant.slug || managedMode) return;
-      if (!await confirmAction(`Удалить магазин ${slug}?`)) return;
-      const end = beginOperation(button, 'Удаляем…'); status(state, 'Удаляем магазин…', 'warning');
-      try { await api(`/api/platform/tenants/${id}`, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_slug:slug})}); tenantRecords.delete(id); card.remove(); status(document.getElementById('listStatus'), 'Магазин удалён.', 'success'); } catch (error) { status(state, error.message, 'error'); } finally { end(); }
+      const slug = card.querySelector('[data-delete-slug]').value.trim(); if (slug !== tenant.slug) return;
+      if (!await confirmAction(`${managedMode ? 'Поставить teardown магазина' : 'Удалить магазин'} ${slug}?`)) return;
+      const end = beginOperation(button, managedMode ? 'Ставим teardown…' : 'Удаляем…'); status(state, managedMode ? 'Teardown поставлен в очередь…' : 'Удаляем магазин…', 'warning');
+      try {
+        const response = await api(`/api/platform/tenants/${id}`, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_slug:slug})});
+        if (managedMode) {
+          if (response.deleted) { tenantRecords.delete(id); card.remove(); status(document.getElementById('listStatus'), 'Магазин удалён.', 'success'); }
+          else await refreshTenant(id, 'Teardown поставлен в очередь. Runtime и route будут остановлены controller.', 'warning');
+        } else {
+          tenantRecords.delete(id); card.remove(); status(document.getElementById('listStatus'), 'Магазин удалён.', 'success');
+        }
+      } catch (error) { status(state, error.message, 'error'); } finally { end(); }
     }
   } catch (error) { status(state, error.message, 'error'); }
 });

@@ -19,6 +19,7 @@ from controlplane.tenants import (
     get_tenant,
     list_tenants,
     request_custom_domain,
+    request_managed_deletion,
     sealed_secret_kinds,
     set_custom_domain_verification,
     set_lifecycle_state,
@@ -40,6 +41,7 @@ def _tenant_payload(control_database_path: str | Path, tenant, entitlements=None
         "slug": tenant.slug,
         "display_name": tenant.display_name,
         "owner_telegram_id": tenant.owner_telegram_id,
+        "tenant_kind": tenant.tenant_kind,
         "plan": tenant.plan.value,
         "lifecycle_state": tenant.lifecycle_state,
         "canonical_host": tenant.canonical_host,
@@ -138,6 +140,7 @@ def create_controlplane_app(
                 tenant_backup_root=settings.tenant_backup_root,
                 tenant_base_domain=settings.tenant_base_domain,
                 actor_telegram_id=g.platform_admin_id,
+                tenant_kind="managed" if settings.managed_mode else "legacy",
             )
         except (ValueError, TypeError) as error:
             return jsonify({"error": str(error)}), 400
@@ -461,12 +464,34 @@ def create_controlplane_app(
     @app.delete("/api/platform/tenants/<tenant_id>")
     @require_platform_admin
     def delete_tenant(tenant_id: str):
-        if settings.managed_mode:
-            return jsonify({"error": "managed tenant deletion is unavailable"}), 409
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict) or set(payload) != {"confirm_slug"}:
             return jsonify({"error": "confirm_slug is required"}), 400
         try:
+            if settings.managed_mode:
+                job = request_managed_deletion(
+                    settings.database_path,
+                    tenant_id=tenant_id,
+                    confirm_slug=payload["confirm_slug"],
+                    actor_telegram_id=g.platform_admin_id,
+                )
+                selected = get_tenant(settings.database_path, tenant_id)
+                if job is None:
+                    return jsonify({"deleted": True, "lifecycle_state": "deleted"})
+                return jsonify({
+                    "deleted": False,
+                    "job": {
+                        "id": job.id,
+                        "operation": job.operation,
+                        "desired_generation": job.desired_generation,
+                        "state": "pending",
+                    },
+                    "tenant": _tenant_payload(
+                        settings.database_path,
+                        selected,
+                        effective_tenant_entitlements(settings.database_path, tenant_id),
+                    ),
+                }), 202
             deleted = soft_delete_tenant(
                 settings.database_path,
                 tenant_id=tenant_id,

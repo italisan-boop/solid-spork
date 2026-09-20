@@ -41,6 +41,23 @@ class SecretEnvelopeTests(unittest.TestCase):
         with self.assertRaises(SecretEnvelopeError):
             self.cipher.open(self.tenant_id, "telegram_bot_token", 1, envelope)
 
+    def test_delivery_envelope_is_bound_to_tenant_kind_and_generation(self):
+        value = '{"version":1,"active_key_id":"delivery-v1-test","keys":{"delivery-v1-test":"test"}}'
+        envelope = self.cipher.seal(
+            self.tenant_id,
+            "delivery_encryption_keys",
+            1,
+            value,
+        )
+        self.assertEqual(
+            value,
+            self.cipher.open(
+                self.tenant_id, "delivery_encryption_keys", 1, envelope
+            ),
+        )
+        with self.assertRaises(SecretEnvelopeError):
+            self.cipher.open(self.tenant_id, "telegram_bot_token", 1, envelope)
+
     def test_fragmented_newline_frame_is_reassembled_and_trailing_data_is_rejected(self):
         class FragmentedConnection:
             def __init__(self, chunks):

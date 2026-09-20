@@ -16,7 +16,7 @@ from controlplane.tenants import Tenant, entitlement_overrides, tenant_domains
 
 
 _REQUIRED_KINDS = ("telegram_bot_token", "telegram_webhook_secret")
-_OPTIONAL_KINDS = ("bot_proxy_url",)
+_OPTIONAL_KINDS = ("bot_proxy_url", "delivery_encryption_keys")
 
 
 class MaterializationError(ValueError):

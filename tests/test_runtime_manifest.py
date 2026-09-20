@@ -111,6 +111,79 @@ class ManagedRuntimeManifestTests(unittest.TestCase):
         )
         self.assertEqual(str(self.root / "tenant" / "app.sqlite"), settings.DATABASE_PATH)
 
+    def test_managed_settings_load_delivery_credential_and_ignore_ambient_values(self):
+        self._write_manifest()
+        (self.credentials / "telegram_bot_token").write_text(
+            "123456:credential-token\n", encoding="utf-8"
+        )
+        (self.credentials / "telegram_webhook_secret").write_text(
+            "credential-webhook-secret\n", encoding="utf-8"
+        )
+        key_id = "delivery-v1-test"
+        keyring = base64.urlsafe_b64encode(b"d" * 32).decode("ascii").rstrip("=")
+        credential = {
+            "version": 1,
+            "active_key_id": key_id,
+            "keys": {key_id: keyring},
+        }
+        (self.credentials / "delivery_encryption_keys").write_text(
+            json.dumps(credential), encoding="utf-8"
+        )
+        from config.settings import Settings
+        from utils.delivery_crypto import (
+            decrypt_destination,
+            delivery_encryption_is_available,
+            encrypt_destination,
+        )
+
+        environment = {
+            **self._environment(),
+            "DELIVERY_ENCRYPTION_ACTIVE_KEY_ID": "ambient-key-must-not-be-used",
+            "DELIVERY_ENCRYPTION_KEYS_JSON": '{"ambient-key-must-not-be-used":"bad"}',
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            managed_settings = Settings()
+        self.assertEqual(key_id, managed_settings.DELIVERY_ENCRYPTION_ACTIVE_KEY_ID)
+        self.assertEqual({key_id: keyring}, json.loads(managed_settings.DELIVERY_ENCRYPTION_KEYS_JSON))
+        with patch("utils.delivery_crypto.settings", managed_settings):
+            self.assertTrue(delivery_encryption_is_available())
+            envelope = encrypt_destination(1, "courier", {"city": "Test"})
+            self.assertEqual(
+                {"city": "Test"}, decrypt_destination(1, "courier", envelope)
+            )
+
+    def test_managed_settings_fail_closed_for_absent_or_malformed_delivery_credential(self):
+        self._write_manifest()
+        (self.credentials / "telegram_bot_token").write_text(
+            "123456:credential-token\n", encoding="utf-8"
+        )
+        (self.credentials / "telegram_webhook_secret").write_text(
+            "credential-webhook-secret\n", encoding="utf-8"
+        )
+        from config.settings import Settings
+
+        environment = {
+            **self._environment(),
+            "DELIVERY_ENCRYPTION_ACTIVE_KEY_ID": "ambient-key-must-not-be-used",
+            "DELIVERY_ENCRYPTION_KEYS_JSON": '{"ambient-key-must-not-be-used":"bad"}',
+        }
+        for credential in (
+            None,
+            "not-json",
+            '{"version":true,"active_key_id":"key","keys":{}}',
+            '{"version":1,"active_key_id":"key","keys":[]}',
+        ):
+            if credential is None:
+                (self.credentials / "delivery_encryption_keys").unlink(missing_ok=True)
+            else:
+                (self.credentials / "delivery_encryption_keys").write_text(
+                    credential, encoding="utf-8"
+                )
+            with patch.dict(os.environ, environment, clear=True):
+                managed_settings = Settings()
+            self.assertEqual("", managed_settings.DELIVERY_ENCRYPTION_ACTIVE_KEY_ID)
+            self.assertEqual("", managed_settings.DELIVERY_ENCRYPTION_KEYS_JSON)
+
     def test_reads_only_allowlisted_credentials(self):
         (self.credentials / "telegram_bot_token").write_text(
             "123456:tenant-token\n", encoding="utf-8"

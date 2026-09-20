@@ -9,7 +9,7 @@ from pathlib import Path
 from controlplane.schema import connect
 
 
-_OPERATIONS = frozenset({"provision", "activate", "redeploy"})
+_OPERATIONS = frozenset({"provision", "activate", "redeploy", "teardown"})
 _RECONCILABLE_STATES = frozenset({"awaiting_owner_claim", "active"})
 _SAFE_STAGES = frozenset({
     "identity_allocated",
@@ -19,6 +19,10 @@ _SAFE_STAGES = frozenset({
     "unit_started",
     "health_checked",
     "routing_published",
+    "teardown_route",
+    "teardown_unit",
+    "teardown_material",
+    "teardown_completed",
 })
 
 
@@ -241,6 +245,74 @@ def queue_runtime_reconciliation(
     return job
 
 
+def queue_teardown_job(
+    database: sqlite3.Connection,
+    *,
+    tenant: sqlite3.Row,
+    actor_telegram_id: int,
+) -> DeploymentJob:
+    if tenant["lifecycle_state"] != "deleting" or tenant["tenant_kind"] != "managed":
+        raise ValueError("tenant is not ready for managed teardown")
+    existing = database.execute(
+        """
+        SELECT id, tenant_id, operation, desired_generation, created_by_platform_admin_id
+        FROM tenant_deployment_jobs
+        WHERE tenant_id = ? AND operation = 'teardown'
+          AND state IN ('pending', 'running')
+        ORDER BY created_at, id
+        LIMIT 1
+        """,
+        (tenant["id"],),
+    ).fetchone()
+    if existing is not None:
+        return DeploymentJob(
+            id=existing["id"],
+            tenant_id=existing["tenant_id"],
+            operation=existing["operation"],
+            desired_generation=existing["desired_generation"],
+            actor_telegram_id=existing["created_by_platform_admin_id"],
+        )
+    database.execute(
+        """
+        UPDATE tenant_deployment_jobs
+        SET state = 'failed',
+            outcome_json = ?, completed_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ? AND state = 'pending' AND operation != 'teardown'
+        """,
+        (json.dumps({"error_type": "DeletionRequested"}, separators=(",", ":")), tenant["id"]),
+    )
+    _upsert_runtime_deployment(
+        database,
+        tenant_id=tenant["id"],
+        generation=tenant["runtime_generation"],
+        state="pending",
+    )
+    job = DeploymentJob(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant["id"],
+        operation="teardown",
+        desired_generation=tenant["runtime_generation"],
+        actor_telegram_id=actor_telegram_id,
+    )
+    database.execute(
+        """
+        INSERT INTO tenant_deployment_jobs (
+            id, tenant_id, operation, desired_generation, state,
+            created_by_platform_admin_id
+        ) VALUES (?, ?, 'teardown', ?, 'pending', ?)
+        """,
+        (job.id, job.tenant_id, job.desired_generation, actor_telegram_id),
+    )
+    _audit(
+        database,
+        actor_telegram_id=actor_telegram_id,
+        action="tenant.teardown.queued",
+        tenant_id=tenant["id"],
+        details={"generation": tenant["runtime_generation"]},
+    )
+    return job
+
+
 def request_deployment(
     control_database_path: str | Path,
     *,
@@ -250,6 +322,8 @@ def request_deployment(
 ) -> DeploymentJob:
     if not isinstance(operation, str) or operation not in _OPERATIONS:
         raise ValueError("unsupported deployment operation")
+    if operation == "teardown":
+        raise ValueError("managed teardown requires the tenant deletion endpoint")
     database = connect(control_database_path)
     database.row_factory = sqlite3.Row
     try:
@@ -340,7 +414,8 @@ def claim_next_deployment_job(
             SELECT id, tenant_id, operation, desired_generation, created_by_platform_admin_id
             FROM tenant_deployment_jobs
             WHERE state = 'pending'
-            ORDER BY created_at, id
+            ORDER BY CASE WHEN operation = 'teardown' THEN 0 ELSE 1 END,
+                     created_at, id
             LIMIT 1
             """
         ).fetchone()
@@ -361,10 +436,11 @@ def claim_next_deployment_job(
         database.execute(
             """
             UPDATE tenant_runtime_deployments
-            SET state = 'provisioning', updated_at = CURRENT_TIMESTAMP
+            SET state = CASE WHEN ? = 'teardown' THEN 'pending' ELSE 'provisioning' END,
+                updated_at = CURRENT_TIMESTAMP
             WHERE tenant_id = ?
             """,
-            (row["tenant_id"],),
+            (row["operation"], row["tenant_id"]),
         )
         database.commit()
         return DeploymentJob(
@@ -383,6 +459,8 @@ def claim_next_deployment_job(
 
 def _recovery_operation(tenant: sqlite3.Row, operation: str) -> str | None:
     lifecycle_state = tenant["lifecycle_state"]
+    if lifecycle_state == "deleting":
+        return "teardown"
     if lifecycle_state in {"draft", "migration_failed"}:
         return "provision" if operation == "provision" else None
     if lifecycle_state == "awaiting_owner_claim":
@@ -466,6 +544,118 @@ def recover_abandoned_deployment_jobs(control_database_path: str | Path) -> int:
             recovered += 1
         database.commit()
         return recovered
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def complete_teardown_job(
+    control_database_path: str | Path,
+    *,
+    job: DeploymentJob,
+    succeeded: bool,
+    stage: str,
+    error_type: str = "",
+) -> bool:
+    if job.operation != "teardown" or stage not in {
+        "teardown_route",
+        "teardown_unit",
+        "teardown_material",
+        "teardown_completed",
+    }:
+        raise ValueError("invalid teardown completion")
+    if error_type and not error_type.isidentifier():
+        raise ValueError("invalid deployment error type")
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        tenant = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (job.tenant_id,)
+        ).fetchone()
+        runtime = database.execute(
+            "SELECT * FROM tenant_runtime_deployments WHERE tenant_id = ?",
+            (job.tenant_id,),
+        ).fetchone()
+        if tenant is None or runtime is None:
+            database.rollback()
+            return False
+        if succeeded and tenant["lifecycle_state"] == "deleting":
+            if tenant["tenant_kind"] != "managed" or tenant["runtime_generation"] != job.desired_generation:
+                succeeded = False
+                error_type = "GenerationSuperseded"
+        elif succeeded and tenant["lifecycle_state"] != "deleted":
+            succeeded = False
+            error_type = "GenerationSuperseded"
+        outcome = (
+            {"stage": stage}
+            if succeeded
+            else {"stage": stage, "error_type": error_type or "TeardownFailed"}
+        )
+        cursor = database.execute(
+            """
+            UPDATE tenant_deployment_jobs
+            SET state = ?, outcome_json = ?, completed_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND state = 'running'
+            """,
+            (
+                "succeeded" if succeeded else "failed",
+                json.dumps(outcome, separators=(",", ":")),
+                job.id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            database.rollback()
+            return False
+        if succeeded:
+            if tenant["lifecycle_state"] == "deleting":
+                database.execute(
+                    """
+                    UPDATE platform_tenants
+                    SET lifecycle_state = 'deleted', updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND lifecycle_state = 'deleting'
+                    """,
+                    (job.tenant_id,),
+                )
+                database.execute(
+                    "DELETE FROM tenant_secret_envelopes WHERE tenant_id = ?",
+                    (job.tenant_id,),
+                )
+                database.execute(
+                    "DELETE FROM tenant_secret_references WHERE tenant_id = ?",
+                    (job.tenant_id,),
+                )
+                _audit(
+                    database,
+                    actor_telegram_id=job.actor_telegram_id,
+                    action="tenant.teardown.completed",
+                    tenant_id=job.tenant_id,
+                    details={"generation": job.desired_generation},
+                )
+            database.execute(
+                """
+                UPDATE tenant_runtime_deployments
+                SET state = 'stopped', applied_generation = MAX(applied_generation, ?),
+                    last_stage = ?, last_error_type = '', published_hosts_json = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = ?
+                """,
+                (job.desired_generation, stage, job.tenant_id),
+            )
+        else:
+            database.execute(
+                """
+                UPDATE tenant_runtime_deployments
+                SET state = 'failed', last_stage = ?, last_error_type = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = ?
+                """,
+                (stage, error_type or "TeardownFailed", job.tenant_id),
+            )
+        database.commit()
+        return True
     except Exception:
         database.rollback()
         raise

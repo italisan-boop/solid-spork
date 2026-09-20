@@ -188,8 +188,12 @@ class PlatformConsoleHtmlTests(unittest.TestCase):
         self.assertIn("applyPlan(card, event.target.value)", page)
         self.assertIn("data-domain-verify", page)
         self.assertIn("event.target.matches('[data-domain-verify]')", page)
+        self.assertIn("tenant.tenant_kind === 'managed'", page)
         self.assertIn("data-delete-slug", page)
+        self.assertIn("Teardown поставлен в очередь", page)
+        self.assertIn("Runtime, route и секреты", page)
         self.assertIn("let managedMode = false", page)
+
         self.assertIn("managedMode = payload.managed_mode === true", page)
         self.assertIn("function referenceInput", page)
         self.assertIn("/secret-references", page)

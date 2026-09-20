@@ -13,12 +13,14 @@ from controlplane.deployments import (
     DeploymentJob,
     claim_next_deployment_job,
     complete_deployment_job,
+    complete_teardown_job,
     recover_abandoned_deployment_jobs,
 )
 from controlplane.host_operations import UnixSocketPrivilegedOperations
 from controlplane.materializer import ManifestSigner
 from controlplane.root_adapter import DeploymentReconciliation, RootDeploymentAdapter
 from controlplane.secret_envelopes import EnvelopeCipher
+from controlplane.tenants import queue_missing_delivery_encryption_reconciliations
 from controlplane.unit_templates import ControllerPaths
 
 
@@ -84,21 +86,39 @@ class DeploymentController:
         try:
             result = self.adapter.reconcile(job)
         except DeploymentFailure as exc:
-            complete_deployment_job(
-                self.control_database_path,
-                job=job,
-                succeeded=False,
-                stage=exc.stage,
-                error_type=exc.error_type,
-            )
+            if job.operation == "teardown":
+                complete_teardown_job(
+                    self.control_database_path,
+                    job=job,
+                    succeeded=False,
+                    stage=exc.stage,
+                    error_type=exc.error_type,
+                )
+            else:
+                complete_deployment_job(
+                    self.control_database_path,
+                    job=job,
+                    succeeded=False,
+                    stage=exc.stage,
+                    error_type=exc.error_type,
+                )
         except Exception as exc:
-            complete_deployment_job(
-                self.control_database_path,
-                job=job,
-                succeeded=False,
-                stage="identity_allocated",
-                error_type=type(exc).__name__,
-            )
+            if job.operation == "teardown":
+                complete_teardown_job(
+                    self.control_database_path,
+                    job=job,
+                    succeeded=False,
+                    stage="teardown_material",
+                    error_type=type(exc).__name__,
+                )
+            else:
+                complete_deployment_job(
+                    self.control_database_path,
+                    job=job,
+                    succeeded=False,
+                    stage="identity_allocated",
+                    error_type=type(exc).__name__,
+                )
         else:
             if isinstance(result, DeploymentReconciliation):
                 stage = result.stage
@@ -108,14 +128,22 @@ class DeploymentController:
                 stage = result
                 applied_generation = job.desired_generation
                 applied_hosts = None
-            complete_deployment_job(
-                self.control_database_path,
-                job=job,
-                succeeded=True,
-                stage=stage,
-                applied_generation=applied_generation,
-                applied_hosts=applied_hosts,
-            )
+            if job.operation == "teardown":
+                complete_teardown_job(
+                    self.control_database_path,
+                    job=job,
+                    succeeded=True,
+                    stage=stage,
+                )
+            else:
+                complete_deployment_job(
+                    self.control_database_path,
+                    job=job,
+                    succeeded=True,
+                    stage=stage,
+                    applied_generation=applied_generation,
+                    applied_hosts=applied_hosts,
+                )
         return True
 
 
@@ -228,6 +256,7 @@ def main() -> int:
                 settings.host_operations_socket, settings.poll_seconds
             )
             recover_abandoned_deployment_jobs(settings.database_path)
+            queue_missing_delivery_encryption_reconciliations(settings.database_path)
             controller = root_controller(settings)
             while True:
                 if not controller.run_once():

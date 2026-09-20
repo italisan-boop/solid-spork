@@ -41,6 +41,15 @@ class FakeLinuxOperations:
     def check_tenant_health(self, tenant_id, generation):
         self.calls.append(("health", tenant_id, generation))
 
+    def stop_tenant_unit(self, tenant_id):
+        self.calls.append(("stop", tenant_id))
+
+    def withdraw_tenant_route(self, tenant_id):
+        self.calls.append(("withdraw", tenant_id))
+
+    def remove_tenant_runtime_material(self, tenant_id):
+        self.calls.append(("remove", tenant_id))
+
     def publish_tenant_route(self, **kwargs):
         self.calls.append(("route", kwargs))
 
@@ -137,6 +146,42 @@ class HostOperationsServerTests(unittest.TestCase):
             self.settings.socket_path, 0, self.settings.allowed_gid
         )
         chmod.assert_called_once_with(self.settings.socket_path, 0o660)
+
+    def test_accepts_delivery_credential_material(self):
+        self.server.dispatch(
+            {
+                "operation": "write_material",
+                "tenant_id": self.tenant_id,
+                "runtime_generation": 1,
+                "credentials": {
+                    "telegram_bot_token": "dGVzdC10b2tlbg",
+                    "telegram_webhook_secret": "dGVzdC13ZWJob29r",
+                    "delivery_encryption_keys": "eyJ2ZXJzaW9uIjoxfQ",
+                },
+                "manifest": "e30",
+                "signature": "c2lnbmF0dXJl",
+                "public_key": "cHVibGljLWtleQ",
+            }
+        )
+        material = self.operations.calls[-1][1]
+        self.assertIn("delivery_encryption_keys", material["credentials"])
+
+    def test_teardown_operations_require_exact_tenant_payload(self):
+        for operation, expected in (
+            ("withdraw_route", "withdraw"),
+            ("stop_unit", "stop"),
+            ("remove_runtime_material", "remove"),
+        ):
+            self.server.dispatch({"operation": operation, "tenant_id": self.tenant_id})
+            self.assertEqual(expected, self.operations.calls[-1][0])
+        with self.assertRaisesRegex(HostOperationsError, "invalid host operation"):
+            self.server.dispatch(
+                {
+                    "operation": "remove_runtime_material",
+                    "tenant_id": self.tenant_id,
+                    "extra": True,
+                }
+            )
 
     def test_rejects_extra_fields_unsupported_credentials_and_untrusted_paths(self):
         with self.assertRaisesRegex(HostOperationsError, "invalid host operation"):

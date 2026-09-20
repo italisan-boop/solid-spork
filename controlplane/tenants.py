@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+import secrets
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from controlplane.deployments import queue_runtime_reconciliation
+from controlplane.deployments import queue_runtime_reconciliation, queue_teardown_job
 from controlplane.plan_policy import Entitlements, Plan, effective_entitlements, parse_plan
 from proxy_url import normalize_authenticated_http_proxy
 from controlplane.schema import connect, resolve_path
 from controlplane.secret_envelopes import (
+    EnvelopeCipher,
     SecretEnvelope,
     SecretEnvelopeError,
     UnixSocketSealer,
@@ -39,6 +42,7 @@ class Tenant:
     display_name: str
     owner_telegram_id: int
     plan: Plan
+    tenant_kind: str
     lifecycle_state: str
     canonical_host: str
     database_path: Path
@@ -107,6 +111,7 @@ def _tenant(row: sqlite3.Row) -> Tenant:
         display_name=row["display_name"],
         owner_telegram_id=row["owner_telegram_id"],
         plan=parse_plan(row["plan"]),
+        tenant_kind=row["tenant_kind"],
         lifecycle_state=row["lifecycle_state"],
         canonical_host=row["canonical_host"],
         database_path=Path(row["database_path"]),
@@ -128,7 +133,10 @@ def create_tenant(
     tenant_backup_root: str | Path,
     tenant_base_domain: str,
     actor_telegram_id: int,
+    tenant_kind: str = "legacy",
 ) -> Tenant:
+    if tenant_kind not in {"legacy", "managed"}:
+        raise ValueError("invalid tenant kind")
     if not isinstance(display_name, str) or not 1 <= len(display_name.strip()) <= 120:
         raise ValueError("invalid tenant display name")
     if not isinstance(owner_telegram_id, int) or isinstance(owner_telegram_id, bool) or owner_telegram_id <= 0:
@@ -148,8 +156,8 @@ def create_tenant(
             """
             INSERT INTO platform_tenants (
                 id, slug, display_name, owner_telegram_id, plan, lifecycle_state,
-                canonical_host, database_path, media_root, backup_root
-            ) VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)
+                canonical_host, database_path, media_root, backup_root, tenant_kind
+            ) VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)
             """,
             (
                 tenant_id,
@@ -161,6 +169,7 @@ def create_tenant(
                 str(database_path),
                 str(media_root),
                 str(backup_root),
+                tenant_kind,
             ),
         )
         database.execute(
@@ -298,6 +307,117 @@ def sealed_secret_kinds(control_database_path: str | Path, tenant_id: str) -> li
         return [row[0] for row in rows]
     finally:
         database.close()
+
+
+def ensure_delivery_encryption_envelope(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    cipher: EnvelopeCipher,
+) -> bool:
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        tenant = _ensure_mutable_tenant(database, tenant_id)
+        configured = database.execute(
+            """
+            SELECT 1 FROM tenant_secret_envelopes
+            WHERE tenant_id = ? AND secret_kind = 'delivery_encryption_keys'
+            """,
+            (tenant_id,),
+        ).fetchone()
+        if configured is not None:
+            database.commit()
+            return False
+        key_id = f"delivery-v1-{secrets.token_hex(8)}"
+        keyring = {
+            "version": 1,
+            "active_key_id": key_id,
+            "keys": {
+                key_id: base64.urlsafe_b64encode(secrets.token_bytes(32))
+                .decode("ascii")
+                .rstrip("=")
+            },
+        }
+        generation = tenant["runtime_generation"]
+        envelope = cipher.seal(
+            tenant_id,
+            "delivery_encryption_keys",
+            generation,
+            json.dumps(keyring, separators=(",", ":"), sort_keys=True),
+        )
+        database.execute(
+            """
+            INSERT INTO tenant_secret_envelopes (
+                tenant_id, secret_kind, generation, algorithm, ciphertext,
+                data_nonce, wrapped_key, wrap_nonce, key_version,
+                configured_by_platform_admin_id
+            ) VALUES (?, 'delivery_encryption_keys', ?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                tenant_id,
+                generation,
+                envelope.algorithm,
+                envelope.ciphertext,
+                envelope.data_nonce,
+                envelope.wrapped_key,
+                envelope.wrap_nonce,
+                envelope.key_version,
+            ),
+        )
+        _audit(
+            database,
+            actor_telegram_id=0,
+            action="tenant.delivery_encryption.initialized",
+            tenant_id=tenant_id,
+            details={"generation": generation, "keyring_version": 1},
+        )
+        database.commit()
+        return True
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def queue_missing_delivery_encryption_reconciliations(
+    control_database_path: str | Path,
+) -> int:
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        tenants = database.execute(
+            """
+            SELECT t.*
+            FROM platform_tenants AS t
+            WHERE t.lifecycle_state IN ('awaiting_owner_claim', 'active')
+              AND NOT EXISTS (
+                  SELECT 1 FROM tenant_secret_envelopes AS e
+                  WHERE e.tenant_id = t.id
+                    AND e.secret_kind = 'delivery_encryption_keys'
+              )
+            """
+        ).fetchall()
+        queued = sum(
+            queue_runtime_reconciliation(
+                database,
+                tenant=tenant,
+                actor_telegram_id=0,
+            )
+            is not None
+            for tenant in tenants
+        )
+        database.commit()
+        return queued
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
 
 def set_secret_envelopes(
     control_database_path: str | Path,
@@ -1115,10 +1235,12 @@ def soft_delete_tenant(
     try:
         database.execute("BEGIN IMMEDIATE")
         row = database.execute(
-            "SELECT slug, lifecycle_state FROM platform_tenants WHERE id = ?", (tenant_id,)
+            "SELECT slug, tenant_kind, lifecycle_state FROM platform_tenants WHERE id = ?", (tenant_id,)
         ).fetchone()
         if row is None:
             raise ValueError("tenant not found")
+        if row["tenant_kind"] != "legacy":
+            raise RuntimeError("managed tenant requires root teardown")
         if not isinstance(confirm_slug, str) or confirm_slug != row["slug"]:
             raise ValueError("tenant slug confirmation does not match")
         if row["lifecycle_state"] == "deleted":
@@ -1152,6 +1274,88 @@ def soft_delete_tenant(
         )
         database.commit()
         return True
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def request_managed_deletion(
+    control_database_path: str | Path,
+    *,
+    tenant_id: str,
+    confirm_slug: str,
+    actor_telegram_id: int,
+):
+    database = connect(control_database_path)
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        row = database.execute(
+            "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("tenant not found")
+        if row["tenant_kind"] != "managed":
+            raise RuntimeError("legacy tenant deletion requires legacy Console")
+        if not isinstance(confirm_slug, str) or confirm_slug != row["slug"]:
+            raise ValueError("tenant slug confirmation does not match")
+        state = row["lifecycle_state"]
+        if state == "deleted":
+            database.commit()
+            return None
+        if state == "provisioning":
+            raise RuntimeError("tenant provisioning is in progress")
+        if state not in {
+            "draft",
+            "migration_failed",
+            "awaiting_owner_claim",
+            "active",
+            "suspended",
+            "deleting",
+        }:
+            raise RuntimeError("tenant is not ready for deletion")
+        if state != "deleting":
+            generation = row["runtime_generation"] + 1
+            database.execute(
+                """
+                UPDATE platform_tenants
+                SET lifecycle_state = 'deleting', runtime_generation = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND lifecycle_state = ?
+                """,
+                (generation, tenant_id, state),
+            )
+            database.execute(
+                """
+                UPDATE tenant_domains
+                SET verification_state = 'disabled', verified_at = NULL
+                WHERE tenant_id = ?
+                """,
+                (tenant_id,),
+            )
+            _audit(
+                database,
+                actor_telegram_id=actor_telegram_id,
+                action="tenant.deletion.requested",
+                tenant_id=tenant_id,
+                details={
+                    "previous_state": state,
+                    "slug": row["slug"],
+                    "generation": generation,
+                },
+            )
+            row = database.execute(
+                "SELECT * FROM platform_tenants WHERE id = ?", (tenant_id,)
+            ).fetchone()
+        job = queue_teardown_job(
+            database,
+            tenant=row,
+            actor_telegram_id=actor_telegram_id,
+        )
+        database.commit()
+        return job
     except Exception:
         database.rollback()
         raise

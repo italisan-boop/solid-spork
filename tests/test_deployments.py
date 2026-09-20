@@ -8,6 +8,8 @@ from controlplane.controller import DeploymentController, DeploymentFailure
 from controlplane.deployments import (
     claim_next_deployment_job,
     complete_deployment_job,
+    complete_teardown_job,
+    queue_teardown_job,
     recover_abandoned_deployment_jobs,
     request_deployment,
     tenant_system_user,
@@ -57,6 +59,95 @@ class DeploymentJobTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tenant_system_user("../../root")
 
+    def test_teardown_job_prioritizes_cleanup_and_finalizes_tombstone(self):
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                "UPDATE platform_tenants SET tenant_kind = 'managed', lifecycle_state = 'deleting', runtime_generation = runtime_generation + 1 WHERE id = ?",
+                (self.tenant.id,),
+            )
+            connection.commit()
+            connection.row_factory = sqlite3.Row
+            tenant = connection.execute(
+                "SELECT * FROM platform_tenants WHERE id = ?", (self.tenant.id,)
+            ).fetchone()
+            connection.execute("BEGIN IMMEDIATE")
+            job = queue_teardown_job(
+                connection, tenant=tenant, actor_telegram_id=1
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertEqual("teardown", job.operation)
+        self.assertEqual(job, claim_next_deployment_job(self.database_path))
+        complete_teardown_job(
+            self.database_path,
+            job=job,
+            succeeded=True,
+            stage="teardown_completed",
+        )
+        connection = sqlite3.connect(self.database_path)
+        try:
+            tenant_state = connection.execute(
+                "SELECT tenant_kind, lifecycle_state FROM platform_tenants WHERE id = ?",
+                (self.tenant.id,),
+            ).fetchone()
+            runtime = connection.execute(
+                "SELECT state, published_hosts_json FROM tenant_runtime_deployments WHERE tenant_id = ?",
+                (self.tenant.id,),
+            ).fetchone()
+            secrets = connection.execute(
+                "SELECT COUNT(*) FROM tenant_secret_envelopes WHERE tenant_id = ?",
+                (self.tenant.id,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(("managed", "deleted"), tenant_state)
+        self.assertEqual(("stopped", None), runtime)
+        self.assertEqual(0, secrets)
+
+    def test_failed_teardown_can_be_requeued_without_duplicate_live_jobs(self):
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                "UPDATE platform_tenants SET tenant_kind = 'managed', lifecycle_state = 'deleting', runtime_generation = runtime_generation + 1 WHERE id = ?",
+                (self.tenant.id,),
+            )
+            connection.commit()
+            connection.row_factory = sqlite3.Row
+            tenant = connection.execute(
+                "SELECT * FROM platform_tenants WHERE id = ?", (self.tenant.id,)
+            ).fetchone()
+            connection.execute("BEGIN IMMEDIATE")
+            first = queue_teardown_job(connection, tenant=tenant, actor_telegram_id=1)
+            connection.commit()
+        finally:
+            connection.close()
+        claimed = claim_next_deployment_job(self.database_path)
+        complete_teardown_job(
+            self.database_path,
+            job=claimed,
+            succeeded=False,
+            stage="teardown_route",
+            error_type="LinuxOperationsError",
+        )
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.row_factory = sqlite3.Row
+            tenant = connection.execute(
+                "SELECT * FROM platform_tenants WHERE id = ?", (self.tenant.id,)
+            ).fetchone()
+            connection.execute("BEGIN IMMEDIATE")
+            retry = queue_teardown_job(connection, tenant=tenant, actor_telegram_id=1)
+            connection.commit()
+            live = connection.execute(
+                "SELECT COUNT(*) FROM tenant_deployment_jobs WHERE tenant_id = ? AND operation = 'teardown' AND state IN ('pending', 'running')",
+                (self.tenant.id,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertNotEqual(first.id, retry.id)
+        self.assertEqual(1, live)
     def test_claim_and_complete_deployment_job_uses_safe_outcome(self):
         requested = request_deployment(
             self.database_path,

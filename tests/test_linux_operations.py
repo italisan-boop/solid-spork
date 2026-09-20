@@ -1,4 +1,5 @@
 import sqlite3
+import os
 import tempfile
 import unittest
 import uuid
@@ -98,11 +99,101 @@ class LinuxPrivilegedOperationsTests(unittest.TestCase):
         )
         directory = self.paths.credential_root / tenant_id
         self.assertEqual(b"", (directory / "bot_proxy_url").read_bytes())
+        self.assertEqual(b"", (directory / "delivery_encryption_keys").read_bytes())
         self.assertEqual(
             b"123456:tenant-token", (directory / "telegram_bot_token").read_bytes()
         )
 
+    def test_materialization_writes_delivery_credential_with_root_only_mode(self):
+        tenant_id = str(uuid.uuid4())
+        credential = b'{"version":1,"active_key_id":"delivery-v1-test","keys":{"delivery-v1-test":"test"}}'
+        self._operations().write_runtime_material(
+            tenant_id=tenant_id,
+            runtime_generation=1,
+            credentials={
+                "telegram_bot_token": b"123456:tenant-token",
+                "telegram_webhook_secret": b"tenant-webhook-secret",
+                "delivery_encryption_keys": credential,
+            },
+            manifest=b"{}",
+            signature=b"signature",
+            public_key=b"public-key",
+        )
+        path = self.paths.credential_root / tenant_id / "delivery_encryption_keys"
+        self.assertEqual(credential, path.read_bytes())
+        if os.name == "posix":
+            self.assertEqual(0o400, path.stat().st_mode & 0o777)
+
+    def test_withdraw_tenant_route_validates_socket_owner_and_reloads_caddy(self):
+        tenant_id = str(uuid.uuid4())
+        runtime_directory = self.paths.runtime_root / tenant_id
+        runtime_directory.mkdir(parents=True)
+        route = self.paths.caddy_route_root / f"{tenant_id}.caddy"
+        route.parent.mkdir(parents=True)
+        route.write_text(
+            f"tenant.example.test {{\n reverse_proxy unix//{runtime_directory / 'tenant.sock'}\n}}\n",
+            encoding="utf-8",
+        )
+        with patch("controlplane.linux_operations._run") as run:
+            self._operations().withdraw_tenant_route(tenant_id)
+        self.assertFalse(route.exists())
+        self.assertEqual(
+            [
+                ["caddy", "validate", "--config", str(self.paths.caddy_config)],
+                ["systemctl", "reload", "caddy"],
+            ],
+            [call.args[0] for call in run.call_args_list],
+        )
+
+    def test_withdraw_tenant_route_rejects_unowned_route(self):
+        tenant_id = str(uuid.uuid4())
+        route = self.paths.caddy_route_root / f"{tenant_id}.caddy"
+        route.parent.mkdir(parents=True)
+        route.write_text("other tenant socket", encoding="utf-8")
+        with self.assertRaisesRegex(LinuxOperationsError, "not owned"):
+            self._operations().withdraw_tenant_route(tenant_id)
+        self.assertTrue(route.exists())
+
+    def test_remove_tenant_runtime_material_is_idempotent_and_scoped(self):
+        tenant_id = str(uuid.uuid4())
+        unit = self.paths.unit_root / f"bookapp-tenant@{tenant_id}.service.d"
+        unit.mkdir(parents=True)
+        (unit / "runtime.conf").write_text("[Service]", encoding="utf-8")
+        for root, names in (
+            (
+                self.paths.credential_root,
+                ("telegram_bot_token", "telegram_webhook_secret", "delivery_encryption_keys", "runtime.json", "runtime.sig"),
+            ),
+            (self.paths.runtime_root, ("tenant.sock",)),
+        ):
+            directory = root / tenant_id
+            directory.mkdir(parents=True)
+            for name in names:
+                (directory / name).write_bytes(b"fixture")
+        self._operations().remove_tenant_runtime_material(tenant_id)
+        self._operations().remove_tenant_runtime_material(tenant_id)
+        self.assertFalse(unit.exists())
+        self.assertFalse((self.paths.credential_root / tenant_id).exists())
+        self.assertFalse((self.paths.runtime_root / tenant_id).exists())
+
+    def test_withdraw_tenant_route_rolls_back_when_caddy_reload_fails(self):
+        tenant_id = str(uuid.uuid4())
+        runtime_directory = self.paths.runtime_root / tenant_id
+        runtime_directory.mkdir(parents=True)
+        route = self.paths.caddy_route_root / f"{tenant_id}.caddy"
+        route.parent.mkdir(parents=True)
+        previous = f"tenant.example.test {{ reverse_proxy unix//{runtime_directory / 'tenant.sock'} }}"
+        route.write_text(previous, encoding="utf-8")
+        with patch(
+            "controlplane.linux_operations._run",
+            side_effect=[None, LinuxOperationsError("reload failed")],
+        ):
+            with self.assertRaisesRegex(LinuxOperationsError, "reload failed"):
+                self._operations().withdraw_tenant_route(tenant_id)
+        self.assertEqual(previous, route.read_text(encoding="utf-8"))
+
     def test_identity_lookup_creates_only_explicitly_absent_user(self):
+
         user = "tenant-0123456789abcdef"
         with (
             patch(

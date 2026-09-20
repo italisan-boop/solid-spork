@@ -97,11 +97,6 @@ class ControlPlaneApiTests(unittest.TestCase):
             (f"/api/platform/tenants/{tenant_id}/provision", "post", None),
             (f"/api/platform/tenants/{tenant_id}/activate", "post", None),
             (f"/api/platform/tenants/{tenant_id}/lifecycle", "put", {"state": "suspended"}),
-            (
-                f"/api/platform/tenants/{tenant_id}",
-                "delete",
-                {"confirm_slug": "managed-store"},
-            ),
         ):
             response = getattr(managed_client, method)(
                 path,
@@ -117,7 +112,69 @@ class ControlPlaneApiTests(unittest.TestCase):
         self.assertEqual(409, response.status_code)
         self.assertIn("secrets", response.get_json()["error"])
 
-    def test_platform_session_requires_authenticated_admin(self):
+    def test_managed_delete_queues_root_teardown_with_typed_slug(self):
+        tenant = self.create_managed_tenant(slug="managed-delete-store")
+        path = f"/api/platform/tenants/{tenant['id']}"
+        headers = signed_headers(PLATFORM_ADMIN_ID)
+        self.assertEqual(
+            403,
+            self.managed_client.delete(
+                path,
+                headers=signed_headers(999),
+                json={"confirm_slug": tenant["slug"]},
+            ).status_code,
+        )
+        self.assertEqual(
+            400,
+            self.managed_client.delete(
+                path,
+                headers=headers,
+                json={"confirm_slug": "wrong-slug"},
+            ).status_code,
+        )
+        response = self.managed_client.delete(
+            path,
+            headers=headers,
+            json={"confirm_slug": tenant["slug"]},
+        )
+        self.assertEqual(202, response.status_code)
+        payload = response.get_json()
+        self.assertEqual("teardown", payload["job"]["operation"])
+        self.assertEqual("deleting", payload["tenant"]["lifecycle_state"])
+        self.assertEqual(
+            409,
+            self.managed_client.post(
+                f"{path}/deployments",
+                headers=headers,
+                json={"operation": "redeploy"},
+            ).status_code,
+        )
+        repeated = self.managed_client.delete(
+            path,
+            headers=headers,
+            json={"confirm_slug": tenant["slug"]},
+        )
+        self.assertEqual(202, repeated.status_code)
+        self.assertEqual(payload["job"]["id"], repeated.get_json()["job"]["id"])
+        stored = get_tenant(self.settings.database_path, tenant["id"])
+        self.assertEqual("managed", stored.tenant_kind)
+        self.assertEqual("deleting", stored.lifecycle_state)
+        connection = sqlite3.connect(self.settings.database_path)
+        try:
+            domains = connection.execute(
+                "SELECT verification_state FROM tenant_domains WHERE tenant_id = ?",
+                (tenant["id"],),
+            ).fetchall()
+            jobs = connection.execute(
+                "SELECT operation, state FROM tenant_deployment_jobs WHERE tenant_id = ?",
+                (tenant["id"],),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual([("disabled",)], domains)
+        self.assertEqual([("teardown", "pending")], jobs)
+
+
         response = self.client.get("/")
         try:
             self.assertEqual(200, response.status_code)

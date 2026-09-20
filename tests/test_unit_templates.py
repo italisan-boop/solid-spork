@@ -42,6 +42,7 @@ class UnitTemplateTests(unittest.TestCase):
         self.assertIn("UMask=0007", unit)
         self.assertIn("LoadCredential=telegram_bot_token:", unit)
         self.assertIn("LoadCredential=bot_proxy_url:", unit)
+        self.assertIn("LoadCredential=delivery_encryption_keys:", unit)
         self.assertNotIn("PLATFORM_DATABASE_PATH", unit)
         self.assertEqual(
             f"bookapp-tenant@{self.tenant_id}.service",

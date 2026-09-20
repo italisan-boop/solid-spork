@@ -18,6 +18,7 @@ from controlplane.tenants import (
     create_tenant,
     get_tenant,
     request_custom_domain,
+    request_managed_deletion,
     set_custom_domain_verification,
     set_secret_envelopes,
 )
@@ -103,6 +104,15 @@ class FakePrivilegedOperations:
         }:
             raise ValueError("tenant health response is invalid")
 
+    def withdraw_tenant_route(self, tenant_id):
+        self.calls.append(("withdraw", tenant_id))
+
+    def stop_tenant_unit(self, tenant_id):
+        self.calls.append(("stop", tenant_id))
+
+    def remove_tenant_runtime_material(self, tenant_id):
+        self.calls.append(("remove", tenant_id))
+
     def publish_tenant_route(self, **kwargs):
         self.calls.append(("route", kwargs["tenant_id"]))
         self.route = kwargs["hosts"]
@@ -170,7 +180,11 @@ class RootDeploymentAdapterTests(unittest.TestCase):
             [item[0] for item in self.operations.calls],
         )
         self.assertEqual(
-            {"telegram_bot_token", "telegram_webhook_secret"},
+            {
+                "telegram_bot_token",
+                "telegram_webhook_secret",
+                "delivery_encryption_keys",
+            },
             set(self.operations.material["credentials"]),
         )
         self.assertIn(self.tenant.canonical_host, self.operations.route)
@@ -347,6 +361,82 @@ class RootDeploymentAdapterTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual((23,), audit)
+
+    def test_redeploy_recreates_missing_delivery_credential_before_unit_materialization(self):
+        provisioned = self._provision()
+        self._record_owner_claim(provisioned, provisioned.owner_telegram_id)
+        self.adapter.reconcile(
+            DeploymentJob(
+                id="activate-for-delivery-reconciliation",
+                tenant_id=provisioned.id,
+                operation="activate",
+                desired_generation=provisioned.runtime_generation,
+                actor_telegram_id=17,
+            )
+        )
+        active = get_tenant(self.control_database, provisioned.id)
+        database = sqlite3.connect(self.control_database)
+        try:
+            database.execute(
+                """
+                DELETE FROM tenant_secret_envelopes
+                WHERE tenant_id = ? AND secret_kind = 'delivery_encryption_keys'
+                """,
+                (active.id,),
+            )
+            database.commit()
+        finally:
+            database.close()
+        self.operations.calls.clear()
+        self.adapter.reconcile(
+            DeploymentJob(
+                id="delivery-reconciliation",
+                tenant_id=active.id,
+                operation="redeploy",
+                desired_generation=active.runtime_generation,
+                actor_telegram_id=17,
+            )
+        )
+        self.assertIn(
+            "delivery_encryption_keys", self.operations.material["credentials"]
+        )
+        self.assertNotIn(
+            self.operations.material["credentials"]["delivery_encryption_keys"],
+            self.operations.material["manifest"],
+        )
+        self.assertLess(
+            [call[0] for call in self.operations.calls].index("material"),
+            [call[0] for call in self.operations.calls].index("unit"),
+        )
+
+    def test_managed_teardown_withdraws_route_before_unit_and_material_cleanup(self):
+        connection = sqlite3.connect(self.control_database)
+        try:
+            connection.execute(
+                "UPDATE platform_tenants SET tenant_kind = 'managed' WHERE id = ?",
+                (self.tenant.id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.tenant.database_path.parent.mkdir(parents=True)
+        self.tenant.media_root.mkdir(parents=True)
+        self.tenant.backup_root.mkdir(parents=True)
+        job = request_managed_deletion(
+            self.control_database,
+            tenant_id=self.tenant.id,
+            confirm_slug=self.tenant.slug,
+            actor_telegram_id=17,
+        )
+        self.operations.calls.clear()
+        result = self.adapter.reconcile(job)
+        self.assertEqual("teardown_completed", result.stage)
+        self.assertEqual(
+            ["withdraw", "stop", "remove"],
+            [item[0] for item in self.operations.calls],
+        )
+        self.assertNotIn("material", [item[0] for item in self.operations.calls])
+        self.assertTrue(self.tenant.database_path.parent.exists())
 
     def test_redeploy_publishes_added_host_only_after_health(self):
         provisioned = self._provision()
