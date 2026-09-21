@@ -99,7 +99,8 @@ class AdminOrderUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Скидка промокода: −300 ₽", text)
         self.assertIn("Скидка бонуса: −200 ₽", text)
         self.assertIn(("📍 Данные доставки", "delivery_details:44"), buttons)
-        self.assertIn(("📦 Собран", "delivery_status:44:packed"), buttons)
+        self.assertIn(("🧾 Ожидает сборки", "order_detail_44"), buttons)
+        self.assertNotIn(("📦 Собран", "delivery_status:44:packed"), buttons)
         self.assertIn(("❌ Отменить", "cancel_order_44"), buttons)
 
     async def test_order_list_preserves_status_and_date_sort(self):

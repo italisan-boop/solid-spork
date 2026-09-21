@@ -40,6 +40,54 @@ _HEADERS = (
 )
 
 
+def build_book_import_template_xlsx() -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.comments import Comment
+    from openpyxl.styles import Font
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Книги"
+    worksheet.append(_HEADERS)
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = "A1:H1"
+    widths = (12, 36, 28, 52, 14, 24, 16, 18)
+    hints = (
+        "ID существующей книги для обновления; оставьте пустым для новой.",
+        "Обязательное название книги.",
+        "Автор книги.",
+        "Описание книги.",
+        "Обязательная цена в рублях, целое число.",
+        "Существующая активная категория или пустое значение.",
+        "finite для ограниченного остатка или unlimited для неограниченного.",
+        "Количество для finite; пусто для unlimited.",
+    )
+    for index, (header, width, hint) in enumerate(zip(_HEADERS, widths, hints, strict=True), start=1):
+        cell = worksheet.cell(1, index, header)
+        cell.font = Font(bold=True)
+        cell.comment = Comment(hint, "BookApp")
+        worksheet.column_dimensions[cell.column_letter].width = width
+    for row in range(2, 102):
+        worksheet.cell(row, 7).value = None
+    stock_mode = DataValidation(type="list", formula1='"finite,unlimited"', allow_blank=False)
+    worksheet.add_data_validation(stock_mode)
+    stock_mode.add("G2:G101")
+    book_id_validation = DataValidation(type="whole", operator="between", formula1="1", formula2="2000000000", allow_blank=True)
+    worksheet.add_data_validation(book_id_validation)
+    book_id_validation.add("A2:A101")
+    price_validation = DataValidation(type="whole", operator="between", formula1="1", formula2="10000000", allow_blank=False)
+    worksheet.add_data_validation(price_validation)
+    price_validation.add("E2:E101")
+    stock_quantity_validation = DataValidation(type="whole", operator="between", formula1="0", formula2="1000000", allow_blank=True)
+    worksheet.add_data_validation(stock_quantity_validation)
+    stock_quantity_validation.add("H2:H101")
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
+
+
 class BookImportError(ValueError):
     pass
 

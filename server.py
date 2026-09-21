@@ -3,6 +3,7 @@ from werkzeug.serving import WSGIRequestHandler
 from functools import wraps
 from html import escape
 import logging
+import io
 import requests
 import os
 import re
@@ -20,10 +21,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from authz import actor_role_sync, capabilities_for_role, has_permission_sync, is_owner_sync
 from config import settings
 from db.deliveries import (
+    METHOD_LABELS,
     METHOD_RUSSIAN_POST_PICKUP,
     METHOD_SDEK_PICKUP,
     METHOD_SELF_PICKUP,
     SHIPMENT_AWAITING_PAYMENT,
+    SHIPMENT_LABELS,
     safe_delivery_summary,
 )
 from db.inventory import (
@@ -32,6 +35,7 @@ from db.inventory import (
     commit_order_inventory,
     adjust_stock_sync,
     inventory_summary_sync,
+    list_inventory_movements_export_sync,
     list_inventory_movements_sync,
     list_inventory_sync,
     recent_movements_sync,
@@ -43,8 +47,17 @@ from db.staff import (
     list_staff_sync,
     set_staff_member_sync,
 )
-from db.audit import append_audit_event, list_audit_events_sync
-from db.book_imports import BookImportError, commit_book_import_sync, preview_book_import_sync
+from db.audit import (
+    append_audit_event,
+    list_audit_events_export_sync,
+    list_audit_events_sync,
+)
+from db.book_imports import (
+    BookImportError,
+    build_book_import_template_xlsx,
+    commit_book_import_sync,
+    preview_book_import_sync,
+)
 from db.fulfillment import (
     FulfillmentError,
     claim_fulfillment_sync,
@@ -266,7 +279,7 @@ def get_books_sync(sort_by='default'):
         order_clause = "b.sort_order ASC, b.id ASC"
 
     cursor.execute(f"""
-        SELECT b.id, b.title, b.price, b.category, b.emoji, b.cover_photo, b.description, b.images, b.category_id,
+        SELECT b.id, b.title, COALESCE(b.author, '') AS author, b.price, b.category, b.emoji, b.cover_photo, b.description, b.images, b.category_id,
                c.emoji as category_emoji,
                b.stock_quantity,
                CASE
@@ -1093,10 +1106,37 @@ STATUS_LABELS = {
 }
 
 
-def _csv_cell(value):
-    if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"}:
+def _spreadsheet_cell(value):
+    if not isinstance(value, str):
+        return value
+    stripped = value.lstrip()
+    if stripped[:1] in {"=", "+", "-", "@"} or (value and ord(value[0]) < 32):
         return "'" + value
     return value
+
+
+def _csv_cell(value):
+    return _spreadsheet_cell(value)
+
+
+def _xlsx_response(sheets: list[tuple[str, list[str], list[list[object]]]], filename: str):
+    from openpyxl import Workbook
+
+    workbook = Workbook(write_only=True)
+    for title, headers, rows in sheets:
+        worksheet = workbook.create_sheet(title=title)
+        worksheet.append([_spreadsheet_cell(header) for header in headers])
+        for row in rows:
+            worksheet.append([_spreadsheet_cell(value) for value in row])
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    response = Response(
+        output.getvalue(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 def _csv_response(rows, headers, filename):
@@ -1605,6 +1645,17 @@ def api_admin_staff():
     return jsonify({"staff": staff})
 
 
+@app.route('/api/admin/books/import/template', methods=['GET'])
+@require_telegram_permission("book.import")
+def api_book_import_template():
+    response = Response(
+        build_book_import_template_xlsx(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response.headers["Content-Disposition"] = 'attachment; filename="books-import-template.xlsx"'
+    return response
+
+
 @app.route('/api/admin/books/import/preview', methods=['POST'])
 @require_telegram_permission("book.import")
 def api_preview_book_import():
@@ -1642,7 +1693,13 @@ def api_fulfillment_queue():
         limit = int(request.args.get("limit", "50"))
     except ValueError:
         return jsonify({"error": "limit must be an integer"}), 400
-    return jsonify({"orders": list_fulfillment_queue_sync(limit=limit)})
+    return jsonify({
+        "orders": list_fulfillment_queue_sync(
+            actor_user_id=g.telegram_user.id,
+            is_owner=g.staff_role == "owner",
+            limit=limit,
+        )
+    })
 
 
 @app.route('/api/admin/fulfillment/<int:order_id>', methods=['GET'])
@@ -1655,7 +1712,7 @@ def api_fulfillment_detail(order_id: int):
             is_owner=g.staff_role == "owner",
         )
     except FulfillmentError as error:
-        return jsonify({"error": str(error)}), 409
+        return jsonify({"error": str(error), "code": error.code}), 409
     return jsonify({"fulfillment": record})
 
 
@@ -1667,7 +1724,7 @@ def api_fulfillment_claim(order_id: int):
     try:
         record = claim_fulfillment_sync(order_id, g.telegram_user.id, g.staff_role)
     except FulfillmentError as error:
-        return jsonify({"error": str(error)}), 409
+        return jsonify({"error": str(error), "code": error.code}), 409
     return jsonify({"fulfillment": record})
 
 
@@ -1698,7 +1755,7 @@ def api_fulfillment_line(order_id: int):
             is_owner=g.staff_role == "owner",
         )
     except FulfillmentError as error:
-        return jsonify({"error": str(error)}), 409
+        return jsonify({"error": str(error), "code": error.code}), 409
     return jsonify({"fulfillment": record})
 
 
@@ -1738,12 +1795,19 @@ def api_fulfillment_print(order_id: int):
                 order_id, payload["method"], payload["destination_encrypted"]
             )
     except (FulfillmentError, DeliveryCryptoError) as error:
-        return jsonify({"error": str(error)}), 409
+        payload = {"error": str(error)}
+        if isinstance(error, FulfillmentError):
+            payload["code"] = error.code
+        return jsonify(payload), 409
     return jsonify({
         "order_id": payload["id"],
         "created_at": payload["created_at"],
         "method": payload["method"],
+        "method_label": METHOD_LABELS.get(payload["method"], payload["method"]),
         "shipment_status": payload["shipment_status"],
+        "shipment_label": SHIPMENT_LABELS.get(
+            payload["shipment_status"], payload["shipment_status"]
+        ),
         "recipient": recipient,
         "fulfillment": payload["fulfillment"],
     })
@@ -1771,6 +1835,57 @@ def api_admin_audit():
         )
     })
 
+
+@app.route('/api/admin/export/action-journal.xlsx', methods=['GET'])
+@require_telegram_user
+def api_export_action_journal():
+    user_id = g.telegram_user.id
+    can_inventory = has_permission_sync(
+        user_id, "inventory.read", legacy_admin_ids=ADMIN_IDS
+    )
+    can_audit = has_permission_sync(user_id, "audit.read", legacy_admin_ids=ADMIN_IDS)
+    if not can_inventory and not can_audit:
+        return jsonify({"error": "Forbidden"}), 403
+    sheets: list[tuple[str, list[str], list[list[object]]]] = []
+    if can_inventory:
+        movements = list_inventory_movements_export_sync()
+        sheets.append((
+            "Движения остатков",
+            [
+                "ID", "Дата", "ID книги", "Книга", "ID заказа", "Операция",
+                "Изменение склада", "Изменение резерва", "Остаток", "Резерв",
+                "Сотрудник", "Причина",
+            ],
+            [
+                [
+                    row["id"], row["created_at"], row["book_id"], row["book_title"],
+                    row["order_id"], row["action"], row["stock_delta"],
+                    row["reserved_delta"], row["stock_after"], row["reserved_after"],
+                    row["actor_admin_id"], row["reason"],
+                ]
+                for row in movements
+            ],
+        ))
+    if can_audit:
+        events = list_audit_events_export_sync()
+        sheets.append((
+            "Аудит действий",
+            [
+                "ID", "Дата", "Сотрудник", "Роль", "Источник", "Действие",
+                "Тип сущности", "ID сущности", "Результат", "Корреляция", "Детали",
+            ],
+            [
+                [
+                    row["id"], row["created_at"], row["actor_user_id"], row["actor_role"],
+                    row["source"], row["action"], row["entity_type"], row["entity_id"],
+                    row["outcome"], row["correlation_id"], row["details_json"],
+                ]
+                for row in events
+            ],
+        ))
+    response = _xlsx_response(sheets, "action-journal.xlsx")
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 @app.route('/api/admin/dashboard', methods=['GET'])
 @require_telegram_permission("reports.view")

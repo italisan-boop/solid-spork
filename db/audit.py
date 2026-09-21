@@ -88,6 +88,26 @@ def append_audit_event(
     return cursor.lastrowid
 
 
+def list_audit_events_export_sync(*, limit: int = 10_000) -> list[dict]:
+    from db.schema import connect
+
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        rows = database.execute(
+            """
+            SELECT id, actor_user_id, actor_role, source, action, entity_type,
+                   entity_id, correlation_id, details_json, outcome, created_at
+            FROM audit_events
+            ORDER BY id DESC LIMIT ?
+            """,
+            (max(1, min(limit, 10_000)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        database.close()
+
+
 def list_audit_events_sync(
     *,
     limit: int = 50,

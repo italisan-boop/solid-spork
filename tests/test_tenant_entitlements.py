@@ -41,14 +41,33 @@ class TenantEntitlementAuthorizationTests(unittest.TestCase):
     def test_start_owner_is_denied_business_and_pro_modules(self):
         with self.context(Plan.START).scope():
             self.assertTrue(has_permission_sync(101, "catalog.manage"))
+            self.assertTrue(has_permission_sync(101, "branding.manage"))
             self.assertFalse(has_permission_sync(101, "inventory.read"))
             self.assertFalse(has_permission_sync(101, "book.import"))
             self.assertFalse(has_permission_sync(101, "reports.view"))
             self.assertFalse(has_permission_sync(101, "campaign.manage"))
             self.assertFalse(has_permission_sync(101, "broadcast.send"))
             capabilities = capabilities_for_role("owner")
+        self.assertIn("branding.manage", capabilities)
         self.assertNotIn("inventory.read", capabilities)
         self.assertNotIn("campaign.manage", capabilities)
+
+    def test_branding_override_denies_owner_edit_permission(self):
+        context = TenantContext(
+            tenant_id="tenant",
+            canonical_host="tenant.example.test",
+            database_path=self.database_path,
+            media_root=self.root / "media",
+            backup_root=self.root / "backups",
+            owner_telegram_id=101,
+            entitlements=effective_entitlements(
+                Plan.START, feature_overrides={"branding": False}
+            ),
+            runtime_generation=1,
+        )
+        with context.scope():
+            self.assertFalse(has_permission_sync(101, "branding.manage"))
+            self.assertNotIn("branding.manage", capabilities_for_role("owner"))
 
     def test_business_and_pro_expose_only_their_modules(self):
         with self.context(Plan.BUSINESS).scope():

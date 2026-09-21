@@ -2,7 +2,9 @@ import json
 import asyncio
 import time
 import html
+import re
 from collections import deque
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from aiogram import Bot, Router, F
 from aiogram.types import Message, WebAppInfo, CallbackQuery, LabeledPrice
 from aiogram.filters import CommandStart, Command
@@ -282,12 +284,56 @@ async def _is_in_support(user_id: int) -> bool:
 
 
 
+_START_BOOK_PAYLOAD = re.compile(r"ref_([1-9]\d*)_book_([1-9]\d*)\Z")
+_MAX_BOOK_ID = 9_223_372_036_854_775_807
+
+
+def _parse_start_payload(payload: str) -> tuple[str, int | None]:
+    if not isinstance(payload, str) or len(payload) > 64:
+        return "", None
+    match = _START_BOOK_PAYLOAD.fullmatch(payload)
+    if not match:
+        return payload, None
+    referrer_id, book_id = (int(value) for value in match.groups())
+    if referrer_id > _MAX_BOOK_ID or book_id > _MAX_BOOK_ID:
+        return "", None
+    return f"ref_{referrer_id}", book_id
+
+
+def _webapp_url_for_book(book_id: int | None = None) -> str:
+    if book_id is None:
+        return settings.WEBAPP_URL
+    if isinstance(book_id, bool) or not isinstance(book_id, int) or not 0 < book_id <= _MAX_BOOK_ID:
+        return settings.WEBAPP_URL
+    parsed = urlsplit(settings.WEBAPP_URL)
+    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "book"]
+    query.append(("book", str(book_id)))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def _start_menu_markup(launch_book_id: int | None = None):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="📖 Открыть книгу" if launch_book_id is not None else "🌱 Открыть магазин",
+        web_app=WebAppInfo(url=_webapp_url_for_book(launch_book_id)),
+    )
+    builder.button(text="📜 Мои заказы", callback_data="my_orders")
+    builder.button(text="👥 Пригласить друга", callback_data="invite_friend")
+    builder.button(text="🆘 Поддержка", callback_data="support")
+    builder.button(text="ℹ️ О магазине", callback_data="about")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_with_ref(message: Message, state: FSMContext):
     """Обработка /start с реферальным кодом"""
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
 
-    ref_code = message.text.split()[1] if len(message.text.split()) > 1 else ""
+    raw_payload = message.text.split()[1] if len(message.text.split()) > 1 else ""
+    ref_code, launch_book_id = _parse_start_payload(raw_payload)
+    if launch_book_id is not None and await db.get_book(launch_book_id) is None:
+        launch_book_id = None
     await db.capture_campaign_first_touch(message.from_user.id, ref_code)
     referrer_id = await db.parse_referral_code(ref_code)
 
@@ -295,7 +341,7 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
         already_referred = await db.check_referral_exists(message.from_user.id)
 
         if not already_referred:
-            await state.update_data(referrer_id=referrer_id)
+            await state.update_data(referrer_id=referrer_id, launch_book_id=launch_book_id)
             await state.set_state(ReferralState.waiting_for_confirmation)
 
             builder = InlineKeyboardBuilder()
@@ -312,7 +358,7 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
             )
             return
 
-    await _send_start_menu(message)
+    await _send_start_menu(message, launch_book_id=launch_book_id)
 
 
 @router.message(CommandStart())
@@ -322,20 +368,13 @@ async def cmd_start(message: Message):
     await _send_start_menu(message)
 
 
-async def _send_start_menu(message: Message):
+async def _send_start_menu(message: Message, *, launch_book_id: int | None = None):
     """Отправка стартового меню"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=settings.WEBAPP_URL))
-    builder.button(text="📜 Мои заказы", callback_data="my_orders")
-    builder.button(text="👥 Пригласить друга", callback_data="invite_friend")
-    builder.button(text="🆘 Поддержка", callback_data="support")
-    builder.button(text="ℹ️ О магазине", callback_data="about")
-    builder.adjust(1)
+    if launch_book_id is not None and await db.get_book(launch_book_id) is None:
+        launch_book_id = None
     await message.answer(
-        "🌿 Добро пожаловать в <b>Семена Знаний</b>!\n\n"
-        "Книжный магазин, где цена указана за одну страницу.\n"
-        "Нажмите кнопку ниже, чтобы открыть каталог 👇",
-        reply_markup=builder.as_markup(), parse_mode="HTML"
+        await db.get_message_template("branding.greeting"),
+        reply_markup=_start_menu_markup(launch_book_id), parse_mode="HTML"
     )
 
 
@@ -363,12 +402,7 @@ async def my_orders_callback(callback: CallbackQuery):
 @router.callback_query(F.data == "about")
 async def about_callback(callback: CallbackQuery):
     await callback.message.answer(
-        "📚 <b>Семена Знаний</b> — это:\n"
-        "• Ботанические атласы и травники\n"
-        "• Книги о садоводстве и флористике\n"
-        "• Альбомы с акварельной иллюстрацией\n"
-        "• Художественная литература о природе\n\n"
-        "📍 Ждём вас в Mini App!",
+        await db.get_message_template("branding.about"),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -1822,12 +1856,15 @@ async def process_checkout(message: Message, data: dict, bot: Bot):
 async def ref_accept_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
     data = await state.get_data()
     referrer_id = data.get('referrer_id')
+    launch_book_id = data.get("launch_book_id")
     referred_id = callback.from_user.id
 
     if not referrer_id:
         await callback.answer("❌ Ошибка", show_alert=True)
         return
 
+    if not isinstance(launch_book_id, int) or await db.get_book(launch_book_id) is None:
+        launch_book_id = None
     await db.create_referral(referrer_id, referred_id)
     await db.add_user_bonus(referrer_id, 'percent', 15)
     await db.add_user_bonus(referred_id, 'percent', 10)
@@ -1839,6 +1876,7 @@ async def ref_accept_callback(callback: CallbackQuery, state: FSMContext, bot: B
         f"✅ Вам начислена <b>скидка 10%</b> на первый заказ!\n"
         f"✅ Ваш друг получил <b>скидку 15%</b> на следующий заказ!\n\n"
         f"Скидка применится автоматически при оформлении заказа в Mini App 🛒",
+        reply_markup=_start_menu_markup(launch_book_id),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -1857,10 +1895,15 @@ async def ref_accept_callback(callback: CallbackQuery, state: FSMContext, bot: B
 
 @router.callback_query(F.data == "ref_decline")
 async def ref_decline_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    launch_book_id = data.get("launch_book_id")
+    if not isinstance(launch_book_id, int) or await db.get_book(launch_book_id) is None:
+        launch_book_id = None
     await state.clear()
     await callback.message.edit_text(
         "Хорошо! Добро пожаловать в «Семена Знаний» 🌿\n\n"
         "Нажмите кнопку ниже, чтобы открыть каталог 👇",
+        reply_markup=_start_menu_markup(launch_book_id),
     )
     await callback.answer()
 

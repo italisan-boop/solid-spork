@@ -21,6 +21,12 @@ class TemplateValidationTests(unittest.TestCase):
             "💬 <b>Ответ от поддержки «Семена Знаний»:</b>",
         )
 
+    def test_branding_defaults_are_valid_telegram_html(self):
+        branding = [template for template in TEMPLATES if template.group == "branding"]
+        self.assertEqual(["branding.greeting", "branding.about"], [template.key for template in branding])
+        for template in branding:
+            validate_template_value(template.key, template.default)
+
     def test_rejects_orphaned_closing_tag(self):
         with self.assertRaises(TemplateValidationError):
             validate_template_value("support.quick.greeting", "Здравствуйте </b>")
@@ -63,8 +69,8 @@ class MessageTemplateStorageTests(unittest.IsolatedAsyncioTestCase):
             "Добрый день!",
         )
         self.assertEqual(
-            await message_templates.get_message_template("support.quick.wait"),
-            next(template.default for template in TEMPLATES if template.key == "support.quick.wait"),
+            await message_templates.get_message_template("branding.greeting"),
+            next(template.default for template in TEMPLATES if template.key == "branding.greeting"),
         )
 
 

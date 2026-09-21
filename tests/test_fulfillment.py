@@ -1,4 +1,5 @@
 import hashlib
+import io
 import hmac
 import json
 import tempfile
@@ -8,6 +9,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlencode
+
+from openpyxl import load_workbook
 
 import db.connection as db_connection
 import db.schema as schema
@@ -105,8 +108,17 @@ class FulfillmentApiTests(unittest.TestCase):
         self.assertEqual(200, packed.status_code)
         self.assertFalse(packed.get_json()["already_packed"])
         repeated = self.request("POST", "/api/admin/fulfillment/1/pack")
-        self.assertEqual(200, repeated.status_code)
-        self.assertTrue(repeated.get_json()["already_packed"])
+        self.assertEqual(409, repeated.status_code)
+        self.assertEqual("already_packed", repeated.get_json()["code"])
+
+        queue = self.request("GET", "/api/admin/fulfillment").get_json()["orders"]
+        self.assertEqual("Собран", queue[0]["fulfillment_state_label"])
+        self.assertEqual("Самовывоз", queue[0]["method_label"])
+        self.assertEqual("Собран", queue[0]["shipment_label"])
+        self.assertTrue(queue[0]["status_only"])
+        self.assertFalse(queue[0]["can_open"])
+        self.assertFalse(queue[0]["can_claim"])
+        self.assertFalse(queue[0]["can_pack"])
 
         connection = schema.connect(self.database_path)
         try:
@@ -128,6 +140,14 @@ class FulfillmentApiTests(unittest.TestCase):
         self.assertEqual(403, self.request("GET", "/api/admin/audit").status_code)
         self.assertEqual(403, self.request("GET", "/api/admin/dashboard").status_code)
         self.assertEqual(200, self.request("GET", "/api/admin/fulfillment").status_code)
+    def test_warehouse_journal_export_contains_only_inventory_sheet(self):
+        response = self.request("GET", "/api/admin/export/action-journal.xlsx")
+        self.assertEqual(200, response.status_code)
+        workbook = load_workbook(io.BytesIO(response.data))
+        try:
+            self.assertEqual(["Движения остатков"], workbook.sheetnames)
+        finally:
+            workbook.close()
 
 
 if __name__ == "__main__":

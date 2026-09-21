@@ -6,6 +6,7 @@ from config import settings
 from controlplane.plan_policy import (
     FEATURE_ANALYTICS,
     FEATURE_BOOK_IMPORT,
+    FEATURE_BRANDING,
     FEATURE_BROADCAST,
     FEATURE_CAMPAIGNS,
     FEATURE_INVENTORY,
@@ -44,6 +45,7 @@ _EVENT_AUDIENCES = {
     "packing": {WAREHOUSE},
 }
 _PERMISSION_FEATURES = {
+    "branding.manage": FEATURE_BRANDING,
     "reports.view": FEATURE_ANALYTICS,
     "staff.manage": FEATURE_STAFF,
     "inventory.read": FEATURE_INVENTORY,
@@ -99,6 +101,7 @@ def capabilities_for_role(role: str | None) -> list[str]:
             return ["*"]
         permissions = set().union(*_ROLE_PERMISSIONS.values()) | {
             "catalog.manage",
+            "branding.manage",
             "broadcast.send",
             "admin.maintenance",
             "payment.configure",

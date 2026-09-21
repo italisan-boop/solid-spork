@@ -13,6 +13,29 @@ class MessageTemplate:
 
 TEMPLATES: tuple[MessageTemplate, ...] = (
     MessageTemplate(
+        key="branding.greeting",
+        group="branding",
+        title="Приветственное сообщение",
+        default=(
+            "🌿 Добро пожаловать в <b>Семена Знаний</b>!\n\n"
+            "Книжный магазин, где цена указана за одну страницу.\n"
+            "Нажмите кнопку ниже, чтобы открыть каталог 👇"
+        ),
+    ),
+    MessageTemplate(
+        key="branding.about",
+        group="branding",
+        title="О магазине",
+        default=(
+            "📚 <b>Семена Знаний</b> — это:\n"
+            "• Ботанические атласы и травники\n"
+            "• Книги о садоводстве и флористике\n"
+            "• Альбомы с акварельной иллюстрацией\n"
+            "• Художественная литература о природе\n\n"
+            "📍 Ждём вас в Mini App!"
+        ),
+    ),
+    MessageTemplate(
         key="support.quick.greeting",
         group="support",
         title="Приветствие",

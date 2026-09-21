@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlencode
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 import db.connection as db_connection
 import db.schema as schema
@@ -100,7 +100,7 @@ class BookImportApiTests(unittest.TestCase):
         connection = schema.connect(self.database_path)
         try:
             book = connection.execute(
-                "SELECT id, stock_quantity FROM books WHERE title = 'Импортированная книга'"
+                "SELECT id, stock_quantity, author FROM books WHERE title = 'Импортированная книга'"
             ).fetchone()
             movements = connection.execute(
                 "SELECT action, stock_delta FROM inventory_movements WHERE book_id = ?", (book[0],)
@@ -109,6 +109,7 @@ class BookImportApiTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(7, book[1])
+        self.assertEqual("Автор", book[2])
         self.assertEqual([("opening_balance", 7)], movements)
         self.assertIn(("catalog.import.committed",), audit_actions)
 
@@ -136,6 +137,32 @@ class BookImportApiTests(unittest.TestCase):
             connection.close()
         self.assertEqual(0, count)
         self.assertEqual(403, self.preview("books.csv", self.csv_content([]), user_id=202).status_code)
+    def test_import_template_is_authorized_and_round_trips_through_preview(self):
+        denied = self.client.get("/api/admin/books/import/template", headers=signed_headers(202))
+        self.assertEqual(403, denied.status_code)
+
+        response = self.client.get("/api/admin/books/import/template", headers=signed_headers())
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("private, no-store", response.headers["Cache-Control"])
+        self.assertIn("books-import-template.xlsx", response.headers["Content-Disposition"])
+        self.assertEqual(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            response.mimetype,
+        )
+        workbook = load_workbook(io.BytesIO(response.data))
+        try:
+            self.assertEqual(["Книги"], workbook.sheetnames)
+            sheet = workbook.active
+            self.assertEqual(HEADERS, [cell.value for cell in sheet[1]])
+            self.assertFalse(any(cell.data_type == "f" for cell in sheet[1]))
+            sheet.append(["", "Книга из шаблона", "Автор", "", 700, "Ботаника", "finite", 2])
+            filled = io.BytesIO()
+            workbook.save(filled)
+        finally:
+            workbook.close()
+        preview = self.preview("books-import-template.xlsx", filled.getvalue())
+        self.assertEqual(200, preview.status_code)
+        self.assertEqual(1, preview.get_json()["valid_rows"])
 
 
 if __name__ == "__main__":

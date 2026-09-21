@@ -92,6 +92,7 @@ runtime/server.py
 runtime/tenant_onboarding.html
 runtime/tenant_wsgi.py
 server.py
+setup_guide.html
 states.py
 storage/__init__.py
 storage/book_media.py

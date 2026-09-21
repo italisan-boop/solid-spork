@@ -92,6 +92,21 @@ class GrowthFeatureTests(unittest.TestCase):
         self.assertIsNone(books[3]["available_quantity"])
         self.assertTrue(books[3]["is_available"])
 
+    def test_catalog_exposes_author_without_changing_availability_contract(self):
+        connection = self.connection()
+        try:
+            connection.execute("UPDATE books SET author = ? WHERE id = 1", ("Мария Ботаник",))
+            connection.execute("UPDATE books SET author = NULL WHERE id = 2")
+            connection.commit()
+        finally:
+            connection.close()
+
+        books = {book["id"]: book for book in self.client.get("/api/books").get_json()["books"]}
+
+        self.assertEqual("Мария Ботаник", books[1]["author"])
+        self.assertEqual("", books[2]["author"])
+        self.assertIn("is_available", books[1])
+
     def test_referral_analytics_is_anonymous_and_paid_only(self):
         connection = self.connection()
         try:

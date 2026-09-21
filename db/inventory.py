@@ -686,6 +686,27 @@ def list_inventory_movements_sync(
         database.close()
 
 
+def list_inventory_movements_export_sync(*, limit: int = 10_000) -> list[dict]:
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        rows = database.execute(
+            """
+            SELECT m.id, m.book_id, b.title AS book_title, m.order_id, m.action,
+                   m.stock_delta, m.reserved_delta, m.stock_after, m.reserved_after,
+                   m.actor_admin_id, m.reason, m.created_at
+            FROM inventory_movements m
+            JOIN books b ON b.id = m.book_id
+            ORDER BY m.id DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 10_000)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        database.close()
+
+
 def claim_notification_outbox_sync(limit: int = 20, lease_seconds: int = 300) -> list[dict]:
     database = connect()
     database.row_factory = sqlite3.Row

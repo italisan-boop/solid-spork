@@ -71,7 +71,7 @@ def _can_cancel_order(order: dict) -> bool:
     )
 
 
-def admin_keyboard():
+def admin_keyboard(user_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="📋 Все заказы", callback_data="admin_orders_all")
     builder.button(text="📊 Статистика", callback_data="admin_stats")
@@ -85,6 +85,8 @@ def admin_keyboard():
     builder.button(text="🧹 Сброс рефералов", callback_data="admin_reset_referrals")
     builder.button(text="🎧 Поддержка", callback_data="admin_support_menu")
     builder.button(text="✏️ Тексты", callback_data="admin_texts")
+    if has_permission_sync(user_id, "branding.manage"):
+        builder.button(text="🎨 Брендинг", callback_data="admin_branding")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -117,7 +119,7 @@ async def cmd_admin(message: Message):
     await message.answer(
         f"👨‍💼 <b>Админ-панель</b>\n\n"
         f"Добро пожаловать, {message.from_user.full_name}!",
-        reply_markup=admin_keyboard(), parse_mode="HTML"
+        reply_markup=admin_keyboard(message.from_user.id), parse_mode="HTML"
     )
 
 
@@ -131,7 +133,7 @@ async def admin_menu(callback: CallbackQuery):
         callback,
         f"👨‍💼 <b>Админ-панель</b>\n\n"
         f"Добро пожаловать, {callback.from_user.full_name}!",
-        reply_markup=admin_keyboard(),
+        reply_markup=admin_keyboard(callback.from_user.id),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -403,7 +405,7 @@ def _add_delivery_action_buttons(
     shipment_status = delivery["shipment_status"]
     method = delivery["method"]
     if shipment_status == "preparing":
-        builder.button(text="📦 Собран", callback_data=f"delivery_status:{order_id}:packed")
+        builder.button(text="🧾 Ожидает сборки", callback_data=f"order_detail_{order_id}")
     if shipment_status == "packed":
         if method_supports_tracking(method):
             builder.button(
@@ -722,6 +724,9 @@ async def delivery_status_update(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
     _, order_id_text, target_status = callback.data.split(":", 2)
+    if target_status == SHIPMENT_PACKED:
+        await callback.answer("Заказ может собрать только кладовщик по чек-листу", show_alert=True)
+        return
     order_id = int(order_id_text)
     order = await db.get_order_full(order_id)
     delivery = order.get("delivery") if order else None
@@ -749,8 +754,6 @@ async def delivery_status_update(callback: CallbackQuery, bot: Bot):
     if target_status == SHIPMENT_DELIVERED:
         await clear_admin_notifications(order_id, bot)
         notification = f"✅ <b>Заказ #{order_id} выдан / доставлен.</b> Спасибо за покупку!"
-    elif target_status == SHIPMENT_PACKED:
-        notification = f"📦 <b>Заказ #{order_id} собран.</b> Скоро передадим его выбранной службе доставки."
     elif target_status == SHIPMENT_READY_FOR_PICKUP:
         if method == METHOD_SELF_PICKUP:
             pickup = delivery.get("public_instructions_snapshot") or "Данные самовывоза доступны в «Моих заказах»."

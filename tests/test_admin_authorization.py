@@ -17,7 +17,7 @@ from handlers.admin_orders import (
 )
 from handlers.admin_promo import admin_promo_create
 from handlers.admin_support import cb_support_reply, deferred_admin_reply
-from handlers.admin_texts import admin_texts, save_template_value
+from handlers.admin_texts import admin_branding, admin_texts, save_template_value
 from handlers.categories import category_add_start
 from handlers.payments import (
     admin_delivery_settings,
@@ -33,7 +33,13 @@ from handlers.payments import (
     stars_toggle,
     yookassa_toggle,
 )
-from handlers.user import _send_admin_reply, support_claims, universal_text_handler
+from handlers.user import (
+    _send_admin_reply,
+    _send_start_menu,
+    about_callback,
+    support_claims,
+    universal_text_handler,
+)
 from states import (
     CategoryState,
     CriticalActionState,
@@ -174,6 +180,81 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         set_template.assert_awaited_once_with("support.quick.greeting", "<b>new</b>")
 
+    async def test_branding_menu_has_only_buyer_texts_and_owner_can_save(self):
+        callback = self.callback("admin_branding", ADMIN_ID)
+        state = self.state()
+        values = {
+            "branding.greeting": "Приветствие",
+            "branding.about": "Описание",
+        }
+        with patch(
+            "handlers.admin_texts.db.get_message_templates",
+            new_callable=AsyncMock,
+            return_value=values,
+        ):
+            await admin_branding(callback, state)
+
+        buttons = [
+            (button.text, button.callback_data)
+            for row in callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(
+            [
+                ("Приветственное сообщение: Приветствие", "admin_text:branding.greeting"),
+                ("О магазине: Описание", "admin_text:branding.about"),
+                ("◀️ Назад", "admin_menu"),
+            ],
+            buttons,
+        )
+        state.clear.assert_awaited_once()
+
+        message = self.message(ADMIN_ID, "<b>Новое приветствие</b>")
+        state = self.state(data={"template_key": "branding.greeting"})
+        with patch("handlers.admin_texts.db.set_message_template", new_callable=AsyncMock) as set_template:
+            await save_template_value(message, state)
+        set_template.assert_awaited_once_with("branding.greeting", "<b>Новое приветствие</b>")
+
+    async def test_branding_rejects_outsider_and_forged_fsm_writer(self):
+        callback = self.callback("admin_branding")
+        state = self.state()
+        with patch("handlers.admin_texts.db.get_message_templates", new_callable=AsyncMock) as templates:
+            await admin_branding(callback, state)
+        templates.assert_not_awaited()
+        callback.answer.assert_awaited_once_with("❌ Нет прав", show_alert=True)
+
+        message = self.message(text="Подмена")
+        state = self.state(data={"template_key": "branding.about"})
+        with patch("handlers.admin_texts.db.set_message_template", new_callable=AsyncMock) as set_template:
+            await save_template_value(message, state)
+        set_template.assert_not_awaited()
+        state.clear.assert_awaited_once()
+
+    async def test_saved_branding_is_rendered_for_start_and_about(self):
+        message = self.message(77)
+        callback = self.callback("about", 77)
+        values = ["🌿 <b>Новый магазин</b>", "📚 <b>Новая история</b>"]
+        with patch(
+            "handlers.user.db.get_message_template",
+            new_callable=AsyncMock,
+            side_effect=values,
+        ) as get_template:
+            await _send_start_menu(message)
+            await about_callback(callback)
+
+        self.assertEqual("🌿 <b>Новый магазин</b>", message.answer.await_args.args[0])
+        self.assertEqual("HTML", message.answer.await_args.kwargs["parse_mode"])
+        self.assertEqual("📚 <b>Новая история</b>", callback.message.answer.await_args.args[0])
+        self.assertEqual("HTML", callback.message.answer.await_args.kwargs["parse_mode"])
+        self.assertEqual(
+            [
+                (("branding.greeting",), {}),
+                (("branding.about",), {}),
+            ],
+            [(call.args, call.kwargs) for call in get_template.await_args_list],
+        )
+
+
     async def test_orders_do_not_expose_legacy_public_callbacks(self):
         import handlers.user as user_handlers
 
@@ -206,6 +287,17 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         get_order.assert_not_awaited()
         complete.assert_not_awaited()
         bot.send_message.assert_not_awaited()
+
+    async def test_packed_delivery_callback_is_rejected_before_database_access(self):
+        callback = self.callback("delivery_status:44:packed", ADMIN_ID)
+        with patch("handlers.admin_orders.db.get_order_full", new_callable=AsyncMock) as get_order:
+            await delivery_status_update(callback, callback.bot)
+
+        get_order.assert_not_awaited()
+        callback.answer.assert_awaited_once_with(
+            "Заказ может собрать только кладовщик по чек-листу", show_alert=True
+        )
+
 
     async def test_delivered_callback_uses_atomic_repository_operation(self):
         callback = self.callback("delivery_status:44:delivered", ADMIN_ID)
@@ -276,6 +368,7 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         update_order.assert_not_awaited()
 
 
+    async def test_cancel_action_clears_forged_states(self):
         from handlers.user import cancel_action
 
         for current_state in (

@@ -373,6 +373,7 @@
             -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
         }
         .book-category { font-size: 12px; color: var(--text-light); margin-bottom: 8px; font-style: italic; }
+        .book-author { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
         .book-price-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
         .book-price { font-size: 18px; font-weight: 700; color: var(--price-color); }
         .book-hint { font-size: 11px; color: var(--text-light); opacity: 0.7; }
@@ -437,6 +438,7 @@
 
         .modal-body { padding: 24px; }
         .modal-title { font-size: 24px; font-weight: 700; color: var(--primary-green); margin-bottom: 8px; }
+        .modal-author { font-size: 14px; color: var(--text); margin-bottom: 5px; }
         .modal-category { font-size: 14px; color: var(--text-light); font-style: italic; margin-bottom: 16px; }
         .modal-description {
             font-size: 15px; line-height: 1.7; color: var(--text-dark); margin-bottom: 20px;
@@ -1099,6 +1101,7 @@
             </div>
             <div class="modal-body">
                 <h2 class="modal-title" id="modalTitle"></h2>
+                <div class="modal-author" id="modalAuthor" hidden></div>
                 <div class="modal-category" id="modalCategory"></div>
                 <div class="modal-description" id="modalDescription"></div>
                 <div class="modal-price-row">
@@ -1475,6 +1478,7 @@
                         return {
                             id: b.id,
                             title: b.title,
+                            author: typeof b.author === 'string' ? b.author.trim() : '',
                             price: b.price,
                             category: b.category,
                             category_emoji: b.category_emoji || '',
@@ -2035,6 +2039,7 @@
                 const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
 
                 const safeTitle = escapeHtml(book.title);
+                const safeAuthor = book.author ? escapeHtml(book.author) : '';
                 const safeCategory = escapeHtml(categoryDisplay);
                 const titleHtml = searchQuery ? highlightText(book.title, searchQuery) : safeTitle;
                 const categoryHtml = searchQuery ? highlightText(categoryDisplay, searchQuery) : safeCategory;
@@ -2053,6 +2058,7 @@
                         <div class="book-cover" data-book-id="${book.id}" onpointerdown="startCatalogSwipe(${book.id}, event)" onpointerup="endCatalogSwipe(${book.id}, event)" onpointercancel="catalogSwipeStarts.delete(${book.id})">${renderCatalogCover(book)}</div>
                         <div class="book-info">
                             <div class="book-title">${titleHtml}</div>
+                            ${safeAuthor ? `<div class="book-author">Автор: ${safeAuthor}</div>` : ''}
                             <div class="book-category">${categoryHtml}</div>
                             <div class="book-price-row">
                                 <div class="book-price">${book.price} ₽</div>
@@ -2196,12 +2202,17 @@
                 return;
             }
             const username = await resolveBotUsername();
-            if (!username || !presentationUserId) {
+            const senderId = Number(presentationUserId);
+            if (!username || !Number.isSafeInteger(senderId) || senderId <= 0 || !Number.isSafeInteger(book.id) || book.id <= 0) {
                 tg.showAlert('Не удалось получить ссылку бота. Попробуйте позже.');
                 return;
             }
 
-            const refCode = `ref_${presentationUserId}`;
+            const refCode = `ref_${senderId}_book_${book.id}`;
+            if (refCode.length > 64) {
+                tg.showAlert('Не удалось подготовить ссылку на книгу.');
+                return;
+            }
             const bookLink = `https://t.me/${username}?start=${encodeURIComponent(refCode)}`;
 
             const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
@@ -2256,6 +2267,9 @@
             currentImageIndex = 0;
 
             document.getElementById('modalTitle').textContent = book.title;
+            const authorEl = document.getElementById('modalAuthor');
+            authorEl.textContent = book.author ? `Автор: ${book.author}` : '';
+            authorEl.hidden = !book.author;
             const categoryDisplay = book.category_emoji ? `${book.category_emoji} ${book.category}` : book.category;
             document.getElementById('modalCategory').textContent = categoryDisplay;
             document.getElementById('modalPrice').textContent = `${book.price} ₽`;
@@ -3240,7 +3254,7 @@
         document.getElementById('campaignForm').addEventListener('submit', saveCampaign);
 
         let adminSession = null;
-        let operationsSection = 'inventory';
+        let operationsSection = 'home';
 
         function hasAdminCapability(capability) {
             return adminSession?.capabilities?.includes('*') || adminSession?.capabilities?.includes(capability);
@@ -3266,24 +3280,24 @@
         }
 
         function operationsTabs() {
-            const tabs = [];
+            const tabs = [['home', '🏠 Главная']];
             if (hasAdminCapability('inventory.read')) tabs.push(['inventory', '📦 Остатки']);
             if (hasAdminCapability('fulfillment.manage')) tabs.push(['fulfillment', '🧾 Сборка']);
             if (hasAdminCapability('book.import')) tabs.push(['import', '⬆️ Импорт']);
             if (hasAdminCapability('staff.manage')) tabs.push(['staff', '👥 Сотрудники']);
+            if (hasAdminCapability('inventory.read') || hasAdminCapability('audit.read')) tabs.push(['journal', '📜 Журнал']);
             return tabs;
         }
 
         function renderOperationsShell() {
             const container = document.getElementById('adminOperations');
             const tabs = operationsTabs();
-            if (!tabs.some(([key]) => key === operationsSection)) operationsSection = tabs[0]?.[0] || '';
-            document.getElementById('adminOwnerDashboard').style.display = hasAdminCapability('reports.view') ? '' : 'none';
+            if (!tabs.some(([key]) => key === operationsSection)) operationsSection = 'home';
+            document.getElementById('adminOwnerDashboard').style.display = operationsSection === 'home' && hasAdminCapability('reports.view') ? '' : 'none';
             container.innerHTML = `
                 <div class="operations-header"><h2 class="operations-title">${adminSession?.role === 'warehouse' ? 'Операции склада' : 'Операции магазина'}</h2><button class="operations-action" type="button" aria-label="Обновить текущий раздел" onclick="loadOperations()">🔄</button></div>
-                <div class="operations-tab-list">${tabs.map(([key, label]) => `<button type="button" class="${key === operationsSection ? 'active' : ''}" onclick="showOperations('${key}')">${label}</button>`).join('')}${hasAdminCapability('inventory.read') || hasAdminCapability('audit.read') ? '<button type="button" onclick="toggleActionJournal()">📜 Журнал действий</button>' : ''}</div>
-                <div id="operationsContent" class="operations-list"><div class="admin-empty">Загрузка...</div></div>
-                <div id="auditOperationsPanel" hidden></div>`;
+                <div class="operations-tab-list">${tabs.map(([key, label]) => `<button type="button" class="${key === operationsSection ? 'active' : ''}" onclick="showOperations('${key}')">${label}</button>`).join('')}</div>
+                <div id="operationsContent" class="operations-list"><div class="admin-empty">Загрузка...</div></div>`;
         }
 
         async function showOperations(section) {
@@ -3298,14 +3312,24 @@
             if (!content) return;
             content.innerHTML = '<div class="admin-empty">Загрузка...</div>';
             try {
+                if (operationsSection === 'home') renderHomeOperations(content);
                 if (operationsSection === 'inventory') await loadInventoryOperations(content);
                 if (operationsSection === 'fulfillment') await loadFulfillmentOperations(content);
                 if (operationsSection === 'import') renderImportOperations(content);
                 if (operationsSection === 'staff') await loadStaffOperations(content);
+                if (operationsSection === 'journal') await loadActionJournal(content);
             } catch (error) {
                 console.error('Ошибка загрузки операций:', error);
                 content.innerHTML = '<div class="admin-empty">Не удалось загрузить данные.</div>';
             }
+        }
+
+        function renderHomeOperations(content) {
+            if (hasAdminCapability('reports.view')) {
+                content.innerHTML = '<div class="operations-meta">Отчёты, экспорт и настройки кампаний находятся ниже.</div>';
+                return;
+            }
+            content.innerHTML = '<div class="admin-empty">На главной вкладке доступны сводки и инструменты, соответствующие вашим правам.</div>';
         }
 
         function inventoryMovementLabel(item) {
@@ -3371,7 +3395,7 @@
             const response = await fetch('/api/admin/fulfillment?limit=50', { headers: telegramAuthHeaders(), cache: 'no-store' });
             const result = await response.json();
             if (!response.ok) throw new Error(result.error);
-            content.innerHTML = (result.orders || []).map(order => `<div class="operations-row"><div class="operations-row-head"><span>Заказ #${order.order_id}</span><span>${escapeHtml(order.fulfillment_state)}</span></div><div class="operations-meta">${escapeHtml(order.method)} · ${escapeHtml(order.shipment_status)}${order.warehouse_user_id ? ` · сотрудник #${order.warehouse_user_id}` : ''}</div><button type="button" class="operations-action primary" onclick="openFulfillment(${order.order_id})">Открыть сборку</button></div>`).join('') || '<div class="admin-empty">Нет заказов для сборки.</div>';
+            content.innerHTML = (result.orders || []).map(order => `<div class="operations-row"><div class="operations-row-head"><span>Заказ #${order.order_id}</span><span>${escapeHtml(order.fulfillment_state_label)}</span></div><div class="operations-meta">${escapeHtml(order.method_label)} · ${escapeHtml(order.shipment_label)}${order.warehouse_user_id ? ` · сотрудник #${order.warehouse_user_id}` : ''}</div>${order.can_open ? `<button type="button" class="operations-action primary" onclick="openFulfillment(${order.order_id})">Открыть сборку</button>` : ''}</div>`).join('') || '<div class="admin-empty">Нет заказов для сборки.</div>';
         }
 
         async function openFulfillment(orderId) {
@@ -3398,18 +3422,14 @@
         }
 
         function renderFulfillment(content, orderId, fulfillment) {
-            const isOwner = adminSession?.role === 'owner';
-            const claimedByCurrentUser = fulfillment.warehouse_user_id === adminSession?.user_id;
-            const canEdit = fulfillment.state !== 'packed' && (isOwner || claimedByCurrentUser);
-            const canClaim = fulfillment.state !== 'packed' && !fulfillment.warehouse_user_id;
-            const lines = fulfillment.lines.map(line => canEdit
+            const lines = fulfillment.lines.map(line => fulfillment.can_update_lines
                 ? `<form class="operations-form" data-title="${escapeHtml(line.title)}" onsubmit="setPackingLine(event, ${orderId}, ${line.book_id}, ${line.price})"><div>${escapeHtml(line.title)} · ${line.picked_quantity}/${line.ordered_quantity}</div><input name="picked" type="number" min="0" max="${line.ordered_quantity}" value="${line.picked_quantity}"><button type="submit" class="operations-action">Отметить</button></form>`
                 : `<div class="operations-meta">${escapeHtml(line.title)} · ${line.picked_quantity}/${line.ordered_quantity}</div>`
             ).join('');
             const assignment = fulfillment.warehouse_user_id
                 ? `В работе у сотрудника #${fulfillment.warehouse_user_id}`
                 : 'Заказ ещё не взят в работу';
-            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Сборка #${orderId}</span><span>${escapeHtml(fulfillment.state)}</span></div><div class="operations-meta">${assignment}</div>${lines}<div class="operations-action-grid">${canClaim ? `<button class="operations-action primary" type="button" onclick="claimFulfillment(${orderId}, this)">Взять в работу</button>` : ''}<button class="operations-action primary" type="button" onclick="packFulfillment(${orderId}, this)" ${canEdit ? '' : 'disabled'}>📦 Собран</button><button class="operations-action" type="button" onclick="printPackingSheet(${orderId})">🖨️ A4</button><button class="operations-action" type="button" onclick="showOperations('fulfillment')">◀️ Очередь</button></div></div>`;
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Сборка #${orderId}</span><span>${escapeHtml(fulfillment.fulfillment_state_label)}</span></div><div class="operations-meta">${escapeHtml(fulfillment.method_label)} · ${escapeHtml(fulfillment.shipment_label)}</div><div class="operations-meta">${assignment}</div>${lines}<div class="operations-action-grid">${fulfillment.can_claim ? `<button class="operations-action primary" type="button" onclick="claimFulfillment(${orderId}, this)">Взять в работу</button>` : ''}${fulfillment.can_pack ? `<button class="operations-action primary" type="button" onclick="packFulfillment(${orderId}, this)">📦 Собран</button>` : ''}${fulfillment.can_print ? `<button class="operations-action" type="button" onclick="printPackingSheet(${orderId})">🖨️ A4</button>` : ''}<button class="operations-action" type="button" onclick="showOperations('fulfillment')">◀️ Очередь</button></div></div>`;
         }
 
         async function setPackingLine(event, orderId, bookId, price) {
@@ -3471,14 +3491,14 @@
             const lines = result.fulfillment.lines.map(line => `<tr><td>${escapeHtml(line.title)}</td><td>${line.ordered_quantity}</td><td>□</td></tr>`).join('');
             const printNode = document.createElement('section');
             printNode.className = 'operations-print';
-            printNode.innerHTML = `<h1>Лист сборки · заказ #${result.order_id}</h1><p>Дата заказа: ${escapeHtml(formatOrderDate(result.created_at))}</p><p>Доставка: ${escapeHtml(result.method)} · ${escapeHtml(result.shipment_status)}</p><p>${recipient.instructions ? `Инструкция: ${escapeHtml(recipient.instructions)}` : `Получатель: ${escapeHtml(recipient.recipient_name || '')}<br>Телефон: ${escapeHtml(recipient.recipient_phone || '')}<br>Город: ${escapeHtml(recipient.city || '')}<br>Пункт: ${escapeHtml(recipient.pickup_point || recipient.post_office || '')}`}</p><table><thead><tr><th>Книга</th><th>Кол-во</th><th>Проверено</th></tr></thead><tbody>${lines}</tbody></table>`;
+            printNode.innerHTML = `<h1>Лист сборки · заказ #${result.order_id}</h1><p>Дата заказа: ${escapeHtml(formatOrderDate(result.created_at))}</p><p>Доставка: ${escapeHtml(result.method_label)} · ${escapeHtml(result.shipment_label)}</p><p>${recipient.instructions ? `Инструкция: ${escapeHtml(recipient.instructions)}` : `Получатель: ${escapeHtml(recipient.recipient_name || '')}<br>Телефон: ${escapeHtml(recipient.recipient_phone || '')}<br>Город: ${escapeHtml(recipient.city || '')}<br>Пункт: ${escapeHtml(recipient.pickup_point || recipient.post_office || '')}`}</p><table><thead><tr><th>Книга</th><th>Кол-во</th><th>Проверено</th></tr></thead><tbody>${lines}</tbody></table>`;
             document.body.appendChild(printNode);
             window.addEventListener('afterprint', () => printNode.remove(), {once: true});
             window.print();
         }
 
         function renderImportOperations(content) {
-            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Импорт книг CSV/XLSX</span></div><div class="operations-meta">Колонки: book_id, title, author, description, price_rub, category, stock_mode, stock_quantity. Изображения импортируются отдельно.</div><form class="operations-form" onsubmit="previewBookImport(event)"><input name="file" type="file" accept=".csv,.xlsx" required><button class="operations-action primary" type="submit">Проверить файл</button></form><div id="importPreview" aria-live="polite"></div></div>`;
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Импорт книг CSV/XLSX</span></div><div class="operations-meta">Скачайте шаблон: в нём уже указаны точные колонки и допустимые значения. Изображения импортируются отдельно.</div><div class="operations-action-grid"><button class="operations-action" type="button" onclick="downloadAdminFile('/api/admin/books/import/template', 'books-import-template.xlsx')">⬇️ Скачать шаблон XLSX</button></div><form class="operations-form" onsubmit="previewBookImport(event)"><input name="file" type="file" accept=".csv,.xlsx" required><button class="operations-action primary" type="submit">Проверить файл</button></form><div id="importPreview" aria-live="polite"></div></div>`;
         }
 
         async function previewBookImport(event) {
@@ -3576,24 +3596,6 @@
             }
         }
 
-        async function toggleActionJournal() {
-            const panel = document.getElementById('auditOperationsPanel');
-            if (!panel) return;
-            if (!panel.hidden) {
-                panel.hidden = true;
-                panel.replaceChildren();
-                return;
-            }
-            panel.hidden = false;
-            panel.innerHTML = '<div class="admin-empty">Загрузка журнала...</div>';
-            try {
-                await loadActionJournal(panel);
-            } catch (error) {
-                console.error('Ошибка загрузки журнала:', error);
-                panel.innerHTML = '<div class="admin-empty">Не удалось загрузить журнал действий.</div>';
-            }
-        }
-
         function renderInventoryMovements(content, movements, append = false) {
             const entries = movements.map(item => `<div class="operations-meta">#${item.id} · ${escapeHtml(item.book_title)} · ${escapeHtml(inventoryMovementLabel(item))} · склад ${item.stock_delta >= 0 ? '+' : ''}${item.stock_delta}, резерв ${item.reserved_delta >= 0 ? '+' : ''}${item.reserved_delta}</div>`).join('');
             const list = content.querySelector('[data-inventory-movements]');
@@ -3605,7 +3607,7 @@
         }
 
         async function loadMoreInventoryMovements(button) {
-            const panel = document.getElementById('auditOperationsPanel');
+            const panel = document.getElementById('operationsContent');
             const beforeId = Number(button.dataset.beforeId);
             button.disabled = true;
             try {
@@ -3637,7 +3639,8 @@
                 if (!response.ok) throw new Error(result.error);
                 sections.push(`<div class="operations-row"><div class="operations-row-head"><span>Аудит действий</span></div>${(result.events || []).map(event => `<div class="operations-meta">#${event.id} · ${escapeHtml(event.action)} · ${escapeHtml(event.entity_type)} #${escapeHtml(event.entity_id)} · ${escapeHtml(event.created_at)}</div>`).join('') || '<div class="operations-meta">Событий пока нет.</div>'}</div>`);
             }
-            content.innerHTML = sections.join('') || '<div class="admin-empty">Журнал недоступен.</div>';
+            const download = '<div class="operations-action-grid"><button class="operations-action" type="button" onclick="downloadAdminFile(\'/api/admin/export/action-journal.xlsx\', \'action-journal.xlsx\')">⬇️ Скачать XLSX</button></div>';
+            content.innerHTML = sections.length ? download + sections.join('') : '<div class="admin-empty">Журнал недоступен.</div>';
         }
 
 
@@ -3729,30 +3732,37 @@
             if (button) button.style.display = '';
         }
 
-        async function exportCSV(kind, query = '') {
+        async function downloadAdminFile(path, fallbackName) {
             if (!initData) return;
             try {
-                const response = await fetch(`/api/admin/export/${kind}?t=${Date.now()}${query}`, {
-                    headers: telegramAuthHeaders()
+                const response = await fetch(`${path}${path.includes('?') ? '&' : '?'}t=${Date.now()}`, {
+                    headers: telegramAuthHeaders(), cache: 'no-store'
                 });
                 if (!response.ok) {
-                    console.error('Ошибка экспорта:', response.status);
-                    tg.HapticFeedback.notificationOccurred('error');
-                    return;
+                    const payload = await response.json().catch(() => ({}));
+                    throw new Error(payload.error || 'Не удалось скачать файл.');
                 }
+                const contentDisposition = response.headers.get('Content-Disposition') || '';
+                const filename = contentDisposition.match(/filename="?([^";]+)"?/i)?.[1] || fallbackName;
                 const blob = await response.blob();
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${kind}_${new Date().toISOString().slice(0, 10)}.csv`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
+                const anchor = document.createElement('a');
+                anchor.href = url;
+                anchor.download = filename;
+                document.body.appendChild(anchor);
+                anchor.click();
+                anchor.remove();
                 URL.revokeObjectURL(url);
                 tg.HapticFeedback.notificationOccurred('success');
             } catch (error) {
-                console.error('Ошибка экспорта:', error);
+                console.error('Ошибка скачивания:', error);
+                tg.showAlert(error.message || 'Не удалось скачать файл.');
             }
+        }
+
+        async function exportCSV(kind, query = '') {
+            const suffix = query ? `?${query.replace(/^&/, '')}` : '';
+            await downloadAdminFile(`/api/admin/export/${kind}${suffix}`, `${kind}_${new Date().toISOString().slice(0, 10)}.csv`);
         }
 
         function exportAnalyticsCSV(dimension) {
@@ -3792,6 +3802,27 @@
             if (e.target === document.getElementById('adminOverlay')) closeAdminDashboard();
         });
 
+        let requestedBookHandled = false;
+
+        function requestedBookId() {
+            const value = new URLSearchParams(window.location.search).get('book');
+            if (!/^\d+$/.test(value || '')) return null;
+            const bookId = Number(value);
+            return Number.isSafeInteger(bookId) && bookId > 0 ? bookId : null;
+        }
+
+        function openRequestedBook() {
+            if (requestedBookHandled) return;
+            requestedBookHandled = true;
+            const bookId = requestedBookId();
+            if (bookId === null) return;
+            if (!books.some(book => book.id === bookId)) {
+                tg.showAlert('Книга больше недоступна.');
+                return;
+            }
+            openBookModal(bookId);
+        }
+
         async function init() {
             await loadStorefrontConfig();
             await loadCategories();
@@ -3804,6 +3835,7 @@
             renderCartItems();
             applyFiltersAndRender();
             updateWishlistBadge();
+            openRequestedBook();
             // Показываем рабочее пространство только после server-side проверки роли.
             await loadAdminSession();
             if (hasAdminCapability('reports.view')) await loadAdminDashboard();

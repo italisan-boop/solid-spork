@@ -7,7 +7,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
 from authz import has_permission_sync
-from config import settings
 from content_defaults import TEMPLATES_BY_KEY, templates_for_group
 from db.message_templates import TemplateValidationError
 from states import TextSettingsState
@@ -15,18 +14,34 @@ from states import TextSettingsState
 
 router = Router()
 
-
-def is_admin(user_id: int) -> bool:
-    return has_permission_sync(user_id, "catalog.manage")
+_GROUP_PERMISSIONS = {
+    "support": "catalog.manage",
+    "branding": "branding.manage",
+}
+_GROUP_MENUS = {
+    "support": "admin_texts",
+    "branding": "admin_branding",
+}
+_GROUP_TITLES = {
+    "support": "✏️ <b>Тексты для покупателей</b>",
+    "branding": "🎨 <b>Брендинг</b>",
+}
 
 
 def _template_id(key: str) -> str:
-    return key.replace("support.", "s.")
+    return key
 
 
 def _template_key(template_id: str) -> str | None:
-    key = template_id.replace("s.", "support.", 1)
-    return key if key in TEMPLATES_BY_KEY else None
+    if template_id.startswith("s."):
+        template_id = template_id.replace("s.", "support.", 1)
+    return template_id if template_id in TEMPLATES_BY_KEY else None
+
+
+def _is_allowed(user_id: int, key: str) -> bool:
+    return has_permission_sync(
+        user_id, _GROUP_PERMISSIONS[TEMPLATES_BY_KEY[key].group]
+    )
 
 
 def _escaped_preview(value: str, limit: int = 800) -> str:
@@ -35,8 +50,8 @@ def _escaped_preview(value: str, limit: int = 800) -> str:
     return html.escape(value, quote=False)
 
 
-async def _show_templates(callback: CallbackQuery) -> None:
-    templates = templates_for_group("support")
+async def _show_templates(callback: CallbackQuery, group: str) -> None:
+    templates = templates_for_group(group)
     values = await db.get_message_templates()
     builder = InlineKeyboardBuilder()
     for template in templates:
@@ -46,9 +61,8 @@ async def _show_templates(callback: CallbackQuery) -> None:
     builder.button(text="◀️ Назад", callback_data="admin_menu")
     builder.adjust(1)
     text = (
-        "✏️ <b>Тексты для покупателей</b>\n\n"
-        "Выберите шаблон для редактирования. Динамические подстановки, если они есть, "
-        "должны остаться в точности как указано в карточке."
+        f"{_GROUP_TITLES[group]}\n\n"
+        "Выберите текст для редактирования. Поддерживается корректная Telegram HTML-разметка."
     )
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
@@ -61,7 +75,7 @@ async def _show_template(callback: CallbackQuery, key: str) -> None:
     template_id = _template_id(key)
     builder.button(text="✏️ Изменить", callback_data=f"admin_text_edit:{template_id}")
     builder.button(text="↩️ Сбросить", callback_data=f"admin_text_reset:{template_id}")
-    builder.button(text="◀️ К списку", callback_data="admin_texts")
+    builder.button(text="◀️ К списку", callback_data=_GROUP_MENUS[template.group])
     builder.adjust(1)
     text = (
         f"✏️ <b>{html.escape(template.title)}</b>\n\n"
@@ -72,24 +86,34 @@ async def _show_template(callback: CallbackQuery, key: str) -> None:
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
-@router.callback_query(F.data == "admin_texts")
-async def admin_texts(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+async def _open_group(callback: CallbackQuery, state: FSMContext, group: str) -> None:
+    permission = _GROUP_PERMISSIONS[group]
+    if not has_permission_sync(callback.from_user.id, permission):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
     await state.clear()
-    await _show_templates(callback)
+    await _show_templates(callback, group)
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_texts")
+async def admin_texts(callback: CallbackQuery, state: FSMContext):
+    await _open_group(callback, state, "support")
+
+
+@router.callback_query(F.data == "admin_branding")
+async def admin_branding(callback: CallbackQuery, state: FSMContext):
+    await _open_group(callback, state, "branding")
 
 
 @router.callback_query(F.data.startswith("admin_text:") & ~F.data.startswith("admin_text_edit:") & ~F.data.startswith("admin_text_reset:"))
 async def admin_text_card(callback: CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет прав", show_alert=True)
-        return
     key = _template_key(callback.data.removeprefix("admin_text:"))
     if key is None:
         await callback.answer("❌ Шаблон не найден", show_alert=True)
+        return
+    if not _is_allowed(callback.from_user.id, key):
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
     await _show_template(callback, key)
     await callback.answer()
@@ -97,19 +121,19 @@ async def admin_text_card(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_text_edit:"))
 async def admin_text_edit(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет прав", show_alert=True)
-        return
     key = _template_key(callback.data.removeprefix("admin_text_edit:"))
     if key is None:
         await callback.answer("❌ Шаблон не найден", show_alert=True)
+        return
+    if not _is_allowed(callback.from_user.id, key):
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
     template = TEMPLATES_BY_KEY[key]
     placeholders = ", ".join(f"{{{name}}}" for name in sorted(template.placeholders)) or "нет"
     await state.set_state(TextSettingsState.waiting_for_value)
     await state.update_data(template_key=key)
     builder = InlineKeyboardBuilder()
-    builder.button(text="◀️ Отмена", callback_data="admin_texts")
+    builder.button(text="◀️ Отмена", callback_data=_GROUP_MENUS[template.group])
     await callback.message.answer(
         f"Отправьте новый текст для «{template.title}».\n\n"
         f"Плейсхолдеры: {placeholders}.",
@@ -120,15 +144,15 @@ async def admin_text_edit(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TextSettingsState.waiting_for_value, F.text & ~F.text.startswith("/"))
 async def save_template_value(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await state.clear()
-        await message.answer("❌ Нет прав администратора.")
-        return
     data = await state.get_data()
     key = data.get("template_key")
     if key not in TEMPLATES_BY_KEY:
         await state.clear()
         await message.answer("⚠️ Шаблон не определён. Откройте раздел заново.")
+        return
+    if not _is_allowed(message.from_user.id, key):
+        await state.clear()
+        await message.answer("❌ Нет прав администратора.")
         return
     try:
         await db.set_message_template(key, message.text)
@@ -141,12 +165,12 @@ async def save_template_value(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_text_reset:"))
 async def admin_text_reset(callback: CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет прав", show_alert=True)
-        return
     key = _template_key(callback.data.removeprefix("admin_text_reset:"))
     if key is None:
         await callback.answer("❌ Шаблон не найден", show_alert=True)
+        return
+    if not _is_allowed(callback.from_user.id, key):
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
     await db.reset_message_template(key)
     await _show_template(callback, key)

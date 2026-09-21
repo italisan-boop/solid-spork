@@ -192,7 +192,18 @@ class TelegramProtectedRoutesTests(unittest.TestCase):
         self.assertNotIn("booksseed_bot", source)
         self.assertIn("/api/app/bot-identity", source)
 
-    def test_public_catalog_stays_available_without_init_data(self):
+    def test_mini_app_displays_author_and_handles_exact_book_launch(self):
+        source = Path(server.app.static_folder, "Index.html").read_text(encoding="utf-8")
+        self.assertIn("author: typeof b.author", source)
+        self.assertIn("book-author", source)
+        self.assertIn('id="modalAuthor"', source)
+        self.assertIn("authorEl.textContent", source)
+        self.assertIn("ref_${senderId}_book_${book.id}", source)
+        self.assertIn("function requestedBookId()", source)
+        self.assertIn("openRequestedBook();", source)
+        self.assertNotIn("book.author.toLowerCase", source)
+
+
         response = self.client.get("/api/books")
         self.assertEqual(200, response.status_code)
 

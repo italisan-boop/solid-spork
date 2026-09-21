@@ -9,6 +9,8 @@ import uuid
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
+import io
+from openpyxl import load_workbook
 from urllib.parse import urlencode
 
 import db.connection as db_connection
@@ -326,6 +328,34 @@ class OperationsTests(unittest.TestCase):
             self.assertLess(
                 second.get_json()["movements"][0]["id"], first_payload["movements"][0]["id"]
             )
+    def test_action_journal_xlsx_is_role_safe_and_neutralizes_formulas(self):
+        self._execute("UPDATE books SET title = '=HYPERLINK(\"https://invalid\")', stock_quantity = 0 WHERE id = 1")
+        with patch.object(server, "ADMIN_IDS", [1]):
+            self.assertTrue(adjust_stock_sync(1, 1, 1, "received"))
+            response = self.client.get(
+                "/api/admin/export/action-journal.xlsx", headers=signed_headers(1)
+            )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("private, no-store", response.headers["Cache-Control"])
+        self.assertEqual(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            response.mimetype,
+        )
+        workbook = load_workbook(io.BytesIO(response.data), data_only=False)
+        try:
+            self.assertEqual(["Движения остатков", "Аудит действий"], workbook.sheetnames)
+            title = workbook["Движения остатков"]["D2"]
+            self.assertEqual("'=HYPERLINK(\"https://invalid\")", title.value)
+            self.assertEqual("s", title.data_type)
+            self.assertIsInstance(workbook["Движения остатков"]["G2"].value, int)
+        finally:
+            workbook.close()
+        self.assertEqual(
+            403,
+            self.client.get(
+                "/api/admin/export/action-journal.xlsx", headers=signed_headers(202)
+            ).status_code,
+        )
 
 
 if __name__ == "__main__":
