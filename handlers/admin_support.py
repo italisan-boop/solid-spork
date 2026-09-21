@@ -29,7 +29,7 @@ from handlers.user import (
     _release_ticket,
     _build_history_text,
     _ticket_action_markup,
-    set_support_mode,
+    close_support_ticket,
 )
 from states import SupportReplyState
 from utils import format_local_time
@@ -324,7 +324,11 @@ async def cb_support_close(callback: CallbackQuery):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
     user_id = int(callback.data.split(":", 1)[1])
-    await set_support_mode(user_id, False)
+    await close_support_ticket(
+        user_id,
+        callback.from_user.full_name or str(callback.from_user.id),
+        callback.bot,
+    )
     await cb_support_menu(callback)
 
 # ============================================================

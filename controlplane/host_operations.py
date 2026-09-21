@@ -282,6 +282,9 @@ class UnixSocketPrivilegedOperations:
     def install_tenant_unit(self, *, tenant_id: str) -> None:
         self._request("install_unit", tenant_id=_tenant_id(tenant_id))
 
+    def start_tenant_unit(self, tenant_id: str) -> None:
+        self._request("start_unit", tenant_id=_tenant_id(tenant_id))
+
     def stop_tenant_unit(self, tenant_id: str) -> None:
         self._request("stop_unit", tenant_id=_tenant_id(tenant_id))
 

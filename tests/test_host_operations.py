@@ -38,6 +38,9 @@ class FakeLinuxOperations:
     def start_tenant_unit(self, unit_name):
         self.calls.append(("start", unit_name))
 
+    def start_tenant_unit(self, unit_name):
+        self.calls.append(("start", unit_name))
+
     def check_tenant_health(self, tenant_id, generation):
         self.calls.append(("health", tenant_id, generation))
 
@@ -128,6 +131,25 @@ class HostOperationsServerTests(unittest.TestCase):
             (self.settings.runtime_root / self.tenant_id / "tenant.sock").as_posix(),
             route,
         )
+
+        self.server.dispatch(
+            {
+                "operation": "start_unit",
+                "tenant_id": self.tenant_id,
+            }
+        )
+        self.assertEqual(
+            ("start", f"bookapp-tenant@{self.tenant_id}.service"),
+            self.operations.calls[-1],
+        )
+        with self.assertRaisesRegex(HostOperationsError, "invalid host operation"):
+            self.server.dispatch(
+                {
+                    "operation": "start_unit",
+                    "tenant_id": self.tenant_id,
+                    "unit_name": "other.service",
+                }
+            )
 
     def test_server_applies_mode_to_bound_socket_path(self):
         listener = MagicMock()

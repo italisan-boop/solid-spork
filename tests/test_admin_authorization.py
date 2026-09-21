@@ -440,6 +440,19 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
             "Сначала настройте шифрование доставки в .env.", show_alert=True
         )
 
+        managed = self.callback("delivery_toggle", ADMIN_ID)
+        with (
+            patch("handlers.payments.db.get_payment_setting", new_callable=AsyncMock, return_value="0"),
+            patch("handlers.payments.db.set_payment_setting", new_callable=AsyncMock) as managed_set,
+            patch("handlers.payments.delivery_encryption_is_available", return_value=False),
+            patch("handlers.payments.settings.MANAGED_RUNTIME", True),
+        ):
+            await delivery_toggle(managed)
+
+        managed_set.assert_not_awaited()
+        managed.answer.assert_awaited_once()
+        self.assertIn("не настраивается в .env", managed.answer.await_args.args[0])
+
     async def test_admin_can_disable_delivery_without_reading_keyring(self):
         callback = self.callback("delivery_toggle", ADMIN_ID)
         with (
@@ -508,7 +521,8 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         support_claims[44] = ADMIN_ID
         message = self.message(303, "reply")
 
-        ok, status = await _send_admin_reply(message, 44, "reply", admin_id=303)
+        with patch("handlers.user._is_in_support", new_callable=AsyncMock, return_value=True):
+            ok, status = await _send_admin_reply(message, 44, "reply", admin_id=303)
 
         self.assertFalse(ok)
         self.assertIn("ведёт другой админ", status)
@@ -521,9 +535,9 @@ class AuthorizationBoundaryTests(unittest.IsolatedAsyncioTestCase):
         message.message_id = 1
         message.reply_to_message = None
         with (
+            patch("handlers.user._is_in_support", new_callable=AsyncMock, return_value=True),
             patch("handlers.user.db.get_message_template", new_callable=AsyncMock, side_effect=["Header", "Follow up"]),
             patch("handlers.user.db.append_support_message", new_callable=AsyncMock),
-            patch("handlers.user.set_support_mode", new_callable=AsyncMock),
         ):
             ok, _ = await _send_admin_reply(message, 44, "reply")
 

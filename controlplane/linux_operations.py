@@ -306,6 +306,11 @@ class LinuxPrivilegedOperations:
         _run(["systemctl", "daemon-reload"])
         _run(["systemctl", "enable", unit_name])
 
+    def start_tenant_unit(self, unit_name: str) -> None:
+        if not _UNIT_PATTERN.fullmatch(unit_name):
+            raise LinuxOperationsError("invalid tenant unit")
+        _run(["systemctl", "restart", unit_name])
+
     def stop_tenant_unit(self, tenant_id: str) -> None:
         tenant_id = _tenant_id(tenant_id)
         unit_name = tenant_unit_name(tenant_id)

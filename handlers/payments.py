@@ -334,6 +334,16 @@ def _self_pickup_configured(values: dict[str, str]) -> bool:
     )
 
 
+def _delivery_encryption_unavailable_text() -> str:
+    if settings.MANAGED_RUNTIME:
+        return (
+            "Шифрование доставки временно недоступно. Оно управляется платформой "
+            "и не настраивается в .env; дождитесь завершения развёртывания "
+            "или обратитесь к администратору платформы."
+        )
+    return "Сначала настройте шифрование доставки в .env."
+
+
 @router.callback_query(F.data == "payment_settings:delivery")
 async def admin_delivery_settings(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -375,7 +385,7 @@ async def admin_delivery_settings(callback: CallbackQuery):
     await callback.message.edit_text(
         "🚚 <b>Настройки доставки</b>\n\n"
         f"Общий статус: {'✅ включена' if enabled else '❌ выключена'}\n"
-        f"Шифрование адресов: {'✅ готово' if configured else '⚠️ не настроено'}\n"
+        f"Шифрование адресов: {'✅ готово' if configured else '⚠️ временно недоступно' if settings.MANAGED_RUNTIME else '⚠️ не настроено'}\n"
         f"Самовывоз: {'✅ адрес, график и инструкция заданы' if self_pickup_configured else '⚠️ заполните адрес, график и инструкцию'}\n"
         f"📍 Адрес: {pickup_location}\n"
         f"🕒 График: {pickup_schedule}\n"
@@ -395,9 +405,7 @@ async def delivery_toggle(callback: CallbackQuery):
         return
     current = await db.get_payment_setting("delivery_enabled", "0")
     if current != "1" and not delivery_encryption_is_available():
-        await callback.answer(
-            "Сначала настройте шифрование доставки в .env.", show_alert=True
-        )
+        await callback.answer(_delivery_encryption_unavailable_text(), show_alert=True)
         return
     await db.set_payment_setting("delivery_enabled", "0" if current == "1" else "1")
     await admin_delivery_settings(callback)
@@ -413,7 +421,7 @@ async def delivery_method_toggle(callback: CallbackQuery):
     values = await db.get_all_payment_settings()
     current = values.get(contract["enabled_key"], "0")
     if current != "1" and not delivery_encryption_is_available():
-        await callback.answer("Сначала настройте шифрование доставки в .env.", show_alert=True)
+        await callback.answer(_delivery_encryption_unavailable_text(), show_alert=True)
         return
     if method == "self_pickup" and current != "1" and not _self_pickup_configured(values):
         await callback.answer("Сначала задайте адрес, график и инструкцию самовывоза.", show_alert=True)

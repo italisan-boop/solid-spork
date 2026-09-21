@@ -192,6 +192,15 @@ class LinuxPrivilegedOperationsTests(unittest.TestCase):
                 self._operations().withdraw_tenant_route(tenant_id)
         self.assertEqual(previous, route.read_text(encoding="utf-8"))
 
+    def test_tenant_unit_start_restarts_only_valid_tenant_unit(self):
+        tenant_id = str(uuid.uuid4())
+        unit_name = f"bookapp-tenant@{tenant_id}.service"
+        with patch("controlplane.linux_operations._run") as run:
+            self._operations().start_tenant_unit(unit_name)
+        run.assert_called_once_with(["systemctl", "restart", unit_name])
+        with self.assertRaisesRegex(LinuxOperationsError, "invalid tenant unit"):
+            self._operations().start_tenant_unit("bookapp-tenant@../../root.service")
+
     def test_identity_lookup_creates_only_explicitly_absent_user(self):
 
         user = "tenant-0123456789abcdef"

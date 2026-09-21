@@ -12,6 +12,8 @@ from handlers.admin_support import (
     cb_support_dialogs,
 )
 from handlers.user import (
+    _closed_ticket_action_markup,
+    close_support_ticket,
     _rewrite_ticket_notices,
     _ticket_action_markup,
     order_support_notify_loop,
@@ -54,21 +56,26 @@ class SupportKeyboardTests(unittest.TestCase):
     def test_support_menu_exposes_all_dialogs_without_active_tickets(self):
         self.assertIn("support_dialogs:0", callbacks(_build_support_menu_markup([])))
 
-    def test_claim_button_changes_to_release_and_back(self):
+    def test_live_and_closed_ticket_markup_have_expected_actions(self):
         self.assertIn("🔒 Взять в работу", labels(_ticket_action_markup(42)))
         support_claims[42] = 7
         self.assertIn("🔓 Отпустить", labels(_ticket_action_markup(42)))
         support_claims.pop(42)
-        self.assertIn("🔒 Взять в работу", labels(_ticket_action_markup(42)))
         self.assertIn("support_close:42", callbacks(_ticket_action_markup(42)))
         self.assertIn("admin_support_menu", callbacks(_ticket_action_markup(42)))
+        closed = callbacks(_closed_ticket_action_markup(42))
+        self.assertIn("support_history:42", closed)
+        self.assertIn("admin_support_menu", closed)
+        self.assertFalse(any(value.startswith("support_reply:") for value in closed))
+        self.assertFalse(any(value.startswith("support_close:") for value in closed))
 
 
 class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
     def callback(self, data, user_id=7):
         return SimpleNamespace(
             data=data,
-            from_user=SimpleNamespace(id=user_id),
+            from_user=SimpleNamespace(id=user_id, full_name="Admin"),
+            bot=SimpleNamespace(send_message=AsyncMock()),
             message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
             answer=AsyncMock(),
         )
@@ -77,26 +84,26 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
         support_claims.clear()
         support_forward_msgs.clear()
 
-    async def test_close_ticket_uses_target_support_state_and_returns_to_menu(self):
+    async def test_close_ticket_notifies_customer_and_returns_to_menu(self):
         callback = self.callback("support_close:42")
         with (
             patch("handlers.admin_support.is_admin", return_value=True),
-            patch("handlers.admin_support.set_support_mode", new_callable=AsyncMock) as set_mode,
+            patch("handlers.admin_support.close_support_ticket", new_callable=AsyncMock, return_value=True) as close,
             patch("handlers.admin_support.cb_support_menu", new_callable=AsyncMock) as menu,
         ):
             await cb_support_close(callback)
-        set_mode.assert_awaited_once_with(42, False)
+        close.assert_awaited_once_with(42, "Admin", callback.bot)
         menu.assert_awaited_once_with(callback)
 
     async def test_close_ticket_rejects_non_admin_before_state_mutation(self):
         callback = self.callback("support_close:42", user_id=999)
         with (
             patch("handlers.admin_support.is_admin", return_value=False),
-            patch("handlers.admin_support.set_support_mode", new_callable=AsyncMock) as set_mode,
+            patch("handlers.admin_support.close_support_ticket", new_callable=AsyncMock) as close,
             patch("handlers.admin_support.cb_support_menu", new_callable=AsyncMock) as menu,
         ):
             await cb_support_close(callback)
-        set_mode.assert_not_awaited()
+        close.assert_not_awaited()
         menu.assert_not_awaited()
         callback.answer.assert_awaited_once_with("❌ Нет прав", show_alert=True)
 
@@ -133,7 +140,7 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
         history.assert_not_awaited()
         callback.answer.assert_awaited_once_with("❌ Нет прав", show_alert=True)
 
-
+    async def test_rewrite_ticket_notices_keeps_live_controls(self):
         support_claims[42] = 7
         support_forward_msgs[42] = [(100, 200)]
         bot = SimpleNamespace(edit_message_text=AsyncMock())
@@ -143,8 +150,9 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
         kwargs = bot.edit_message_text.await_args.kwargs
         self.assertIn("support_reply:42", callbacks(kwargs["reply_markup"]))
         self.assertIn("support_release:42", callbacks(kwargs["reply_markup"]))
+        self.assertEqual([(100, 200)], support_forward_msgs[42])
 
-    async def test_order_support_worker_delivers_authoritative_ticket(self):
+    async def test_order_support_worker_delivers_authoritative_ticket_without_exit_control(self):
         sent = asyncio.Event()
         request = {
             "id": 71,
@@ -163,20 +171,10 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
 
         bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=99)))
         with (
-            patch(
-                "db.order_support_requests.claim_order_support_requests",
-                new_callable=AsyncMock,
-                return_value=[request],
-            ),
-            patch(
-                "db.order_support_requests.mark_order_support_request_sent",
-                side_effect=mark_sent,
-            ),
-            patch(
-                "db.order_support_requests.release_order_support_request",
-                new_callable=AsyncMock,
-            ) as release,
-            patch("handlers.user.set_support_mode", new_callable=AsyncMock) as set_mode,
+            patch("db.order_support_requests.claim_order_support_requests", new_callable=AsyncMock, return_value=[request]),
+            patch("db.order_support_requests.mark_order_support_request_sent", side_effect=mark_sent),
+            patch("db.order_support_requests.release_order_support_request", new_callable=AsyncMock) as release,
+            patch("handlers.user.set_support_mode", new_callable=AsyncMock, return_value=True) as set_mode,
             patch("handlers.user.recipient_ids_for_event_sync", return_value=[101]),
             patch("handlers.user.settings.ADMIN_IDS", [101]),
         ):
@@ -191,41 +189,35 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
         admin_call = bot.send_message.await_args_list[0]
         self.assertEqual(101, admin_call.args[0])
         self.assertIn("Историческая книга ×2", admin_call.args[1])
-        self.assertIn("Промокод", admin_call.args[1])
-        self.assertIn("Общая скидка", admin_call.args[1])
         self.assertIn("support_reply:42", callbacks(admin_call.kwargs["reply_markup"]))
-        self.assertEqual(42, bot.send_message.await_args_list[1].args[0])
+        customer_call = bot.send_message.await_args_list[1]
+        self.assertEqual(42, customer_call.args[0])
+        self.assertNotIn("reply_markup", customer_call.kwargs)
         set_mode.assert_awaited_once_with(42, True)
         release.assert_not_awaited()
 
-        message = SimpleNamespace(
-            delete=AsyncMock(),
-            edit_reply_markup=AsyncMock(),
-            answer=AsyncMock(),
+    async def test_admin_close_persists_notifies_customer_and_rewrites_notices(self):
+        support_forward_msgs[42] = [(100, 200)]
+        bot = SimpleNamespace(
+            edit_message_text=AsyncMock(),
+            send_message=AsyncMock(),
         )
-        callback = SimpleNamespace(
-            from_user=SimpleNamespace(id=42),
-            message=message,
-            answer=AsyncMock(),
-        )
-        state = SimpleNamespace(clear=AsyncMock())
-
         with (
             patch("handlers.user._is_in_support", new_callable=AsyncMock, return_value=True),
-            patch("handlers.user.set_support_mode", new_callable=AsyncMock) as set_mode,
+            patch("handlers.user.db.set_support_active", new_callable=AsyncMock) as set_active,
         ):
-            await support_exit_callback(callback, state)
+            self.assertTrue(await close_support_ticket(42, "Admin", bot))
 
-        set_mode.assert_awaited_once_with(42, False)
-        message.delete.assert_awaited_once()
-        self.assertIn("Добро пожаловать", message.answer.await_args.args[0])
+        set_active.assert_awaited_once_with(42, False)
+        self.assertEqual(42, bot.send_message.await_args.args[0])
+        markup = bot.edit_message_text.await_args.kwargs["reply_markup"]
+        values = callbacks(markup)
+        self.assertIn("support_history:42", values)
+        self.assertFalse(any(value.startswith("support_reply:") for value in values))
+        self.assertFalse(any(value.startswith("support_close:") for value in values))
 
-    async def test_repeated_support_exit_does_not_send_another_start_menu(self):
-        message = SimpleNamespace(
-            delete=AsyncMock(),
-            edit_reply_markup=AsyncMock(),
-            answer=AsyncMock(),
-        )
+
+        message = SimpleNamespace(delete=AsyncMock(), edit_reply_markup=AsyncMock())
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=42),
             message=message,
@@ -233,15 +225,13 @@ class SupportCallbackTests(unittest.IsolatedAsyncioTestCase):
         )
         state = SimpleNamespace(clear=AsyncMock())
 
-        with (
-            patch("handlers.user._is_in_support", new_callable=AsyncMock, return_value=False),
-            patch("handlers.user.set_support_mode", new_callable=AsyncMock) as set_mode,
-        ):
-            await support_exit_callback(callback, state)
+        await support_exit_callback(callback, state)
 
-        set_mode.assert_not_awaited()
+        state.clear.assert_awaited_once()
         message.delete.assert_awaited_once()
-        message.answer.assert_not_awaited()
+        callback.answer.assert_awaited_once_with(
+            "Обращение остаётся открытым до закрытия поддержкой."
+        )
 
 
 if __name__ == "__main__":

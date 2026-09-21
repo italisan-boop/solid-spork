@@ -118,13 +118,16 @@ def _track_support_message(user_id: int, name: str, text: str) -> None:
 
 
 def _clear_support_tracking(user_id: int) -> None:
-    """Сбросить трекинг эскалации (админ ответил / юзер вышел из поддержки)."""
     support_last_msg_ts.pop(user_id, None)
     support_last_msg_text.pop(user_id, None)
     support_last_msg_name.pop(user_id, None)
     support_escalated.pop(user_id, None)
     support_forward_msgs.pop(user_id, None)
     support_escalation_msgs.pop(user_id, None)
+    support_claims.pop(user_id, None)
+    for key, owner_id in list(support_msg_owner.items()):
+        if owner_id == user_id:
+            support_msg_owner.pop(key, None)
 
 
 def _track_admin_msg(user_id: int, chat_id: int, message_id: int,
@@ -137,28 +140,42 @@ def _track_admin_msg(user_id: int, chat_id: int, message_id: int,
     support_msg_owner[(chat_id, message_id)] = user_id
 
 
-async def _rewrite_ticket_notices(user_id: int, bot: Bot, status_text: str) -> None:
-    """Переписать все уведомления админов по тикету (пересылки + эскалации).
+def _closed_ticket_action_markup(user_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📜 История", callback_data=f"support_history:{user_id}")
+    builder.button(text="◀️ К поддержке", callback_data="admin_support_menu")
+    builder.adjust(2)
+    return builder.as_markup()
 
-    Вызывается, когда тикет берут в работу кнопкой или на него уже
-    ответили: вместо «ждите / возьмите в работу» админы видят актуальный статус,
-    чтобы не отвечали параллельно.
-    """
-    buckets = (support_forward_msgs.pop(user_id, []),
-               support_escalation_msgs.pop(user_id, []))
-    for chat_id, message_id in sum(buckets, []):
+
+async def _rewrite_ticket_notices(
+    user_id: int,
+    bot: Bot,
+    status_text: str,
+    *,
+    closed: bool = False,
+) -> None:
+    notices = [
+        *support_forward_msgs.get(user_id, []),
+        *support_escalation_msgs.get(user_id, []),
+    ]
+    markup = _closed_ticket_action_markup(user_id) if closed else _ticket_action_markup(user_id)
+    for chat_id, message_id in notices:
         try:
             await bot.edit_message_text(
                 text=status_text,
                 chat_id=chat_id,
                 message_id=message_id,
-                reply_markup=_ticket_action_markup(user_id),
+                reply_markup=markup,
                 parse_mode="HTML",
             )
-        except Exception as e:
+        except Exception as error:
             logger.warning(
-                f"Не удалось обновить уведомление по тикету {user_id} "
-                f"({chat_id}/{message_id}): {e}"
+                "Не удалось обновить уведомление по тикету %s (%s/%s): %s",
+                user_id,
+                chat_id,
+                message_id,
+                type(error).__name__,
             )
 
 
@@ -189,34 +206,61 @@ def _ticket_action_markup(user_id: int):
     return builder.as_markup()
 
 
-def _support_exit_markup():
-    builder = InlineKeyboardBuilder()
-    builder.button(text="◀️ Выйти из поддержки", callback_data="support_exit")
-    return builder.as_markup()
-
-
 def is_admin(user_id: int) -> bool:
     return has_permission_sync(user_id, "support.respond")
 
 
-async def set_support_mode(user_id: int, active: bool) -> None:
-    """Включить/выключить режим диалога с поддержкой.
-
-    Пишет и в in-memory кэш (быстрая проверка на каждом сообщении),
-    и в БД (переживает рестарт бота).
-    """
+async def set_support_mode(user_id: int, active: bool) -> bool:
+    try:
+        await db.set_support_active(user_id, active)
+    except Exception as error:
+        logger.warning(
+            "Не удалось обновить is_support_active для %s: %s",
+            user_id,
+            type(error).__name__,
+        )
+        return False
     if active:
         settings.support_pending_users.add(user_id)
     else:
         settings.support_pending_users.discard(user_id)
-        # Пользователь вышел из диалога — отпускаем тикет и сбрасываем
-        # трекинг эскалации, чтобы поллер не долбил по вышедшему юзеру.
-        support_claims.pop(user_id, None)
         _clear_support_tracking(user_id)
+    return True
+
+
+async def close_support_ticket(user_id: int, admin_name: str, bot: Bot) -> bool:
+    if not await _is_in_support(user_id):
+        return False
     try:
-        await db.set_support_active(user_id, active)
-    except Exception as e:
-        logger.warning(f"Не удалось обновить is_support_active для {user_id}: {e}")
+        await db.set_support_active(user_id, False)
+    except Exception as error:
+        logger.warning(
+            "Не удалось закрыть тикет %s: %s", user_id, type(error).__name__
+        )
+        return False
+    await _rewrite_ticket_notices(
+        user_id,
+        bot,
+        f"✅ <b>Тикет закрыт</b>\n\nЗакрыл: {html.escape(admin_name, quote=False)}.",
+        closed=True,
+    )
+    settings.support_pending_users.discard(user_id)
+    _clear_support_tracking(user_id)
+    try:
+        await bot.send_message(
+            user_id,
+            "✅ Ваше обращение в поддержку закрыто администратором. "
+            "Если понадобится помощь, нажмите «Поддержка».",
+        )
+    except TelegramForbiddenError:
+        logger.warning("Не удалось уведомить пользователя %s о закрытии тикета", user_id)
+    except Exception as error:
+        logger.warning(
+            "Не удалось уведомить пользователя %s о закрытии тикета: %s",
+            user_id,
+            type(error).__name__,
+        )
+    return True
 
 
 async def _is_in_support(user_id: int) -> bool:
@@ -241,10 +285,7 @@ async def _is_in_support(user_id: int) -> bool:
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_with_ref(message: Message, state: FSMContext):
     """Обработка /start с реферальным кодом"""
-    # Сохраняем пользователя в БД
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
-    # /start означает начало новой сессии — выходим из активного диалога с поддержкой
-    await set_support_mode(message.from_user.id, False)
 
     ref_code = message.text.split()[1] if len(message.text.split()) > 1 else ""
     await db.capture_campaign_first_touch(message.from_user.id, ref_code)
@@ -277,10 +318,7 @@ async def cmd_start_with_ref(message: Message, state: FSMContext):
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """Обычный старт без параметров"""
-    # Сохраняем пользователя в БД
     await db.add_user(message.from_user.id, message.from_user.username or message.from_user.first_name)
-    # /start означает начало новой сессии — выходим из активного диалога с поддержкой
-    await set_support_mode(message.from_user.id, False)
     await _send_start_menu(message)
 
 
@@ -319,15 +357,11 @@ async def handle_webapp_data(message: Message, bot: Bot):
 
 @router.callback_query(F.data == "my_orders")
 async def my_orders_callback(callback: CallbackQuery):
-    # Навигация по каталогу выводит из режима диалога с поддержкой
-    await set_support_mode(callback.from_user.id, False)
     await show_user_orders(callback, callback.from_user.id)
 
 
 @router.callback_query(F.data == "about")
 async def about_callback(callback: CallbackQuery):
-    # Навигация по разделам выводит из режима диалога с поддержкой
-    await set_support_mode(callback.from_user.id, False)
     await callback.message.answer(
         "📚 <b>Семена Знаний</b> — это:\n"
         "• Ботанические атласы и травники\n"
@@ -365,7 +399,6 @@ async def support_callback(callback: CallbackQuery, state: FSMContext):
     await set_support_mode(callback.from_user.id, True)
     await callback.message.answer(
         _support_intro_text(),
-        reply_markup=_support_exit_markup(),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -447,7 +480,6 @@ async def order_support_notify_loop(bot: Bot):
                         await bot.send_message(
                             user_id,
                             _support_intro_text(receipt["id"]),
-                            reply_markup=_support_exit_markup(),
                             parse_mode="HTML",
                         )
                     except TelegramForbiddenError:
@@ -472,11 +504,8 @@ async def order_support_notify_loop(bot: Bot):
 
 @router.callback_query(F.data == "support_exit")
 async def support_exit_callback(callback: CallbackQuery, state: FSMContext):
-    was_active = await _is_in_support(callback.from_user.id)
     await state.clear()
-    if was_active:
-        await set_support_mode(callback.from_user.id, False)
-    await callback.answer()
+    await callback.answer("Обращение остаётся открытым до закрытия поддержкой.")
     try:
         await callback.message.delete()
     except TelegramBadRequest:
@@ -484,14 +513,10 @@ async def support_exit_callback(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:
             pass
-    if was_active:
-        await _send_start_menu(callback.message)
 
 
 @router.callback_query(F.data == "main_menu")
 async def back_to_menu(callback: CallbackQuery):
-    # Возврат в главное меню выводит из режима диалога с поддержкой
-    await set_support_mode(callback.from_user.id, False)
     builder = InlineKeyboardBuilder()
     builder.button(text="🌱 Открыть магазин", web_app=WebAppInfo(url=settings.WEBAPP_URL))
     builder.button(text="📜 Мои заказы", callback_data="my_orders")
@@ -594,7 +619,6 @@ async def universal_text_handler(message: Message, state: FSMContext, bot: Bot):
         await message.answer(
             "✅ <b>Сообщение отправлено в поддержку!</b>\n\n"
             "Можете продолжать писать здесь — администратор ответит в этом же чате.",
-            reply_markup=_support_exit_markup(),
             parse_mode="HTML",
         )
         return
@@ -1403,9 +1427,9 @@ async def _send_admin_reply(
     admin_name = admin_name or message.from_user.full_name or str(admin_id)
     if not is_admin(admin_id):
         return False, "❌ Нет прав администратора."
-    claimed_by = support_claims.get(user_id)
-    if claimed_by is None and not await _is_in_support(user_id):
+    if not await _is_in_support(user_id):
         return False, "❌ Тикет уже закрыт."
+    claimed_by = support_claims.get(user_id)
     if claimed_by is not None and claimed_by != admin_id:
         return False, (
             f"🚫 Тикет пользователя <code>{user_id}</code> ведёт другой админ "
@@ -1454,19 +1478,14 @@ async def _send_admin_reply(
     try:
         await message.bot.send_message(user_id, user_message, parse_mode="HTML")
     except TelegramForbiddenError:
-        # Пользователь заблокировал бота — переключаем его из режима диалога,
-        # чтобы дальнейшие попытки не сыпались в пустоту.
-        await set_support_mode(user_id, False)
-        logger.warning(f"Не удалось отправить ответ пользователю {user_id}: бот заблокирован")
+        logger.warning("Не удалось отправить ответ пользователю %s: бот заблокирован", user_id)
         return False, (
             f"🚫 Пользователь ID <code>{user_id}</code> заблокировал бота — "
-            f"доставить ответ нельзя. Диалог с поддержкой для него закрыт."
+            "доставить ответ нельзя. Закройте тикет вручную после проверки."
         )
-    except Exception as e:
-        return False, f"❌ Ошибка: {e}"
+    except Exception:
+        return False, "❌ Не удалось отправить ответ. Попробуйте ещё раз."
 
-    # Уведомления админам (пересылки и эскалации) переписываем в
-    # «на вопрос уже ответили», чтобы остальные не дублировали ответ.
     await _rewrite_ticket_notices(
         user_id,
         message.bot,
@@ -1475,14 +1494,6 @@ async def _send_admin_reply(
         f"от {html.escape(admin_name, quote=False)} "
         f"(ID: <code>{admin_id}</code>).",
     )
-    _clear_support_tracking(user_id)
-    # На случай, если пользователь был сброшен из support_pending_users
-    # (например, после перезапуска бота) — вернём его в режим диалога,
-    # чтобы ответ ушёл в поддержку без повторного нажатия кнопки.
-    await set_support_mode(user_id, True)
-
-    # Запоминаем сообщение-ответ админа в обратной карте: если админ потом
-    # нажмёт «Ответить» на своё же сообщение (цепочка), мы поймём, кому оно.
     _remember_admin_chain_message(message, user_id)
 
     claim_hint = (
@@ -1857,8 +1868,6 @@ async def ref_decline_callback(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "invite_friend")
 async def invite_friend_callback(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
-    # Раздел «Пригласить» выводит из режима диалога с поддержкой
-    await set_support_mode(user_id, False)
     ref_code = await db.get_referral_code(user_id)
     me = await bot.get_me()
     ref_link = f"https://t.me/{me.username}?start={ref_code}"
