@@ -35,6 +35,34 @@ from controlplane.tenants import (
 from telegram_auth import TelegramInitDataError, validate_telegram_init_data
 
 
+SALES_ASSET_DIRECTORY = Path(__file__).parent / "sales_assets"
+SALES_ASSET_FILENAMES = frozenset({
+    "bot-analytics.webp",
+    "bot-branding.webp",
+    "bot-broadcast.webp",
+    "bot-categories.webp",
+    "bot-customer-texts.webp",
+    "bot-delivery-settings.webp",
+    "bot-orders.webp",
+    "bot-payment-settings.webp",
+    "bot-promo-codes.webp",
+    "sales-admin-dashboard.webp",
+    "sales-buyer-cart.webp",
+    "sales-buyer-orders.webp",
+    "sales-catalog-import.webp",
+    "sales-catalog-management.webp",
+    "sales-operations-journal.webp",
+    "sales-operations-overview.webp",
+    "sales-referral-analytics.webp",
+    "sales-sales-analytics.webp",
+    "sales-staff.webp",
+    "sales-storefront-compact.webp",
+    "sales-storefront-dark.webp",
+    "sales-storefront-light.webp",
+    "sales-warehouse-assembly.webp",
+})
+
+
 def _tenant_payload(control_database_path: str | Path, tenant, entitlements=None) -> dict:
     result = {
         "id": tenant.id,
@@ -102,6 +130,49 @@ def create_controlplane_app(
     @app.get("/")
     def index():
         return send_from_directory(Path(__file__).parent, "platform_index.html")
+
+    @app.get("/sales")
+    def sales():
+        response = make_response(
+            send_from_directory(Path(__file__).parent, "sales_landing.html")
+        )
+        response.headers.update({
+            "Content-Language": "ru",
+            "Cache-Control": "public, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "no-referrer",
+            "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+            "Content-Security-Policy": (
+                "default-src 'none'; "
+                "style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'none'; "
+                "font-src 'none'; "
+                "media-src 'none'; "
+                "object-src 'none'; "
+                "base-uri 'none'; "
+                "form-action 'none'; "
+                "frame-src 'none'; "
+                "frame-ancestors 'none'"
+            ),
+        })
+        return response
+
+    @app.get("/sales/assets/<asset_name>")
+    def sales_asset(asset_name: str):
+        if asset_name not in SALES_ASSET_FILENAMES:
+            return "Not found", 404
+        response = make_response(
+            send_from_directory(SALES_ASSET_DIRECTORY, asset_name, mimetype="image/webp")
+        )
+        response.headers.update({
+            "Cache-Control": "public, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        })
+        return response
 
     @app.get("/api/platform/session")
     @require_platform_admin

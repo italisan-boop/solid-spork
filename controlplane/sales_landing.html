@@ -1,0 +1,1202 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Демонстрация универсальной платформы продаж в Telegram: витрина, операции, рост и настройка бренда.">
+  <title>#Ваша_платформа — платформа продаж в Telegram</title>
+  <script>
+    (() => {
+      if (location.hash) return;
+      window.__salesInitialScroll = { restoration: 'scrollRestoration' in history ? history.scrollRestoration : null };
+      if (window.__salesInitialScroll.restoration !== null) history.scrollRestoration = 'manual';
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0d10;
+      --surface: #15151a;
+      --surface-raised: #1c1c23;
+      --surface-muted: #24242d;
+      --line: #373744;
+      --ink: #f9f5f8;
+      --muted: #b7b0bb;
+      --accent: #e00076;
+      --accent-strong: #ff4b9b;
+      --accent-soft: #5d143a;
+      --good: #65d79d;
+      --warning: #f3c969;
+      --danger: #ff7e98;
+      --radius: 24px;
+      --shadow: 0 20px 60px rgba(0, 0, 0, .36);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      min-width: 320px;
+      margin: 0;
+      background: radial-gradient(circle at 82% -7%, #3e1029 0, transparent 30rem), var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    button, input { font: inherit; }
+    button { color: inherit; cursor: pointer; }
+    a { color: inherit; }
+    :focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+    .skip-link { position: fixed; left: 12px; top: -80px; z-index: 20; background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 12px; }
+    .skip-link:focus { top: 12px; }
+    .page { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+    .topbar {
+      position: sticky; z-index: 10; top: 12px; display: flex; align-items: center; justify-content: space-between;
+      gap: 18px; margin-top: 12px; padding: 11px 13px 11px 18px; border: 1px solid rgba(255, 255, 255, .11);
+      border-radius: 18px; background: rgba(21, 21, 26, .86); backdrop-filter: blur(18px); box-shadow: 0 10px 38px rgba(0,0,0,.24);
+    }
+    .wordmark { display: flex; align-items: center; gap: 9px; font-weight: 800; text-decoration: none; white-space: nowrap; }
+    .brand-mark { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 9px; background: var(--accent); box-shadow: 0 0 24px rgba(224,0,118,.55); }
+    .topnav { display: flex; align-items: center; gap: 16px; }
+    .topnav a { color: var(--muted); font-size: 14px; text-decoration: none; }
+    .topnav a:hover { color: var(--ink); }
+    .button, .tab, .chip, .icon-button, .role-button, .choice, .price-toggle button {
+      min-height: 44px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised); transition: background .18s ease, border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; font-weight: 750; text-decoration: none; }
+    .button:hover, .tab:hover, .chip:hover, .icon-button:hover, .role-button:hover, .choice:hover, .price-toggle button:hover { border-color: #908895; transform: translateY(-1px); }
+    .button-primary { border-color: var(--accent); background: var(--accent); box-shadow: 0 9px 26px rgba(224,0,118,.28); }
+    .button-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+    .button-secondary { background: transparent; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(310px, .95fr); align-items: center; gap: clamp(36px, 7vw, 88px); padding: clamp(58px, 11vw, 130px) 0 86px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 17px; color: #ffd4e6; font-size: 14px; font-weight: 700; }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 rgba(101,215,157,.7); animation: pulse 2.2s infinite; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 720px; margin-bottom: 21px; font-size: clamp(42px, 6vw, 76px); letter-spacing: -.065em; line-height: .99; }
+    .accent-text { color: #ff82bd; }
+    .lead { max-width: 660px; color: var(--muted); font-size: clamp(17px, 2vw, 21px); }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 29px; }
+    .trust-row { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 30px; color: var(--muted); font-size: 14px; }
+    .trust-row span::before { margin-right: 7px; color: #ff82bd; content: "✓"; }
+    .device-stage { position: relative; display: grid; place-items: center; min-height: 530px; }
+    .glow { position: absolute; width: min(calc(100% - 16px), 460px); aspect-ratio: 1; border-radius: 50%; background: #b9005e; filter: blur(66px); opacity: .23; animation: float-glow 7s ease-in-out infinite; }
+    .phone { position: relative; width: min(100%, 336px); overflow: hidden; border: 7px solid #2a2a32; border-radius: 43px; background: #101015; box-shadow: var(--shadow), 0 0 0 1px #0b0b0f; }
+    .phone-top { display: flex; align-items: center; justify-content: space-between; height: 67px; padding: 20px 18px 10px; font-size: 12px; }
+    .phone-top strong { font-size: 14px; }
+    .phone-body { display: grid; gap: 12px; min-height: 466px; padding: 14px; border-top: 1px solid #24242d; background: linear-gradient(160deg, #131218, #0f0f13); }
+    .mini-welcome { padding: 15px; border-radius: 18px; background: linear-gradient(135deg, #45132d, #24131e); border: 1px solid #7d254f; }
+    .mini-welcome small { color: #f7b9d6; }
+    .mini-product small, .mini-product b { display: block; }
+    .mini-product small { color: #f7b9d6; }
+    .mini-welcome h3 { margin: 6px 0 0; font-size: 22px; letter-spacing: -.04em; }
+    .mini-product { display: grid; grid-template-columns: 64px 1fr; gap: 11px; align-items: center; padding: 11px; border: 1px solid #292933; border-radius: 16px; background: #19191f; }
+    .cover { display: grid; place-items: center; width: 64px; aspect-ratio: .72; border-radius: 10px; background: linear-gradient(145deg, #ee4e9d, #661538); font-size: 26px; }
+    .mini-product strong { display: block; font-size: 14px; }
+    .mini-product b { color: #ff8ec2; font-size: 13px; }
+    .mini-cart { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-radius: 15px; color: #16020c; background: #ff6caf; font-weight: 800; }
+    .section { padding: 86px 0; border-top: 1px solid rgba(255,255,255,.09); }
+    .section-heading { max-width: 760px; margin-bottom: 36px; }
+    @media (prefers-reduced-motion: no-preference) {
+      .motion-ready #overview-panel [data-reveal].reveal-pending { opacity: 0; transform: translateY(28px); }
+      .motion-ready #overview-panel [data-reveal].reveal-pending.is-visible { opacity: 1; transform: translateY(0); transition: opacity .68s cubic-bezier(.2,.8,.2,1), transform .68s cubic-bezier(.2,.8,.2,1); }
+      .scenario-card { transition: border-color .22s ease, background .22s ease, box-shadow .22s ease, transform .22s ease; }
+      .scenario-card.is-selected { transform: translateY(-3px); }
+      .scenario-card.is-selected.is-choice-updated { animation: scenario-choice .56s cubic-bezier(.2,.8,.2,1); }
+      .scenario-card.is-selected[data-scenario-motion="goods"] { animation: scenario-goods .24s ease-out; }
+      .scenario-card.is-selected[data-scenario-motion="services"] { animation: scenario-services .24s ease-out; }
+      .scenario-card.is-selected[data-scenario-motion="digital"] { animation: scenario-digital .24s ease-out; }
+      .scenario-handoff.is-choice-updated { animation: scenario-handoff .58s cubic-bezier(.2,.8,.2,1); }
+      .demo-shell.is-updated { animation: demo-update .48s ease; }
+      .demo-shell[data-scenario-motion="goods"] { animation: scenario-goods .24s ease-out; }
+      .demo-shell[data-scenario-motion="services"] { animation: scenario-services .24s ease-out; }
+      .demo-shell[data-scenario-motion="digital"] { animation: scenario-digital .24s ease-out; }
+      .story-stage.is-entered, .story-connector.is-entered { animation: story-enter .52s cubic-bezier(.2,.8,.2,1); }
+      .story-stage.is-updated { animation: story-update .48s ease; }
+      .story-connector.is-complete .story-arrow { animation: connector-token .66s ease both; }
+    }
+    .section-heading h2 { margin-bottom: 12px; font-size: clamp(32px, 4vw, 50px); letter-spacing: -.055em; line-height: 1.05; }
+    .section-heading p { color: var(--muted); font-size: 17px; }
+    .feature-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .feature { min-height: 212px; padding: 21px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, var(--surface), #121217); }
+    .feature-icon { display: grid; width: 44px; height: 44px; margin-bottom: 30px; place-items: center; border-radius: 14px; background: #321021; font-size: 21px; }
+    .feature h3 { margin-bottom: 7px; font-size: 18px; }
+    .feature p { margin: 0; color: var(--muted); font-size: 14px; }
+    .demo-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 30px; background: #111116; box-shadow: var(--shadow); }
+    .demo-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px clamp(16px, 3vw, 26px); border-bottom: 1px solid var(--line); }
+    .demo-title { display: flex; align-items: center; gap: 9px; font-weight: 800; }
+    .demo-badge { display: inline-flex; padding: 3px 8px; border: 1px solid #72425d; border-radius: 99px; color: #ffc6df; font-size: 12px; font-weight: 700; }
+    .demo-actions { display: flex; align-items: center; gap: 9px; }
+    .icon-button { width: 44px; padding: 0; font-size: 18px; }
+    .demo-settings { padding: 18px clamp(16px, 3vw, 26px); border-bottom: 1px solid var(--line); background: linear-gradient(180deg, rgba(31,31,39,.72), transparent); }
+    .settings-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 18px; margin-bottom: 14px; }
+    .settings-heading h3 { margin: 0; font-size: 16px; }
+    .settings-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+    .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .settings-card { padding: 16px; border: 1px solid #373743; border-radius: 20px; background: #17171d; scroll-margin-top: 96px; }
+    .settings-card > h4 { margin: 0 0 6px; font-size: 17px; }
+    .settings-card > p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+    .story-flow { display: grid; gap: 0; padding: clamp(18px, 3.5vw, 32px); }
+    .story-stage { position: relative; padding: clamp(18px, 3vw, 27px); border: 1px solid var(--line); border-radius: 24px; background: linear-gradient(145deg, #18181e, #111116); scroll-margin-top: 96px; }
+    .story-stage.is-current { border-color: #a94371; box-shadow: 0 0 0 1px rgba(255,142,194,.17), 0 18px 42px rgba(0,0,0,.22); }
+    .story-stage[hidden], .story-connector[hidden] { display: none; }
+    .story-stage-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+    .story-number { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 10px; color: #ffd3e4; background: #351024; font-size: 13px; font-weight: 850; }
+    .story-stage-header h3 { margin: 0; font-size: 20px; }
+    .story-stage-header p { flex: 1 1 250px; margin: 0; color: var(--muted); font-size: 14px; }
+    .stage-state { display: inline-flex; padding: 4px 8px; border: 1px solid #74415a; border-radius: 999px; color: #ffc6df; background: #2b1520; font-size: 11px; font-weight: 800; }
+    .story-connector { display: grid; justify-items: center; gap: 8px; padding: 20px 0; text-align: center; }
+    .story-connector p { max-width: 580px; margin: 0; color: #ffc6df; font-size: 14px; font-weight: 750; }
+    .story-connector.is-complete::before { width: 1px; height: 24px; background: linear-gradient(#74415a, #ff82bd); content: ""; }
+    .story-arrow { display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid #8d335e; border-radius: 50%; color: #ffd3e4; background: #351024; font-size: 25px; line-height: 1; }
+    .story-connector .button { width: min(100%, 320px); }
+    .receipt-note { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+    .local-only-note { margin: 0; padding: 11px 13px; border: 1px solid #604055; border-radius: 13px; color: #f4c7db; background: #24131d; font-size: 13px; }
+    .demo-columns { display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(260px, .82fr); gap: 18px; }
+    .demo-card { padding: 18px; border: 1px solid var(--line); border-radius: 21px; background: var(--surface); }
+    .demo-card h3 { margin-bottom: 7px; font-size: 18px; }
+    .muted { color: var(--muted); }
+    .catalog-tools { display: flex; gap: 10px; margin: 14px 0; }
+    .search { width: 100%; min-height: 44px; padding: 0 13px; border: 1px solid var(--line); border-radius: 13px; outline: none; color: var(--ink); background: #101014; }
+    .search:focus { border-color: #ff82bd; box-shadow: 0 0 0 3px rgba(255,130,189,.22); }
+    .chip-row, .choice-row, .role-row, .palette-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip, .choice, .role-button { padding: 0 12px; color: var(--muted); font-size: 14px; font-weight: 700; }
+    .chip.active, .choice.active, .role-button.active { color: var(--ink); border-color: #a13f6d; background: #3f1429; }
+    .product-list { display: grid; gap: 9px; margin-top: 14px; }
+    .demo-product { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 11px; padding: 10px; border: 1px solid #2d2d37; border-radius: 15px; background: #18181e; }
+    .demo-product .cover { width: 44px; border-radius: 8px; font-size: 18px; }
+    .demo-product strong { display: block; font-size: 14px; }
+    .demo-product small { display: block; color: var(--muted); }
+    .product-actions { display: flex; gap: 5px; }
+    .small-action { min-width: 38px; min-height: 38px; padding: 0 8px; border: 1px solid #484856; border-radius: 11px; background: #25252e; }
+    .small-action.selected { border-color: var(--accent); color: #ff9bc8; }
+    .cart-list { display: grid; gap: 10px; margin: 15px 0; }
+    .cart-line { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 14px; }
+    .cart-line strong { color: var(--ink); }
+    .summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; padding-top: 14px; border-top: 1px solid var(--line); font-weight: 800; }
+    .promo { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 16px; }
+    .compact-button { min-height: 44px; padding: 0 12px; border: 1px solid #8d335e; border-radius: 12px; color: #ffd3e4; background: #351024; font-weight: 750; }
+    .divider { height: 1px; margin: 17px 0; background: var(--line); }
+    .checkout-title { margin: 0 0 9px; font-size: 14px; font-weight: 750; }
+    .choice-row { margin-bottom: 13px; }
+    .choice { min-height: 38px; padding: 0 10px; font-size: 13px; }
+    .demo-order { width: 100%; margin-top: 4px; }
+    .notice { display: flex; align-items: flex-start; gap: 9px; margin: 18px 0 0; padding: 11px 13px; border: 1px solid #48404b; border-radius: 14px; color: var(--muted); font-size: 13px; }
+    .notice strong { color: #ffc6df; }
+    .stock-item { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .stock-item:last-child { border-bottom: 0; }
+    .stock-item b { display: block; }
+    .stock-item small { color: var(--muted); }
+    .quantity { display: flex; align-items: center; gap: 7px; }
+    .quantity button { width: 36px; height: 36px; padding: 0; border: 1px solid #494957; border-radius: 10px; background: var(--surface-muted); }
+    .low-stock { display: inline-flex; margin-top: 5px; color: #ffd584; font-size: 12px; font-weight: 700; }
+    .checklist { display: grid; gap: 9px; margin-top: 14px; }
+    .check-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 47px; padding: 9px 11px; border: 1px solid #3b3b47; border-radius: 13px; text-align: left; background: #19191f; }
+    .checkmark { display: grid; flex: 0 0 23px; width: 23px; height: 23px; place-items: center; border: 1px solid #70707d; border-radius: 7px; color: #141418; background: transparent; }
+    .check-item.done { border-color: #4e916c; }
+    .check-item.done .checkmark { border-color: var(--good); background: var(--good); }
+    .pack-result { min-height: 21px; margin: 12px 0 0; color: var(--muted); font-size: 14px; }
+    .import-row { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center; margin-top: 11px; padding: 10px; border: 1px dashed #585762; border-radius: 13px; color: var(--muted); font-size: 13px; }
+    .import-state { color: var(--good); font-weight: 750; }
+    .role-description { min-height: 42px; margin: 13px 0 0; color: var(--muted); }
+    .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .kpi { padding: 15px; border: 1px solid var(--line); border-radius: 16px; background: #19191f; }
+    .kpi small { display: block; color: var(--muted); }
+    .kpi strong { display: block; margin-top: 5px; font-size: 23px; letter-spacing: -.045em; }
+    .kpi b { color: var(--good); font-size: 12px; }
+    .chart { margin-top: 14px; padding: 17px; border: 1px solid var(--line); border-radius: 18px; background: #17171d; }
+    .chart-header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 13px; font-size: 14px; }
+    .chart-header span { color: var(--muted); }
+    .bars { display: flex; align-items: end; gap: 8px; height: 132px; padding-top: 22px; border-bottom: 1px solid #50505c; }
+    .bar { position: relative; flex: 1; min-width: 14px; min-height: 12px; border: 1px solid #ff7bb9; border-bottom: 0; border-radius: 6px 6px 0 0; background: #e00076; }
+    .bar::after { position: absolute; bottom: -23px; left: 50%; color: var(--muted); content: attr(data-label); font-size: 10px; transform: translateX(-50%); }
+    .chart-note { margin: 31px 0 0; color: var(--muted); font-size: 12px; }
+    .action-preview { display: grid; gap: 9px; margin-top: 14px; }
+    .action-preview div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid #393944; border-radius: 12px; background: #18181e; font-size: 14px; }
+    .action-preview small { color: var(--muted); }
+    .configuration { display: grid; gap: 12px; }
+    .name-input { width: 100%; min-height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 13px; color: var(--ink); background: #101014; }
+    .palette-button { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 13px; background: #202029; }
+    .palette-button.active { border-color: var(--accent); }
+    .palette-dots { display: flex; gap: 3px; }
+    .palette-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--dot, #e00076); }
+    .brand-preview { padding: 19px; border: 1px solid #7e2a56; border-radius: 19px; background: linear-gradient(145deg, #351024, #18151b); }
+    .brand-preview .preview-name { display: block; margin: 4px 0; font-size: 23px; font-weight: 850; letter-spacing: -.045em; }
+    .view-label { display: inline-flex; align-items: center; min-height: 28px; padding: 0 9px; border: 1px solid #70405c; border-radius: 99px; color: #ffc6df; background: #29121f; font-size: 12px; font-weight: 800; }
+    .storefront-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-bottom: 7px; }
+    .storefront-heading h3 { margin: 0; }
+    .catalog-density-note { min-height: 21px; margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+    #product-list[data-density="compact"] { gap: 6px; }
+    #product-list[data-density="compact"] .demo-product { grid-template-columns: 34px 1fr auto; gap: 8px; padding: 7px; border-radius: 11px; }
+    #product-list[data-density="compact"] .demo-product .cover { width: 34px; border-radius: 7px; font-size: 15px; }
+    #product-list[data-density="compact"] .demo-product strong, #product-list[data-density="compact"] .demo-product small { font-size: 12px; }
+    .admin-overview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 15px 0; }
+    .admin-metric { padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: #19191f; }
+    .admin-metric small { display: block; color: var(--muted); }
+    .admin-metric strong { display: block; margin-top: 4px; font-size: 23px; letter-spacing: -.045em; }
+    .admin-tools { display: grid; gap: 9px; margin-top: 15px; }
+    .admin-tool { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 11px; border: 1px solid #393944; border-radius: 12px; background: #18181e; }
+    .admin-tool strong { display: block; font-size: 14px; }
+    .admin-tool small { color: var(--muted); font-size: 12px; }
+    .admin-tool-action { min-height: 36px; padding: 0 9px; border: 1px solid #8d335e; border-radius: 10px; color: #ffd3e4; background: #351024; font-size: 12px; font-weight: 800; }
+    .admin-tool-action:hover { border-color: var(--accent-strong); background: #4b1532; }
+    .role-compare { display: grid; gap: 12px; margin-top: 15px; }
+    .role-compare article { padding: 14px; border: 1px solid var(--line); border-radius: 15px; background: #18181e; }
+    .role-compare h4 { margin: 0 0 6px; font-size: 15px; }
+    .role-compare p { margin: 0; color: var(--muted); font-size: 13px; }
+    .scenario-grid, .launch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .scenario-step { display: inline-flex; align-items: center; gap: 9px; margin-bottom: 16px; color: var(--muted); font-size: 14px; font-weight: 750; }
+    .scenario-step strong { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 8px; color: #ffd3e4; background: #351024; font-size: 12px; }
+    .scenario-card, .launch-step { display: flex; flex-direction: column; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, var(--surface), #121217); }
+    .scenario-card { min-height: 252px; }
+    .scenario-card.is-selected { border-color: var(--accent); background: linear-gradient(145deg, var(--accent-soft), #121217); box-shadow: 0 14px 34px rgba(224,0,118,.13); }
+    .scenario-icon, .launch-number { display: grid; width: 44px; height: 44px; margin-bottom: 18px; place-items: center; border-radius: 14px; color: #ffd3e4; background: #351024; font-size: 19px; font-weight: 850; }
+    .scenario-card h3, .launch-step h3 { margin: 0 0 8px; font-size: 20px; }
+    .scenario-summary { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+    .scenario-scope { display: grid; gap: 7px; margin: 0 0 16px; }
+    .scenario-scope p { margin: 0; color: var(--muted); font-size: 13px; }
+    .scenario-scope strong { color: var(--ink); }
+    .scenario-card .button { margin-top: auto; }
+    .scenario-choice-note { min-height: 21px; margin: 15px 0 0; color: #ffc6df; font-size: 13px; font-weight: 700; }
+    .scenario-handoff { display: inline-flex; align-items: center; min-height: 28px; margin: 8px 0 0; color: #c8b9c2; font-size: 12px; font-weight: 750; }
+    .launch-step { min-height: 280px; }
+    .launch-step p { color: var(--muted); font-size: 14px; }
+    .journey { margin: 0 clamp(16px, 3vw, 26px); padding: 16px 0 0; border-bottom: 1px solid var(--line); }
+    .journey h3 { margin: 0 0 10px; font-size: 14px; }
+    .journey-steps { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; padding: 0; margin: 0; list-style: none; }
+    .journey-step { min-height: 57px; padding: 9px 10px; border: 1px solid #393944; border-radius: 13px; color: var(--muted); background: #18181e; font-size: 12px; font-weight: 700; }
+    .journey-step[aria-current="step"] { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
+    .journey-step.complete { border-color: #4e916c; color: #c7f6db; }
+    .order-view { display: grid; gap: 10px; margin-top: 14px; }
+    .order-card { padding: 13px; border: 1px solid #393944; border-radius: 14px; background: #18181e; }
+    .order-card h4 { margin: 0 0 8px; font-size: 15px; }
+    .order-card p { margin: 4px 0; color: var(--muted); font-size: 13px; }
+    .order-line { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid #30303a; color: var(--muted); font-size: 13px; }
+    .order-line strong { color: var(--ink); }
+    .journey-status { color: #ffc6df !important; font-weight: 750; }
+    .order-empty { padding: 15px; border: 1px dashed #585762; border-radius: 13px; color: var(--muted); font-size: 13px; }
+    .warehouse-line { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #30303a; }
+    .warehouse-line:last-child { border-bottom: 0; }
+    .warehouse-line small { display: block; color: var(--muted); }
+    .issuance-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; margin-top: 14px; }
+    .issuance-actions .button { width: 100%; }
+    .demo-evidence, .screenshot-figure { overflow: hidden; margin: 16px 0 0; border: 1px solid #3a3a46; border-radius: 16px; background: #15151a; }
+    .demo-evidence img, .screenshot-figure img { display: block; width: 100%; height: auto; background: #24242c; }
+    .demo-evidence img { max-height: 430px; object-fit: contain; }
+    .demo-evidence figcaption, .screenshot-figure figcaption { padding: 11px 13px; color: var(--muted); font-size: 13px; }
+    .demo-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+    .demo-evidence-grid .demo-evidence { margin: 0; }
+    .screenshots-heading { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+    .screenshots-heading .section-heading { margin-bottom: 0; }
+    .screenshots-note { max-width: 380px; margin: 0; padding: 13px; border: 1px solid #4a3441; border-radius: 15px; color: #e6bfd2; background: #21141c; font-size: 13px; }
+    .landing-tabs { display: flex; justify-content: center; padding: 22px 0 6px; }
+    .landing-tab-list { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: #15151a; }
+    .landing-tab { min-height: 42px; padding: 0 15px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; }
+    .landing-tab[aria-selected="true"] { background: var(--accent); color: #1a0717; }
+    .landing-tab:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+    .landing-panel[hidden] { display: none; }
+    .screenshot-group + .screenshot-group { margin-top: 24px; }
+    .screenshot-group h3 { margin: 0 0 7px; font-size: 20px; }
+    .screenshot-group > p { max-width: 710px; margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+    .screenshot-gallery { columns: 3; column-gap: 12px; }
+    .screenshot-figure { display: inline-block; width: 100%; margin: 0 0 12px; break-inside: avoid; }
+    .screenshot-figure img { object-fit: contain; object-position: top; }
+    .screenshot-figure strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: 15px; }
+    .plan-table-wrap { overflow-x: auto; margin-top: 22px; border: 1px solid var(--line); border-radius: 18px; }
+    .plan-table { width: 100%; min-width: 690px; border-collapse: collapse; background: #15151a; }
+    .plan-table caption { padding: 17px; color: var(--ink); text-align: left; font-size: 17px; font-weight: 850; }
+    .plan-table th, .plan-table td { padding: 13px 15px; border-top: 1px solid var(--line); text-align: left; font-size: 14px; }
+    .plan-table th { color: var(--ink); }
+    .plan-table td { color: var(--muted); }
+    .plan-table td.included { color: #c7f6db; font-weight: 750; }
+    .plan-table td.unavailable { color: #b7b0bb; }
+    .launch-grid { grid-template-columns: repeat(5, 1fr); }
+    .launch-step { min-height: 248px; }
+    .launch-step .launch-number { width: 32px; height: 32px; margin-bottom: 16px; border-radius: 10px; font-size: 13px; }
+    .launch-result { margin-top: auto; color: #ffc6df !important; font-size: 12px !important; font-weight: 750; }
+    .faq-grid { display: grid; gap: 10px; }
+    .faq-item { border: 1px solid var(--line); border-radius: 15px; background: #15151a; }
+    .faq-item summary { min-height: 53px; padding: 15px 17px; color: var(--ink); cursor: pointer; font-weight: 750; }
+    .faq-item p { padding: 0 17px 17px; margin: 0; color: var(--muted); font-size: 14px; }
+    .pricing-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+    .price-toggle { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
+    .price-toggle button { min-height: 39px; padding: 0 13px; border: 0; background: transparent; color: var(--muted); font-size: 14px; font-weight: 750; }
+    .price-toggle button.active { color: var(--ink); background: #3b1428; }
+    .pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+    .price-card { position: relative; isolation: isolate; display: flex; flex-direction: column; min-height: 452px; padding: 25px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, #17171d, #111116); transition: transform .28s cubic-bezier(.2,.8,.2,1), border-color .28s ease, box-shadow .28s ease; }
+    .price-card::before { position: absolute; z-index: -1; inset: -35%; opacity: 0; background: radial-gradient(circle at 50% 0, rgba(255, 117, 180, .28), transparent 52%); content: ""; transform: translateY(18%); transition: opacity .28s ease, transform .4s cubic-bezier(.2,.8,.2,1); }
+    .price-card:hover, .price-card:focus-within { border-color: #ff8ec2; box-shadow: 0 26px 58px rgba(224,0,118,.26), 0 0 0 1px rgba(255,142,194,.18); transform: translateY(-9px); }
+    .price-card:hover::before, .price-card:focus-within::before { opacity: 1; transform: translateY(0); }
+    .price-card.recommended { padding-top: 52px; border-color: var(--accent); box-shadow: 0 0 0 1px rgba(224,0,118,.18), 0 18px 48px rgba(224,0,118,.14); }
+    .price-card.recommended:hover, .price-card.recommended:focus-within { box-shadow: 0 30px 64px rgba(224,0,118,.36), 0 0 0 1px rgba(255,142,194,.28); }
+    .recommended-label { position: absolute; top: 16px; left: 21px; max-width: calc(100% - 42px); padding: 4px 10px; overflow: hidden; border-radius: 999px; color: #240012; background: #ff8abd; font-size: 12px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+    .price-card h3 { margin-bottom: 7px; font-size: 23px; }
+    .price-card > p { min-height: 46px; color: var(--muted); font-size: 14px; }
+    .price { margin: 17px 0 3px; font-size: 35px; font-weight: 850; letter-spacing: -.06em; }
+    .price-unit { min-height: 24px; color: var(--muted); font-size: 13px; }
+    .price-card ul { display: grid; gap: 10px; padding: 0; margin: 24px 0; list-style: none; color: var(--muted); font-size: 14px; }
+    .price-card li::before { margin-right: 8px; color: #ff8ec2; content: "✓"; }
+    .price-card .button { margin-top: auto; }
+    .terms { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 19px; }
+    .term { padding: 17px; border: 1px solid var(--line); border-radius: 18px; background: #15151a; }
+    .term h3 { margin-bottom: 6px; font-size: 16px; }
+    .term p { margin: 0; color: var(--muted); font-size: 14px; }
+    .support { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr); gap: 20px; align-items: stretch; }
+    .support-main { padding: clamp(25px, 5vw, 54px); border: 1px solid #7d2b56; border-radius: 29px; background: radial-gradient(circle at 90% 5%, #6a1845, transparent 43%), linear-gradient(135deg, #351024, #181219); }
+    .support-main h2 { max-width: 660px; margin-bottom: 13px; font-size: clamp(31px, 4vw, 51px); letter-spacing: -.055em; line-height: 1.05; }
+    .support-main p { max-width: 630px; color: #f2bed7; }
+    .support-aside { display: grid; gap: 14px; }
+    .support-aside .term { background: #18181e; }
+    footer { padding: 34px 0 46px; color: var(--muted); font-size: 13px; }
+    footer p { margin-bottom: 7px; }
+    .legal-notice { max-width: 850px; color: #89828d; font-size: 11px; line-height: 1.45; }
+    #phone-preview[data-density="compact"] .phone-body { gap: 7px; padding: 10px; }
+    #phone-preview[data-density="compact"] .mini-welcome, #phone-preview[data-density="compact"] .mini-product { padding: 9px; }
+    #phone-preview[data-density="compact"] .mini-welcome h3 { font-size: 18px; }
+    #phone-preview[data-density="compact"] .mini-product { grid-template-columns: 48px 1fr; }
+    #phone-preview[data-density="compact"] .mini-product .cover { width: 48px; font-size: 21px; }
+    [data-accent="violet"] { --accent: #9368ff; --accent-strong: #b89aff; --accent-soft: #2e1d57; }
+    [data-accent="forest"] { --accent: #4fbf81; --accent-strong: #7de3a8; --accent-soft: #133d2a; }
+    [data-accent="violet"] .brand-preview { border-color: #7658cf; background: linear-gradient(145deg, #2c2052, #17151e); }
+    [data-accent="forest"] .brand-preview { border-color: #398c61; background: linear-gradient(145deg, #163c2b, #141a17); }
+    @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(101,215,157,.7); } 55% { box-shadow: 0 0 0 8px rgba(101,215,157,0); } }
+    @keyframes float-glow { 0%, 100% { transform: translate3d(-6px, 6px, 0) scale(.94); } 50% { transform: translate3d(8px, -12px, 0) scale(1.06); } }
+    @keyframes demo-update { 0% { box-shadow: var(--shadow); } 45% { box-shadow: 0 0 0 1px rgba(255,142,194,.42), 0 24px 66px rgba(224,0,118,.28); } 100% { box-shadow: var(--shadow); } }
+    @keyframes scenario-choice { 0% { transform: translateY(0) scale(1); } 45% { transform: translateY(-6px) scale(1.015); } 100% { transform: translateY(-3px) scale(1); } }
+    @keyframes scenario-goods { 0% { opacity: .68; transform: translateX(-8px); } 60% { opacity: 1; transform: translateX(3px); } 100% { opacity: 1; transform: translateX(0); } }
+    @keyframes scenario-services { 0% { opacity: .68; transform: translateY(7px) scale(.992); } 60% { opacity: 1; transform: translateY(-2px) scale(1.005); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes scenario-digital { 0% { opacity: .68; transform: translateY(-7px) scale(.992); } 60% { opacity: 1; transform: translateY(2px) scale(1.006); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes scenario-handoff { 0% { opacity: .3; transform: translateY(-8px); } 50% { opacity: 1; transform: translateY(0); } 100% { opacity: 1; } }
+    @keyframes story-enter { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes story-update { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,142,194,0); } 45% { box-shadow: 0 0 0 4px rgba(255,142,194,.18); } }
+    @keyframes connector-token { 0% { transform: translateY(-8px); opacity: .2; } 100% { transform: translateY(0); opacity: 1; } }
+    @media (max-width: 900px) {
+      .topnav { display: none; }
+      .hero, .support { grid-template-columns: 1fr; }
+      .hero { padding-top: 68px; }
+      .device-stage { min-height: 450px; }
+      .feature-grid, .scenario-grid { grid-template-columns: repeat(2, 1fr); }
+      .screenshot-gallery { columns: 2; }
+      .launch-grid { grid-template-columns: repeat(3, 1fr); }
+      .pricing-grid { grid-template-columns: 1fr; }
+      .price-card { min-height: 0; }
+      .demo-columns, .settings-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 22px, 1180px); }
+      .topbar { padding-left: 12px; }
+      .topbar .button { padding: 9px 11px; font-size: 13px; }
+      .feature-grid, .scenario-grid, .terms, .kpis, .admin-overview, .launch-grid, .demo-evidence-grid { grid-template-columns: 1fr; }
+      .screenshot-gallery { columns: 1; }
+      .journey-steps { grid-template-columns: 1fr 1fr; }
+      .feature { min-height: 0; }
+      .feature-icon { margin-bottom: 20px; }
+      .hero-actions .button { width: 100%; }
+      .device-stage { min-height: 400px; }
+      .phone { width: 300px; }
+      .demo-head { align-items: flex-start; }
+      .demo-actions .demo-badge { display: none; }
+      .catalog-tools { flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#content">К содержанию</a>
+  <header class="page topbar">
+    <a class="wordmark" href="#top" aria-label="#Ваша_платформа — наверх"><span class="brand-mark">🌿</span><span>#Ваша_платформа</span></a>
+    <nav class="topnav" aria-label="Навигация по странице">
+      <a href="#features" data-overview-target="features">Возможности</a><a href="#demo">Демо</a><a href="#miniapp-screenshots" data-overview-target="miniapp-screenshots">Галерея</a><a href="#pricing" data-overview-target="pricing">Тарифы</a><a href="#launch" data-overview-target="launch">Запуск</a><a href="#support">Поддержка</a>
+    </nav>
+    <a class="button button-primary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Обсудить запуск</a>
+  </header>
+  <main id="content">
+    <div class="landing-tabs page">
+      <div id="landing-tab-list" class="landing-tab-list" role="tablist" aria-label="Режим страницы">
+        <button id="overview-tab" class="landing-tab" type="button" role="tab" aria-controls="overview-panel" aria-selected="true" tabindex="0" data-landing-tab="overview">Обзор</button>
+        <button id="demo-tab" class="landing-tab" type="button" role="tab" aria-controls="demo-panel" aria-selected="false" tabindex="-1" data-landing-tab="demo">Интерактивная DEMO</button>
+      </div>
+    </div>
+    <div id="overview-panel" class="landing-panel" role="tabpanel" aria-labelledby="overview-tab">
+    <section id="top" class="page hero" aria-labelledby="hero-title">
+      <div>
+        <p class="eyebrow"><span class="pulse-dot" aria-hidden="true"></span>Универсальная платформа продаж в Telegram под вашим брендом</p>
+        <h1 id="hero-title">Ваша витрина — <span class="accent-text">там, где пользователи</span></h1>
+        <p class="lead">Товары и услуги, заказы, доставка, склад и рост продаж в привычном интерфейсе Telegram. Арендуйте готовое решение или выкупите его с дальнейшей поддержкой.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#demo">Посмотреть демо <span aria-hidden="true">↓</span></a>
+          <a class="button button-secondary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Написать @Bubblecubby</a>
+        </div>
+        <div class="trust-row" aria-label="Ключевые условия"><span>Свой бренд и домен</span><span>Изолированные данные</span><span>Поддержка после запуска</span></div>
+      </div>
+      <div class="device-stage" aria-label="Пример универсальной витрины">
+        <div class="glow" aria-hidden="true"></div>
+        <div class="phone" id="phone-preview">
+          <div class="phone-top"><span>9:41</span><strong data-store-name>#Ваша_платформа</strong><span>•••</span></div>
+          <div class="phone-body">
+            <div class="mini-welcome"><small>✦ Добро пожаловать</small><h3 data-showcase-title>Товары, которые выбирают</h3></div>
+            <div class="mini-product"><div class="cover" data-preview-icon-one>🎧</div><div><strong data-preview-product-one>Беспроводные наушники</strong><small data-preview-detail-one>Товары для дома</small><b data-preview-price-one>2 490 ₽</b></div></div>
+            <div class="mini-product"><div class="cover" data-preview-icon-two style="background:linear-gradient(145deg,#794cc1,#261741)">✦</div><div><strong data-preview-product-two>Консультация эксперта</strong><small data-preview-detail-two>Онлайн-услуга</small><b data-preview-price-two>1 500 ₽</b></div></div>
+            <div class="mini-cart"><span>Корзина · 2 товара</span><span>3 990 ₽</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section" aria-labelledby="features-heading"><div class="page" data-reveal>
+      <div class="section-heading"><p class="eyebrow">ВСЁ В ОДНОМ МЕСТЕ</p><h2 id="features-heading" tabindex="-1">Не просто каталог. Рабочая система для вашего бизнеса.</h2><p>Пользователю легко выбрать товар или услугу, а команде — принимать, собирать и развивать заказы без лишних таблиц.</p></div>
+      <div class="feature-grid">
+        <article class="feature"><div class="feature-icon">🛍️</div><h3>Витрина</h3><p>Категории, поиск, карточки товаров и услуг, избранное и корзина прямо в Mini App.</p></article>
+        <article class="feature"><div class="feature-icon">📦</div><h3>Заказы и доставка</h3><p>Выбор доступного способа доставки, данные получателя и понятный путь заказа.</p></article>
+        <article class="feature"><div class="feature-icon">📋</div><h3>Сборка и остатки</h3><p>Роли сотрудников, чек-лист сборки, контроль остатков и история действий.</p></article>
+        <article class="feature"><div class="feature-icon">📈</div><h3>Рост продаж</h3><p>Промокоды, реферальные ссылки, рассылки и показатели эффективности.</p></article>
+        <article class="feature"><div class="feature-icon">🎨</div><h3>Гибкая витрина</h3><p>Название, палитра, формат товаров и плотность карточек меняются в одном месте.</p></article>
+        <article class="feature"><div class="feature-icon">👥</div><h3>Команда</h3><p>Права владельца, менеджера и кладовщика — без общего доступа ко всему.</p></article>
+        <article class="feature"><div class="feature-icon">📥</div><h3>Импорт каталога</h3><p>Загружайте товары, услуги и остатки из XLSX по готовому шаблону с предварительной проверкой.</p></article>
+        <article class="feature"><div class="feature-icon">🛟</div><h3>Поддержка</h3><p>Поможем с запуском, обновлениями и дальнейшим развитием решения.</p></article>
+      </div>
+    </div></section>
+
+    <section id="scenarios" class="section"><div class="page" data-reveal>
+      <div class="section-heading"><p class="eyebrow">СЦЕНАРИЙ ДЛЯ ВАШЕГО БИЗНЕСА</p><h2>Сначала выберите, что вы продаёте.</h2><p>Один выбор меняет только локальную демонстрацию ниже: каталог, путь заказа и роли команды.</p></div>
+      <p class="scenario-step"><strong>1</strong><span>Выберите формат — затем пройдите соответствующий DEMO-заказ.</span></p>
+      <div class="scenario-grid" aria-label="Форматы продажи для демонстрации">
+        <article class="scenario-card is-selected" data-scenario-card="goods"><div class="scenario-icon" aria-hidden="true">📦</div><h3>Физические товары</h3><p class="scenario-summary">Позиции с остатками и сборкой.</p><div class="scenario-scope"><p><strong>Покупатель:</strong> выбирает и оформляет заказ.</p><p><strong>Команда:</strong> подтверждает и собирает.</p></div><button class="button button-secondary" type="button" data-scenario="goods" aria-pressed="true">Выбрать формат</button></article>
+        <article class="scenario-card" data-scenario-card="services"><div class="scenario-icon" aria-hidden="true">💬</div><h3>Услуги и консультации</h3><p class="scenario-summary">Заказ на услугу без склада.</p><div class="scenario-scope"><p><strong>Покупатель:</strong> выбирает услугу и отправляет заказ.</p><p><strong>Команда:</strong> подтверждает; исполнение согласуется отдельно.</p></div><button class="button button-secondary" type="button" data-scenario="services" aria-pressed="false">Выбрать формат</button></article>
+        <article class="scenario-card" data-scenario-card="digital"><div class="scenario-icon" aria-hidden="true">💻</div><h3>Цифровые продукты</h3><p class="scenario-summary">Каталог цифровых предложений.</p><div class="scenario-scope"><p><strong>Покупатель:</strong> выбирает цифровой продукт и оформляет заказ.</p><p><strong>Команда:</strong> подтверждает; выдача доступа настраивается отдельно.</p></div><button class="button button-secondary" type="button" data-scenario="digital" aria-pressed="false">Выбрать формат</button></article>
+      </div>
+      <p id="scenario-choice-note" class="scenario-choice-note" aria-live="polite">Формат: физические товары. Далее — заказ.</p>
+      <p id="scenario-handoff" class="scenario-handoff" aria-hidden="true">Выбранный формат открывает путь заказа ↓</p>
+    </div></section>
+
+    <section id="demo" class="section"><div class="page" data-reveal>
+      <div class="section-heading"><p class="eyebrow">ШАГ 2 · ИНТЕРАКТИВНАЯ ДЕМОНСТРАЦИЯ</p><h2>Пройдите путь заказа по шагам.</h2><p>Покупатель, администратор, склад и итог.</p></div>
+      <p class="local-only-note">Локальная DEMO в браузере: заказы, платежи и данные не создаются, не сохраняются и не отправляются.</p>
+      <div class="demo-shell">
+        <div class="demo-head"><div class="demo-title">✦ Демо платформы <span class="demo-badge">Данные не сохраняются</span></div><div class="demo-actions"><button id="reset-demo" class="icon-button" type="button" aria-label="Сбросить демонстрацию" title="Сбросить демонстрацию">↺</button></div></div>
+        <div class="journey"><h3>Цепочка одного DEMO-заказа</h3><ol id="journey-steps" class="journey-steps" aria-label="Этапы демонстрационного заказа"><li class="journey-step" data-journey-step="buyer">1. Витрина</li><li class="journey-step" data-journey-step="payment">2. Оплата</li><li class="journey-step" data-journey-step="admin">3. Администратор</li><li class="journey-step" data-journey-step="warehouse">4. Склад</li><li class="journey-step" data-journey-step="issuance">5. Выдача</li><li class="journey-step" data-journey-step="receipt">6. Передача</li></ol></div>
+        <section id="demo-settings" class="demo-settings" aria-labelledby="demo-settings-heading">
+          <div class="settings-heading"><h3 id="demo-settings-heading">Рост и настройка — отдельно от DEMO-заказа</h3><p>Название, палитра и плотность меняют только локальный preview; формат каталога меняет локальную DEMO до создания заказа.</p></div>
+          <div class="settings-grid">
+            <section id="growth-preview" class="settings-card" aria-labelledby="growth-preview-heading"><h4 id="growth-preview-heading">📈 Рост</h4><p>Промокоды, кампании и показатели — пример рабочего пространства без загрузки реальных данных.</p><div class="kpis"><div class="kpi"><small>Оплаченные заказы</small><strong>48</strong><b>↑ 18%</b></div><div class="kpi"><small>Выручка</small><strong>36 420 ₽</strong><b>↑ 12%</b></div><div class="kpi"><small>Повторные покупки</small><strong>31%</strong><b>↑ 4 п.п.</b></div></div><div class="chart" role="img" aria-label="Демонстрационный график продаж за семь дней растёт от 3 100 до 7 240 рублей"><div class="chart-header"><strong>Продажи за неделю</strong><span>7 240 ₽ сегодня</span></div><div class="bars" aria-hidden="true"><div class="bar" data-label="Пн" style="height:37%"></div><div class="bar" data-label="Вт" style="height:49%"></div><div class="bar" data-label="Ср" style="height:43%"></div><div class="bar" data-label="Чт" style="height:61%"></div><div class="bar" data-label="Пт" style="height:76%"></div><div class="bar" data-label="Сб" style="height:67%"></div><div class="bar" data-label="Вс" style="height:91%"></div></div><p class="chart-note">Одна серия «Продажи», прямое текстовое значение показано выше.</p></div><div class="action-preview"><div><span>🎟️ Промокод <strong>DEMO10</strong><br><small>Скидка 10% на корзину</small></span><button id="toggle-campaign" class="compact-button" type="button">Включить</button></div><div><span>🔗 Реферальная ссылка<br><small>Бонус после оплаченного заказа</small></span><span class="import-state">Настроено</span></div><div><span>📣 Рассылка<br><small>Новинки недели для подписчиков</small></span><span id="broadcast-state" class="muted">Черновик</span></div></div><button id="preview-broadcast" class="button button-secondary demo-order" type="button">Показать предпросмотр</button><p id="growth-result" class="pack-result" aria-live="polite"></p></section>
+            <section id="settings-preview" class="settings-card" aria-labelledby="settings-preview-heading"><h4 id="settings-preview-heading">🎨 Гибкая настройка витрины</h4><p>Название, палитра и плотность карточек меняются в локальном preview. Формат каталога меняет весь локальный DEMO-сценарий.</p><div class="configuration"><label for="store-name">Название витрины</label><input id="store-name" class="name-input" type="text" maxlength="42" autocomplete="off" value="#Ваша_платформа"><div><p class="checkout-title">Формат DEMO-каталога</p><div id="showcase-row" class="palette-row"><button class="palette-button active" type="button" data-showcase="goods" aria-pressed="true">Товары</button><button class="palette-button" type="button" data-showcase="services" aria-pressed="false">Услуги</button><button class="palette-button" type="button" data-showcase="digital" aria-pressed="false">Цифровые продукты</button></div></div><div><p class="checkout-title">Акцент</p><div id="palette-row" class="palette-row"><button class="palette-button active" type="button" data-accent="pink" aria-pressed="true"><span class="palette-dots"><i></i><i style="--dot:#ff9bc8"></i></span>Розовый</button><button class="palette-button" type="button" data-accent="violet" aria-pressed="false"><span class="palette-dots"><i style="--dot:#9368ff"></i><i style="--dot:#b89aff"></i></span>Лиловый</button><button class="palette-button" type="button" data-accent="forest" aria-pressed="false"><span class="palette-dots"><i style="--dot:#4fbf81"></i><i style="--dot:#7de3a8"></i></span>Лесной</button></div></div><div><p class="checkout-title">Вид карточек</p><div id="density-row" class="palette-row"><button class="palette-button active" type="button" data-density="regular" aria-pressed="true">Обычный</button><button class="palette-button" type="button" data-density="compact" aria-pressed="false">Компактный</button></div></div></div><div class="brand-preview" id="brand-preview"><small>✦ Добро пожаловать в</small><span id="brand-name-preview" class="preview-name">#Ваша_платформа</span><span id="brand-copy-preview" class="muted">Универсальная витрина товаров и услуг. Выберите подходящий формат каталога.</span><div style="margin-top:16px"><button id="open-demo-storefront" class="button button-primary" type="button" data-open-storefront>Открыть витрину <span aria-hidden="true">→</span></button></div></div></section>
+          </div>
+        </section>
+        <div class="story-flow" aria-label="Пошаговый путь DEMO-заказа">
+          <section id="story-buyer" class="story-stage" data-story-stage="buyer" aria-labelledby="story-buyer-heading"><div class="story-stage-header"><span class="story-number">1</span><h3 id="story-buyer-heading" tabindex="-1">Покупатель выбирает и оформляет</h3><span id="buyer-stage-state" class="stage-state">Начните здесь</span><p id="scenario-story-summary">Выбран формат: физические товары. Выберите товар, при необходимости примените DEMO10, добавьте его в корзину, укажите доставку и способ оплаты.</p></div><div class="demo-columns"><div class="demo-card"><div class="storefront-heading"><h3 id="storefront-title">Витрина «#Ваша_платформа»</h3><span class="view-label">Видит пользователь</span></div><p class="muted">Каталог, поиск, избранное, корзина и оформление заказа — без доступа к настройкам и данным команды.</p><p id="catalog-density-note" class="catalog-density-note" aria-live="polite">Обычный вид карточек</p><div class="catalog-tools"><input id="product-search" class="search" type="search" autocomplete="off" placeholder="Поиск по названию" aria-label="Поиск товаров и услуг по названию"></div><div id="category-row" class="chip-row" aria-label="Категории"></div><div id="product-list" class="product-list" aria-live="polite"></div></div><aside class="demo-card"><h3>Корзина и оплата</h3><p class="muted">Шаги: добавьте позицию → примените промокод → выберите доставку и оплату.</p><div id="cart-list" class="cart-list"><p class="muted">Корзина пока пуста.</p></div><div class="summary"><span>Итого</span><strong id="cart-total">0 ₽</strong></div><div class="promo"><input id="promo-code" class="search" type="text" autocomplete="off" maxlength="12" placeholder="Промокод DEMO10" aria-label="Промокод"><button id="apply-promo" class="compact-button" type="button">Применить</button></div><p id="promo-result" class="pack-result" aria-live="polite"></p><div class="divider"></div><p class="checkout-title">Доставка</p><div id="delivery-choices" class="choice-row"><button class="choice active" type="button" data-delivery="СДЭК, пункт выдачи">СДЭК</button><button class="choice" type="button" data-delivery="Почта России">Почта</button></div><p class="checkout-title">Оплата</p><div id="payment-choices" class="choice-row"><button class="choice active" type="button" data-payment="Оплата по реквизитам">По реквизитам</button><button class="choice" type="button" data-payment="Оплата в Telegram Stars">Stars</button></div><button id="place-demo-order" class="button button-primary demo-order" type="button">Создать DEMO-заказ</button><p id="order-result" class="pack-result" aria-live="polite"></p><div id="user-order-view" class="order-view" aria-live="polite"></div></aside></div><div id="buyer-interface-evidence" class="demo-evidence-grid" aria-label="Обезличенные экраны покупателя"><figure class="demo-evidence"><img src="/sales/assets/sales-buyer-cart.webp" loading="lazy" alt="Обезличенный демонстрационный экран корзины и оформления заказа"><figcaption>Покупатель видит корзину, способ получения и понятный итог — без доступа к данным команды.</figcaption></figure><figure class="demo-evidence"><img src="/sales/assets/sales-buyer-orders.webp" loading="lazy" alt="Обезличенный демонстрационный экран списка заказов покупателя"><figcaption>Статус и следующий шаг остаются понятными покупателю в его собственном разделе заказов.</figcaption></figure></div></section>
+          <div id="connector-to-admin" class="story-connector" hidden><span class="story-arrow" aria-hidden="true">↓</span><p>Оплата отправлена — заказ у администратора.</p><button id="handoff-to-admin" class="button button-secondary" type="button">Перейти к администратору</button></div>
+          <section id="story-admin" class="story-stage" data-story-stage="admin" aria-labelledby="story-admin-heading" hidden><div class="story-stage-header"><span class="story-number">2</span><h3 id="story-admin-heading" tabindex="-1">Администратор проверяет оплату</h3><span id="admin-stage-state" class="stage-state">Ожидает оплаты</span><p>Проверьте симуляцию оплаты и передайте физический заказ на склад.</p></div><div class="demo-columns"><div class="demo-card"><span class="view-label">Видит администратор</span><h3 id="admin-store-title">Управление «#Ваша_платформа»</h3><div class="admin-overview" aria-label="Пример показателей администратора"><article class="admin-metric"><small>DEMO-заказов</small><strong id="admin-order-count">0</strong></article><article class="admin-metric"><small>К сборке</small><strong id="admin-ready-count">0</strong></article><article class="admin-metric"><small>Пример аналитики</small><strong>48</strong></article></div><div id="admin-order-view" class="order-view" aria-live="polite"></div><div class="admin-tools"><div class="admin-tool"><span aria-hidden="true">🛍️</span><span><strong>Каталог и остатки</strong><small>Остатки и роли</small></span><button id="open-admin-inventory" class="admin-tool-action" type="button" data-open-admin-demo="inventory">Открыть</button></div><div class="admin-tool"><span aria-hidden="true">📦</span><span><strong>Заказы и сборка</strong><small>Очередь и чек-лист</small></span><button id="open-admin-orders" class="admin-tool-action" type="button" data-open-admin-demo="orders">Открыть</button></div><div class="admin-tool"><span aria-hidden="true">📈</span><span><strong>Рост и аналитика</strong><small>Промокоды и показатели</small></span><button class="admin-tool-action" type="button" data-open-admin-demo="growth">Открыть</button></div></div><p id="admin-tools-result" class="pack-result" aria-live="polite"></p><p id="admin-inventory-note" class="muted" hidden></p></div><aside class="demo-card"><span class="view-label">Разные уровни доступа</span><h3>Кто что видит</h3><div class="role-compare"><article><h4>Пользователь</h4><p>Только витрину, доступные способы оплаты и свои заказы.</p></article><article><h4>Администратор</h4><p>Доступные настройки, каталог, заказы, остатки, сотрудников и аналитику — согласно плану.</p></article><article><h4>Кладовщик</h4><p>Доступные остатки и сборку; после статуса «Собран» — только статус.</p></article></div><button class="button button-primary demo-order" type="button" data-open-storefront>Вернуться к витрине</button></aside></div></section>
+          <div id="connector-to-warehouse" class="story-connector" hidden><span class="story-arrow" aria-hidden="true">↓</span><p>Оплата подтверждена — заказ доступен складу.</p><button id="handoff-to-warehouse" class="button button-secondary" type="button">Перейти к складу</button></div>
+          <section id="story-warehouse" class="story-stage" data-story-stage="warehouse" aria-labelledby="story-warehouse-heading" hidden><div class="story-stage-header"><span class="story-number">3</span><h3 id="story-warehouse-heading" tabindex="-1">Кладовщик собирает заказ</h3><span id="warehouse-stage-state" class="stage-state">Ожидает передачи</span><p>Возьмите заказ, отметьте позиции и завершите сборку.</p></div><div class="demo-columns"><div class="demo-card"><h3>Остатки и доступ команды</h3><div id="role-row" class="role-row" aria-label="Роль сотрудника"><button class="role-button active" type="button" data-role="owner">Владелец</button><button class="role-button" type="button" data-role="manager">Менеджер</button><button class="role-button" type="button" data-role="warehouse">Кладовщик</button></div><p id="role-description" class="role-description" aria-live="polite"></p><div id="stock-list"></div><div class="notice"><span aria-hidden="true">ℹ️</span><span><strong>Пример:</strong> права на действие определяются сервером, а не только интерфейсом.</span></div></div><aside class="demo-card"><h3 id="fulfillment-heading" tabindex="-1">Склад: DEMO-заказ</h3><p class="muted">Кладовщик видит только доступную ему часть одного общего заказа. После «Собран» остаётся только статус.</p><div id="warehouse-order-view" class="order-view" aria-live="polite"></div><div id="packing-checklist" class="checklist"></div><button id="pack-order" class="button button-primary demo-order" type="button">Отметить «Собран»</button><p id="pack-result" class="pack-result" aria-live="polite"></p></aside></div><figure id="warehouse-assembly-evidence" class="demo-evidence"><img src="/sales/assets/sales-warehouse-assembly.webp" loading="lazy" alt="Обезличенный демонстрационный экран сборки заказа для кладовщика"><figcaption>Кладовщик получает отдельную очередь сборки и видит только необходимые для операции статусы.</figcaption></figure></section>
+          <div id="connector-to-issuance" class="story-connector" hidden><span class="story-arrow" aria-hidden="true">↓</span><p>Сборка завершена — откройте выдачу.</p><button id="handoff-to-issuance" class="button button-secondary" type="button">Перейти к выдаче</button></div>
+          <section id="story-issuance" class="story-stage" data-story-stage="issuance" aria-labelledby="story-issuance-heading" hidden><div class="story-stage-header"><span class="story-number">4</span><h3 id="story-issuance-heading" tabindex="-1">Выдача товара</h3><span id="issuance-stage-state" class="stage-state">Ожидает сборки</span><p>Подготовьте заказ — итог откроется сразу. Это только DEMO статусов.</p></div><div class="demo-columns"><div class="demo-card"><h3>Выдача: DEMO-заказ</h3><p class="muted">Один номер заказа, собранные позиции и выбранный способ доставки остаются понятными до момента передачи.</p><div id="issuance-order-view" class="order-view" aria-live="polite"></div><div class="issuance-actions"><button id="prepare-issuance" class="button button-primary demo-order" type="button">Подготовить к выдаче и открыть итог</button></div><p id="issuance-result" class="pack-result" aria-live="polite"></p></div><aside class="demo-card"><h3>Границы демонстрации</h3><p class="muted">В рабочем проекте выдача, доставка и уведомления определяются согласованным процессом и правами сотрудников.</p><div class="notice"><span aria-hidden="true">ℹ️</span><span>Эти кнопки не создают чек, трек-номер, доставку, выдачу или уведомление.</span></div><figure class="demo-evidence"><img src="/sales/assets/bot-orders.webp" loading="lazy" alt="Экран Telegram со списком заказов и фильтрами по статусу"><figcaption>Команда видит очередь, статусы и сумму заказа в одном рабочем экране — без переключений между таблицами.</figcaption></figure></aside></div></section>
+          <div id="connector-to-receipt" class="story-connector" hidden><span class="story-arrow" aria-hidden="true">↓</span><p>Передача отмечена в DEMO — откройте итог.</p><button id="handoff-to-receipt" class="button button-secondary" type="button">Показать передачу и получение</button></div>
+          <section id="story-receipt" class="story-stage" data-story-stage="receipt" aria-labelledby="story-receipt-heading" hidden><div class="story-stage-header"><span class="story-number">5</span><h3 id="story-receipt-heading" tabindex="-1">Передача и получение</h3><span id="receipt-stage-state" class="stage-state">Ожидает выдачи</span><p>Покупатель видит следующий шаг. Это локальная DEMO.</p></div><div id="receipt-order-view" class="order-view" aria-live="polite"></div></section>
+        </div>
+      </div>
+    </div></section>
+
+    <section id="miniapp-screenshots" class="section" aria-labelledby="miniapp-screenshots-heading"><div class="page">
+      <div class="screenshots-heading"><div class="section-heading"><p class="eyebrow">ЭКРАНЫ РАБОЧЕГО ПРОСТРАНСТВА</p><h2 id="miniapp-screenshots-heading" tabindex="-1">Mini App для покупателя. Управление — там, где работает команда.</h2><p>Интерактивная DEMO выше объясняет путь одного заказа. Эти экраны показывают, как покупатель видит витрину, а команда — каталог, операции и рост.</p></div><p class="screenshots-note">Все снимки показывают демонстрационное рабочее пространство. Идентификаторы, заказы, значения и операционные данные в новых экранах необратимо обезличены.</p></div>
+      <section id="buyer-screens" class="screenshot-group" data-reveal aria-labelledby="buyer-screens-heading"><h3 id="buyer-screens-heading">Витрина для покупателя</h3><p>Выберите представление каталога под бренд и формат продаж — карточки остаются узнаваемыми на светлой, тёмной и компактной витрине.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/sales-storefront-light.webp" loading="lazy" alt="Обезличенный светлый вариант витрины с карточками товаров"><figcaption><strong>Светлая витрина</strong>Лёгкое представление каталога с поиском, категориями и карточками.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-storefront-dark.webp" loading="lazy" alt="Обезличенный тёмный вариант витрины с карточками товаров"><figcaption><strong>Тёмная витрина</strong>Тот же путь выбора в контрастном оформлении под ваш бренд.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-storefront-compact.webp" loading="lazy" alt="Обезличенный компактный вариант витрины"><figcaption><strong>Компактный вид</strong>Больше позиций в поле зрения без смены логики каталога.</figcaption></figure></div></section>
+      <section id="operations-screens" class="screenshot-group" data-reveal aria-labelledby="operations-screens-heading"><h3 id="operations-screens-heading">Команда и операции</h3><p>Рабочие экраны помогают поддерживать доступы, каталог и ежедневные процессы без общего доступа ко всем данным.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/sales-staff.webp" loading="lazy" alt="Обезличенный демонстрационный экран управления доступом сотрудников"><figcaption><strong>Сотрудники</strong>Добавляйте рабочие роли в отдельном пространстве управления.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-catalog-import.webp" loading="lazy" alt="Обезличенный демонстрационный экран импорта каталога CSV и XLSX"><figcaption><strong>Импорт каталога</strong>Проверяйте файл по шаблону до обновления демонстрационного каталога.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-operations-journal.webp" loading="lazy" alt="Обезличенный демонстрационный журнал складских операций"><figcaption><strong>Журнал операций</strong>Команда видит историю движения и действий в рабочем контуре.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-operations-overview.webp" loading="lazy" alt="Обезличенный демонстрационный экран операционной сводки"><figcaption><strong>Операционная сводка</strong>Периоды и отчёты собраны отдельно от пути покупателя.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-admin-dashboard.webp" loading="lazy" alt="Обезличенный демонстрационный экран панели администратора в Telegram"><figcaption><strong>Управление в Telegram</strong>Основные разделы команды остаются доступны там, где она работает.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-categories.webp" loading="lazy" alt="Экран Telegram-управления категориями каталога с кнопками редактирования"><figcaption><strong>Категории</strong>Структура каталога остаётся понятной команде: категории можно поддерживать и обновлять из рабочего пространства.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-catalog-management.webp" loading="lazy" alt="Обезличенный демонстрационный экран управления карточками каталога"><figcaption><strong>Управление каталогом</strong>Карточки и остатки поддерживаются в рабочем пространстве, а публичная витрина получает согласованный каталог.</figcaption></figure></div></section>
+      <section id="growth-screens" class="screenshot-group" data-reveal aria-labelledby="growth-screens-heading"><h3 id="growth-screens-heading">Рост и прозрачность</h3><p>Сводки помогают смотреть на привлечение и продажи, не раскрывая посетителям персональные или коммерческие данные.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/sales-referral-analytics.webp" loading="lazy" alt="Обезличенный демонстрационный экран реферальной программы и кампании"><figcaption><strong>Реферальная программа</strong>Кампании и источник привлечения собраны в понятной сводке.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-sales-analytics.webp" loading="lazy" alt="Обезличенный демонстрационный экран аналитики продаж"><figcaption><strong>Аналитика продаж</strong>Предложения и каналы сравниваются в рабочем отчёте.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-analytics.webp" loading="lazy" alt="Экран Telegram со статистикой магазина и суммами по статусам заказов"><figcaption><strong>Картина продаж</strong>Владелец видит заказы, выручку и статусы без ручного свода.</figcaption></figure></div></section>
+      <section id="launch-screens" class="screenshot-group" data-reveal aria-labelledby="launch-screens-heading"><h3 id="launch-screens-heading">Настройка и коммуникации</h3><p>Дополнительные возможности помогают собрать согласованные способы оплаты, выдачи, предложения и тексты до запуска.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/bot-broadcast.webp" loading="lazy" alt="Экран создания рассылки в Telegram с подсказкой по HTML-разметке"><figcaption><strong>Рассылки</strong>Готовьте сообщение в привычном интерфейсе Telegram и сохраняйте контроль над текстом.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-payment-settings.webp" loading="lazy" alt="Экран настроек способов оплаты с реквизитами, Stars и доставкой"><figcaption><strong>Способы оплаты</strong>Показывайте покупателю только согласованные и включённые варианты.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-delivery-settings.webp" loading="lazy" alt="Экран настроек доставки с самовывозом, почтой и СДЭК"><figcaption><strong>Доставка</strong>Соберите правила выдачи, самовывоза и доставки в одном месте.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-promo-codes.webp" loading="lazy" alt="Экран управления промокодом со скидкой, сроком и количеством использований"><figcaption><strong>Промокоды</strong>Запускайте понятные предложения и отслеживайте условия их применения.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-customer-texts.webp" loading="lazy" alt="Экран редактирования текстов для покупателей в Telegram"><figcaption><strong>Тексты для покупателя</strong>Поддерживайте единый тон сообщений на каждом шаге заказа.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-branding.webp" loading="lazy" alt="Экран редактирования приветственного сообщения и текста о магазине"><figcaption><strong>Ваш бренд</strong>Приветствие и описание магазина остаются узнаваемыми для вашей аудитории.</figcaption></figure></div></section>
+    </div></section>
+
+    <section id="pricing" class="section" aria-labelledby="pricing-heading"><div class="page" data-reveal>
+      <div class="pricing-head"><div class="section-heading"><p class="eyebrow">ПОНЯТНЫЕ УСЛОВИЯ</p><h2 id="pricing-heading" tabindex="-1">Выберите способ запуска.</h2><p>Стоимость обсуждается в Telegram и уточняется под ваши задачи.</p></div><div class="price-toggle" aria-label="Модель приобретения"><button class="active" type="button" data-price-mode="rent" aria-pressed="true">Аренда</button><button type="button" data-price-mode="buy" aria-pressed="false">Покупка</button></div></div>
+      <div class="pricing-grid">
+        <article class="price-card"><h3>Старт</h3><p>Быстрый запуск универсальной витрины для товаров и услуг.</p><div class="price" data-price="start">5 900 ₽</div><div class="price-unit" data-unit="start">в месяц</div><ul><li>До 100 позиций</li><li>Каталог и заказы</li><li>Настройки витрины</li><li>Базовая поддержка</li></ul><a class="button button-secondary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Выбрать Старт</a></article>
+        <article class="price-card recommended"><span class="recommended-label">Рекомендуем</span><h3>Бизнес</h3><p>Для проекта с командой, остатками и ростом.</p><div class="price" data-price="business">11 900 ₽</div><div class="price-unit" data-unit="business">в месяц</div><ul><li>До 1 000 позиций</li><li>До 5 сотрудников</li><li>Остатки, сборка, импорт</li><li>Аналитика и промокоды</li></ul><a class="button button-primary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Обсудить Бизнес</a></article>
+        <article class="price-card"><h3>Pro</h3><p>Для большого каталога и активного продвижения.</p><div class="price" data-price="pro">19 900 ₽</div><div class="price-unit" data-unit="pro">в месяц</div><ul><li>До 10 000 позиций</li><li>До 20 сотрудников</li><li>Кампании и рассылки</li><li>Приоритетная поддержка</li></ul><a class="button button-secondary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Выбрать Pro</a></article>
+      </div>
+      <div class="plan-table-wrap" tabindex="0" aria-label="Сравнение возможностей тарифов"><table class="plan-table" id="plan-comparison" data-plan-table><caption>Сравнение стандартных возможностей тарифов</caption><thead><tr><th scope="col">Возможность</th><th scope="col">Старт</th><th scope="col">Бизнес</th><th scope="col">Pro</th></tr></thead><tbody><tr><th scope="row">Каталог, заказы, бренд и настройки</th><td class="included">Включено</td><td class="included">Включено</td><td class="included">Включено</td></tr><tr data-plan-limit="positions"><th scope="row">Позиций в каталоге</th><td>100</td><td>1 000</td><td>10 000</td></tr><tr><th scope="row">Управление сотрудниками</th><td class="unavailable">Недоступно</td><td class="included">Включено</td><td class="included">Включено</td></tr><tr data-plan-limit="staff"><th scope="row">Активные сотрудники</th><td class="unavailable">Недоступно</td><td>5</td><td>20</td></tr><tr><th scope="row">Остатки и сборка</th><td class="unavailable">Недоступно</td><td class="included">Включено</td><td class="included">Включено</td></tr><tr><th scope="row">Импорт и аналитика</th><td class="unavailable">Недоступно</td><td class="included">Включено</td><td class="included">Включено</td></tr><tr data-plan-limit="imports"><th scope="row">Импортов в сутки</th><td>0</td><td>2</td><td>2</td></tr><tr><th scope="row">Кампании и рассылки</th><td class="unavailable">Недоступно</td><td class="unavailable">Недоступно</td><td class="included">Включено</td></tr><tr data-plan-limit="campaigns"><th scope="row">Лимит кампаний</th><td>0</td><td>0</td><td>20</td></tr><tr data-plan-limit="broadcasts"><th scope="row">Получателей рассылки в сутки</th><td>0</td><td>0</td><td>2 000</td></tr></tbody></table></div>
+      <div class="terms"><article class="term"><h3 id="terms-title">Что включает аренда</h3><p id="terms-copy">Управляемый хостинг, обновления, контроль резервного копирования и техническая поддержка.</p></article><article class="term"><h3>Важно знать</h3><p>Домен, сервер клиента и комиссии сторонних платёжных сервисов оплачиваются отдельно. Финальные условия зависят от состава запуска.</p></article></div>
+    </div></section>
+
+    <section id="launch" class="section" aria-labelledby="launch-heading"><div class="page" data-reveal><div class="section-heading"><p class="eyebrow">ПОНЯТНЫЙ ПУТЬ К ЗАПУСКУ</p><h2 id="launch-heading" tabindex="-1">От задачи до работающей витрины — по шагам.</h2><p>Состав запуска зависит от проекта, поэтому на каждом этапе заранее фиксируем ожидаемый результат и ответственность.</p></div><ol class="launch-grid"><li class="launch-step"><span class="launch-number">1</span><h3>Обсуждаем задачу</h3><p>Вы рассказываете о товарах или услугах, команде, доставке, оплате и формате приобретения.</p><p class="launch-result">Результат: предварительный сценарий запуска.</p></li><li class="launch-step"><span class="launch-number">2</span><h3>Согласуем состав</h3><p>Выбираем тариф, доступные модули, стоимость, домен, инфраструктуру и границы поддержки.</p><p class="launch-result">Результат: согласованные условия.</p></li><li class="launch-step"><span class="launch-number">3</span><h3>Готовим витрину</h3><p>Настраиваем бренд, каталог, роли команды и доступные способы оплаты или доставки.</p><p class="launch-result">Результат: готовый к проверке проект.</p></li><li class="launch-step"><span class="launch-number">4</span><h3>Проверяем путь заказа</h3><p>Тестируем оформление, обработку заказа, нужные операции склада и права сотрудников.</p><p class="launch-result">Результат: приёмка сценария.</p></li><li class="launch-step"><span class="launch-number">5</span><h3>Запускаем и поддерживаем</h3><p>Передаём доступ владельцу, согласуем дальнейшие обновления и канал технической поддержки.</p><p class="launch-result">Результат: работающая витрина.</p></li></ol></div></section>
+
+    <section id="faq" class="section"><div class="page" data-reveal><div class="section-heading"><p class="eyebrow">ВОПРОСЫ ДО ЗАПУСКА</p><h2>Короткие ответы на важное.</h2></div><div class="faq-grid"><details class="faq-item"><summary>Демо создаёт реальный заказ или принимает оплату?</summary><p>Нет. Все действия на странице меняют только временное состояние этой вкладки. Заказы, платежи, контакты и настройки никуда не отправляются и не сохраняются.</p></details><details class="faq-item"><summary>Что нужно от клиента для запуска?</summary><p>Согласованный каталог, бренд, ответственный владелец, правила обработки заказов и нужные данные для отдельно настроенных домена, оплаты или доставки.</p></details><details class="faq-item"><summary>Можно продавать услуги и цифровые продукты?</summary><p>Витрина может представить их и принять заказ. Расписание, автоматическая выдача доступа и специфичные интеграции определяются отдельным согласованным составом работ.</p></details><details class="faq-item"><summary>Чем аренда отличается от покупки?</summary><p>Аренда включает управляемую среду, обновления и поддержку. При покупке проект разворачивается на согласованной инфраструктуре; базовая поддержка после запуска входит на 3 месяца, далее — от 5 900 ₽ в месяц.</p></details><details class="faq-item"><summary>Какой тариф нужен для команды, остатков и импорта?</summary><p>Business и Pro включают сотрудников, остатки, сборку, импорт и аналитику. Кампании и рассылки доступны в Pro. Полные стандартные лимиты приведены в таблице выше.</p></details><details class="faq-item"><summary>Что видят пользователь, администратор и кладовщик?</summary><p>Пользователь видит витрину и свои заказы. Администратор управляет доступными настройками и операциями. Кладовщик работает с доступными остатками и сборкой, а после статуса «Собран» видит только статус.</p></details><details class="faq-item"><summary>Можно использовать свой бренд и домен?</summary><p>Да, бренд и домен согласуются при запуске. Пользовательский домен становится доступен только после отдельной настройки DNS, TLS и проверки routing.</p></details><details class="faq-item"><summary>Какие доставка, оплата и поддержка доступны?</summary><p>Только те варианты, которые настроены и согласованы для конкретного проекта. Страница демонстрационная и не является публичной офертой; финальные условия согласуются в Telegram.</p></details></div></div></section>
+
+    <section id="support" class="section"><div class="page support" data-reveal><div class="support-main"><p class="eyebrow">ЗАПУСК И СОПРОВОЖДЕНИЕ</p><h2>Обсудим вашу витрину и подберём формат запуска.</h2><p>Расскажите о товарах, услугах, команде и задачах. Поможем выбрать аренду или покупку, спланировать запуск и дальнейшую поддержку.</p><div class="hero-actions"><a class="button button-primary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Написать @Bubblecubby</a></div></div><aside class="support-aside"><article class="term"><h3>Аренда</h3><p>Готовая управляемая среда с обновлениями, контролем резервных копий и поддержкой.</p></article><article class="term"><h3>Покупка</h3><p>Развёртывание на инфраструктуре клиента и 3 месяца поддержки. Далее — от 5 900 ₽ в месяц.</p></article></aside></div></section>
+    </div>
+    <div id="demo-panel" class="landing-panel" role="tabpanel" aria-labelledby="demo-tab" hidden></div>
+  </main>
+  <footer class="page"><p>#Ваша_платформа · демонстрационная страница универсальной платформы продаж в Telegram</p><p class="legal-notice">Сайт и показанные данные демонстрационные и не являются публичной офертой. Возможности, стоимость, состав запуска и итоговые условия согласуются индивидуально в Telegram.</p></footer>
+  <script>
+    (() => {
+      const scenarios = {
+        goods: {
+          label: 'Физические товары',
+          journeyLabel: 'Собран',
+          copy: 'Витрина товаров с остатками и понятным путём сборки.',
+          phoneTitle: 'Товары, которые выбирают',
+          phoneItems: [['🎧', 'Беспроводные наушники', 'Товары для дома', '2 490 ₽'], ['🎁', 'Подарочный сертификат', 'На любой случай', '1 000 ₽']],
+          products: [
+            { id: 'headphones', title: 'Беспроводные наушники', detail: 'Товары для дома', category: 'Товары', price: 2490, icon: '🎧', stock: 8 },
+            { id: 'certificate', title: 'Подарочный сертификат', detail: 'На любой случай', category: 'Товары', price: 1000, icon: '🎁', stock: 5 }
+          ]
+        },
+        services: {
+          label: 'Услуги и консультации',
+          journeyLabel: 'Подтверждён',
+          copy: 'Витрина услуг с понятным описанием и заказом.',
+          phoneTitle: 'Услуги в пару касаний',
+          phoneItems: [['💬', 'Консультация эксперта', 'Онлайн-услуга', '1 500 ₽'], ['🗓️', 'Персональная встреча', '60 минут', '2 900 ₽']],
+          products: [
+            { id: 'consultation', title: 'Консультация эксперта', detail: 'Онлайн-услуга', category: 'Услуги', price: 1500, icon: '💬' },
+            { id: 'meeting', title: 'Персональная встреча', detail: '60 минут', category: 'Услуги', price: 2900, icon: '🗓️' }
+          ]
+        },
+        digital: {
+          label: 'Цифровые продукты',
+          journeyLabel: 'Подтверждён',
+          copy: 'Витрина материалов и цифровых предложений для пользователей.',
+          phoneTitle: 'Цифровые продукты',
+          phoneItems: [['💻', 'Доступ к практикуму', 'Цифровой продукт', '990 ₽'], ['🎬', 'Видеоматериалы', 'Подписка на месяц', '690 ₽']],
+          products: [
+            { id: 'workshop', title: 'Доступ к практикуму', detail: 'Цифровой продукт', category: 'Цифровые', price: 990, icon: '💻' },
+            { id: 'videos', title: 'Видеоматериалы', detail: 'Подписка на месяц', category: 'Цифровые', price: 690, icon: '🎬' }
+          ]
+        }
+      };
+      const DEFAULT_STORE_NAME = '#Ваша_платформа';
+      const currency = new Intl.NumberFormat('ru-RU');
+      const byId = id => document.getElementById(id);
+      const announce = (id, message) => { byId(id).textContent = message; };
+      const make = (tag, className, text) => { const element = document.createElement(tag); if (className) element.className = className; if (text !== undefined) element.textContent = text; return element; };
+      const makeButton = (label, className, onClick, ariaLabel) => { const button = make('button', className, label); button.type = 'button'; if (ariaLabel) button.setAttribute('aria-label', ariaLabel); button.addEventListener('click', onClick); return button; };
+      const initialState = (scenario = 'goods') => ({
+        scenario, products: scenarios[scenario].products, category: 'Все', query: '', favorites: new Set(), cart: new Map(), promo: false,
+        delivery: 'СДЭК, пункт выдачи', payment: 'Оплата по реквизитам', role: 'owner', campaign: false, accent: 'pink', density: 'regular',
+        inventory: new Map(scenarios[scenario].products.filter(product => product.stock).map(product => [product.id, { onHand: product.stock, reserved: 0 }])),
+        order: null, orderNumber: 1052
+      });
+      let state = initialState();
+      const setActiveChoices = (container, value, attribute) => {
+        [...container.querySelectorAll('button')].forEach(button => {
+          const active = button.dataset[attribute] === value;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+      };
+      const productById = id => state.products.find(product => product.id === id);
+      const calculateCartTotals = () => {
+        let subtotal = 0;
+        const lines = [];
+        state.cart.forEach((quantity, id) => {
+          const product = productById(id);
+          if (!product) return;
+          const lineTotal = product.price * quantity;
+          subtotal += lineTotal;
+          lines.push({ product, quantity, lineTotal });
+        });
+        const discount = state.promo ? Math.round(subtotal * .1) : 0;
+        return { lines, subtotal, discount, total: subtotal - discount };
+      };
+      const statusText = order => {
+        if (!order) return 'Заказ ещё не создан';
+        if (order.issuance === 'handed_over') return 'Передача отмечена в DEMO';
+        if (order.issuance === 'ready') return 'Готов к выдаче';
+        if (order.fulfillment === 'packed') return 'Собран, готов к выдаче';
+        if (order.status === 'confirmed') return order.requiresPacking ? 'Передан на склад' : 'Подтверждён администратором';
+        if (order.paymentStatus === 'submitted') return 'Ожидает проверки администратором';
+        return 'Создан, ожидает симуляции оплаты';
+      };
+      const addEvent = (order, actor, label) => { order.events.push({ actor, label }); };
+      const renderCategories = () => {
+        const row = byId('category-row'); row.replaceChildren();
+        ['Все', ...new Set(state.products.map(product => product.category))].forEach(category => {
+          const button = makeButton(category, `chip${state.category === category ? ' active' : ''}`, () => { state.category = category; renderCatalog(); });
+          button.setAttribute('aria-pressed', String(state.category === category)); row.append(button);
+        });
+      };
+      const renderCatalog = () => {
+        renderCategories();
+        const list = byId('product-list'); list.replaceChildren();
+        const query = state.query.trim().toLocaleLowerCase('ru');
+        const products = state.products.filter(product => (state.category === 'Все' || product.category === state.category) && product.title.toLocaleLowerCase('ru').includes(query));
+        if (!products.length) { list.append(make('p', 'muted', 'Товары и услуги не найдены.')); return; }
+        products.forEach(product => {
+          const item = make('article', 'demo-product');
+          const cover = make('div', 'cover', product.icon);
+          const information = make('div');
+          information.append(make('strong', '', product.title), make('small', '', product.detail), make('small', '', `${currency.format(product.price)} ₽`));
+          const actions = make('div', 'product-actions');
+          const favorite = makeButton(state.favorites.has(product.id) ? '♥' : '♡', `small-action${state.favorites.has(product.id) ? ' selected' : ''}`, () => { state.favorites.has(product.id) ? state.favorites.delete(product.id) : state.favorites.add(product.id); renderCatalog(); }, state.favorites.has(product.id) ? `Убрать ${product.title} из избранного` : `Добавить ${product.title} в избранное`);
+          const add = makeButton('＋', 'small-action', () => { if (state.order) { announce('order-result', 'Для нового DEMO-заказа сначала сбросьте демонстрацию.'); return; } state.cart.set(product.id, (state.cart.get(product.id) || 0) + 1); renderCart(); }, `Добавить ${product.title} в корзину`);
+          actions.append(favorite, add); item.append(cover, information, actions); list.append(item);
+        });
+      };
+      const appendOrderLines = (container, order) => order.lines.forEach(line => {
+        const row = make('div', 'order-line');
+        row.append(make('span', '', `${line.title} × ${line.quantity}`), make('strong', '', `${currency.format(line.lineTotal)} ₽`));
+        container.append(row);
+      });
+      const renderCart = () => {
+        const list = byId('cart-list'); list.replaceChildren();
+        const totals = calculateCartTotals();
+        if (!totals.lines.length) list.append(make('p', 'muted', 'Корзина пока пуста.'));
+        totals.lines.forEach(line => { const row = make('div', 'cart-line'); row.append(make('span', '', `${line.product.title} × ${line.quantity}`), make('strong', '', `${currency.format(line.lineTotal)} ₽`)); list.append(row); });
+        byId('cart-total').textContent = `${currency.format(totals.total)} ₽`;
+        byId('place-demo-order').disabled = Boolean(state.order) || !totals.lines.length;
+      };
+      const renderJourney = () => {
+        const order = state.order;
+        let stage = 0;
+        if (order) {
+          if (order.paymentStatus === 'awaiting') stage = 1;
+          else if (order.paymentStatus === 'submitted') stage = 2;
+          else if (!order.requiresPacking) stage = 5;
+          else if (order.issuance === 'handed_over') stage = 5;
+          else if (order.fulfillment === 'packed') stage = 4;
+          else stage = 3;
+        }
+        const labels = ['1. Витрина', '2. Симуляция оплаты', '3. Администратор', '4. Склад', '5. Выдача', '6. Передача'];
+        document.querySelectorAll('[data-journey-step]').forEach((element, index) => {
+          element.textContent = labels[index];
+          element.classList.toggle('complete', index < stage);
+          if (index === stage) element.setAttribute('aria-current', 'step'); else element.removeAttribute('aria-current');
+        });
+      };
+      const isReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const animateStory = (...ids) => {
+        if (isReducedMotion()) return;
+        ids.filter(Boolean).forEach(id => {
+          const element = byId(id);
+          if (!element || element.hidden) return;
+          element.classList.remove('is-entered', 'is-updated');
+          void element.offsetWidth;
+          element.classList.add('is-entered', 'is-updated');
+          window.setTimeout(() => element.classList.remove('is-entered', 'is-updated'), 560);
+        });
+      };
+      const navigateToDemoTarget = (targetId, focusSelector, ...animatedIds) => {
+        const target = byId(targetId);
+        if (!target) return false;
+        activateLandingTab(landingTabs.demo.panel.contains(target) ? 'demo' : 'overview');
+        if (target.hidden) return false;
+        animateStory(...animatedIds);
+        window.requestAnimationFrame(() => {
+          target.scrollIntoView({ behavior: isReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+          const focusTarget = focusSelector ? document.querySelector(focusSelector) : target.querySelector('[tabindex="-1"]') || target;
+          if (focusTarget) focusTarget.focus({ preventScroll: true });
+        });
+        return true;
+      };
+      const renderStoryStages = () => {
+        const order = state.order;
+        const showAdmin = Boolean(order && ['submitted', 'confirmed'].includes(order.paymentStatus));
+        const showWarehouse = Boolean(order && order.requiresPacking && order.status === 'confirmed');
+        const showIssuance = Boolean(order && order.requiresPacking && order.fulfillment === 'packed');
+        const showReceipt = Boolean(order && (!order.requiresPacking ? order.status === 'confirmed' : order.issuance === 'handed_over'));
+        const stages = [
+          ['story-buyer', 'buyer-stage-state', !order ? 'Начните здесь' : order.paymentStatus === 'awaiting' ? 'Создан DEMO-заказ' : 'Шаг покупателя завершён', !order || order.paymentStatus === 'awaiting'],
+          ['story-admin', 'admin-stage-state', !order ? 'Ожидает оплаты' : order.paymentStatus === 'submitted' ? 'Проверка оплаты' : 'Оплата подтверждена', Boolean(order && order.paymentStatus === 'submitted')],
+          ['story-warehouse', 'warehouse-stage-state', !order || !order.requiresPacking ? 'Не требуется' : order.fulfillment === 'ready' ? 'Готов к сборке' : order.fulfillment === 'claimed' ? 'Идёт сборка' : order.fulfillment === 'packed' ? 'Собран' : 'Ожидает передачи', Boolean(order && order.requiresPacking && ['ready', 'claimed'].includes(order.fulfillment))],
+          ['story-issuance', 'issuance-stage-state', !order || !order.requiresPacking ? 'Не требуется' : order.issuance === 'ready' ? 'Готов к выдаче' : order.issuance === 'handed_over' ? 'Передан в DEMO' : 'Ожидает сборки', Boolean(order && order.issuance === 'ready')],
+          ['story-receipt', 'receipt-stage-state', !order ? 'Ожидает выдачи' : !order.requiresPacking ? 'Подтверждён' : 'Передача отмечена в DEMO', showReceipt]
+        ];
+        byId('story-admin').hidden = !showAdmin;
+        byId('story-warehouse').hidden = !showWarehouse;
+        byId('story-issuance').hidden = !showIssuance;
+        byId('story-receipt').hidden = !showReceipt;
+        byId('connector-to-admin').hidden = !(order && order.paymentStatus === 'submitted');
+        byId('connector-to-warehouse').hidden = !showWarehouse;
+        byId('connector-to-issuance').hidden = !showIssuance;
+        byId('connector-to-receipt').hidden = !showReceipt;
+        ['connector-to-admin', 'connector-to-warehouse', 'connector-to-issuance', 'connector-to-receipt'].forEach(id => byId(id).classList.toggle('is-complete', !byId(id).hidden));
+        stages.forEach(([stageId, stateId, label, current]) => {
+          byId(stateId).textContent = label;
+          byId(stageId).classList.toggle('is-current', current);
+        });
+        byId('connector-to-receipt').querySelector('p').textContent = order && !order.requiresPacking
+          ? 'Заказ подтверждён. Для услуги или цифрового продукта физическая сборка и выдача не требуются.'
+          : 'Передача отмечена в DEMO — откройте итог.';
+        byId('handoff-to-receipt').textContent = order && !order.requiresPacking ? 'Показать подтверждённый результат' : 'Показать передачу и получение';
+      };
+      const renderUserOrder = () => {
+        const view = byId('user-order-view'); view.replaceChildren();
+        const order = state.order;
+        if (!order) return;
+        const card = make('article', 'order-card');
+        card.append(make('h4', '', `${order.id} · ваш заказ`));
+        appendOrderLines(card, order);
+        card.append(make('p', 'journey-status', `Статус: ${statusText(order)}`), make('p', '', `Доставка: ${order.delivery} · Оплата: ${order.payment}`), make('p', '', `Итого: ${currency.format(order.amounts.total)} ₽`));
+        view.append(card);
+        if (order.paymentStatus === 'awaiting') { const paymentButton = makeButton('Сымитировать оплату', 'button button-primary demo-order', submitPayment); paymentButton.id = 'simulate-demo-payment'; view.append(paymentButton); }
+        if (order.paymentStatus === 'submitted') view.append(make('p', 'pack-result', 'Симуляция оплаты отправлена. Ниже появится следующий участник цепочки.'));
+        if (order.status === 'confirmed' && order.requiresPacking) view.append(make('p', 'pack-result', 'Администратор подтвердил оплату в DEMO. Заказ передан на склад.'));
+      };
+      const renderAdminOrder = () => {
+        const order = state.order;
+        byId('admin-order-count').textContent = order ? '1' : '0';
+        byId('admin-ready-count').textContent = order && order.status === 'confirmed' && order.requiresPacking && order.fulfillment !== 'packed' ? '1' : '0';
+        const view = byId('admin-order-view'); view.replaceChildren();
+        if (!order) { view.append(make('div', 'order-empty', 'Пока нет DEMO-заказа. Создайте его в пользовательской витрине.')); return; }
+        const card = make('article', 'order-card');
+        card.append(make('h4', '', `${order.id} · проверка заказа`));
+        appendOrderLines(card, order);
+        card.append(make('p', '', `Покупатель выбрал: ${order.payment}`), make('p', '', `Доставка: ${order.delivery}`), make('p', '', `Итого: ${currency.format(order.amounts.total)} ₽`));
+        if (order.paymentStatus === 'submitted') card.append(make('p', 'journey-status', 'Симуляция оплаты представлена покупателем. Проверьте её в DEMO и подтвердите.'));
+        if (order.status === 'confirmed') card.append(make('p', 'journey-status', order.requiresPacking ? 'Оплата подтверждена. Заказ передан на склад.' : 'Оплата подтверждена. Физическая сборка не требуется.'));
+        view.append(card);
+        if (order.paymentStatus === 'submitted') { const confirmButton = makeButton('Проверить и подтвердить оплату', 'button button-primary demo-order', confirmOrder); confirmButton.id = 'confirm-demo-order'; view.append(confirmButton); }
+      };
+      const renderAdminTools = () => {
+        const order = state.order;
+        const inventory = byId('open-admin-inventory');
+        const orders = byId('open-admin-orders');
+        const inventoryNote = byId('admin-inventory-note');
+        const noInventory = Boolean(order && !order.requiresPacking);
+        inventory.disabled = noInventory;
+        inventoryNote.hidden = !noInventory;
+        inventoryNote.textContent = noInventory ? 'В этом формате складские остатки не используются.' : '';
+        if (noInventory) inventory.setAttribute('aria-describedby', 'admin-inventory-note');
+        else inventory.removeAttribute('aria-describedby');
+        orders.disabled = false;
+      };
+      const renderStock = () => {
+        const list = byId('stock-list'); list.replaceChildren();
+        const tracked = state.products.filter(product => product.stock);
+        if (!tracked.length) { list.append(make('p', 'muted', 'В этом сценарии складские остатки не требуются.')); return; }
+        tracked.forEach(product => {
+          const inventory = state.inventory.get(product.id);
+          const entry = make('div', 'stock-item');
+          const details = make('div'); details.append(make('b', '', product.title), make('small', '', `Доступно: ${inventory.onHand - inventory.reserved} шт. · зарезервировано: ${inventory.reserved}`));
+          const controls = make('div', 'quantity');
+          const canAdjust = state.role !== 'manager';
+          const less = makeButton('−', '', () => { if (inventory.onHand > inventory.reserved) { inventory.onHand -= 1; renderStock(); } }, `Уменьшить остаток ${product.title}`);
+          const value = make('strong', '', String(inventory.onHand));
+          const more = makeButton('+', '', () => { inventory.onHand += 1; renderStock(); }, `Увеличить остаток ${product.title}`);
+          less.disabled = !canAdjust; more.disabled = !canAdjust; controls.append(less, value, more); entry.append(details, controls); list.append(entry);
+        });
+      };
+      const renderRole = () => {
+        const description = { owner: 'Владелец видит все доступные операции и настройки.', manager: 'Менеджер работает с заказами, но не меняет складские остатки.', warehouse: 'Кладовщик работает с остатками и сборкой; после «Собран» получает только статус.' };
+        setActiveChoices(byId('role-row'), state.role, 'role'); byId('role-description').textContent = description[state.role]; renderStock();
+      };
+      const renderWarehouse = () => {
+        const order = state.order;
+        const view = byId('warehouse-order-view'); const checklist = byId('packing-checklist'); view.replaceChildren(); checklist.replaceChildren();
+        const packButton = byId('pack-order'); packButton.disabled = true; packButton.textContent = 'Отметить «Собран»';
+        if (!order) { view.append(make('div', 'order-empty', 'Создайте физический DEMO-заказ в пользовательской витрине, чтобы увидеть путь сборки.')); return; }
+        if (!order.requiresPacking) { view.append(make('div', 'order-empty', 'Для услуги или цифрового продукта физическая сборка не требуется.')); return; }
+        if (order.fulfillment === 'awaiting_confirmation') { view.append(make('div', 'order-empty', 'Администратор должен подтвердить DEMO-заказ перед передачей на склад.')); return; }
+        if (order.fulfillment === 'ready') { const claimButton = makeButton('Взять в сборку', 'button button-primary demo-order', claimOrder); claimButton.id = 'claim-demo-order'; view.append(make('div', 'order-empty', `${order.id} готов к сборке.`), claimButton); return; }
+        if (order.fulfillment === 'packed') { view.append(make('div', 'order-card', `${order.id} · Собран. Для кладовщика доступен только этот статус.`)); return; }
+        const card = make('article', 'order-card'); card.append(make('h4', '', `${order.id} · собирает демо-кладовщик`));
+        order.lines.filter(line => line.stockTracked).forEach((line, index) => {
+          const picked = order.picked.get(index) || 0; const row = make('div', 'warehouse-line'); const text = make('span'); text.append(make('strong', '', line.title), make('small', '', `Отмечено ${picked} из ${line.quantity}`));
+          const button = makeButton('＋1', 'compact-button', () => { if (picked >= line.quantity || order.fulfillment !== 'claimed') return; order.picked.set(index, picked + 1); addEvent(order, 'Кладовщик', `Отмечена позиция: ${line.title}`); renderAll(); }, `Отметить единицу ${line.title}`); button.disabled = picked >= line.quantity; row.append(text, button); checklist.append(row);
+        });
+        view.append(card); const readyToPack = [...order.lines.entries()].filter(([, line]) => line.stockTracked).every(([index, line]) => (order.picked.get(index) || 0) === line.quantity); packButton.disabled = !readyToPack; packButton.textContent = readyToPack ? 'Отметить «Собран»' : 'Завершите сборку';
+      };
+      const renderIssuance = () => {
+        const view = byId('issuance-order-view');
+        const prepare = byId('prepare-issuance');
+        view.replaceChildren();
+        prepare.disabled = true;
+        if (!state.order || !state.order.requiresPacking || state.order.fulfillment !== 'packed') {
+          view.append(make('div', 'order-empty', 'Сначала соберите физический DEMO-заказ на складе.'));
+          return;
+        }
+        const order = state.order;
+        const card = make('article', 'order-card');
+        card.append(make('h4', '', `${order.id} · выдача в DEMO`));
+        appendOrderLines(card, order);
+        card.append(make('p', 'journey-status', order.issuance === 'handed_over' ? 'Передача отмечена в DEMO' : 'Собран · готов к выдаче'), make('p', '', `Доставка: ${order.delivery}`));
+        view.append(card);
+        if (order.issuance === 'not_ready') {
+          prepare.disabled = false;
+          prepare.textContent = 'Подготовить к выдаче и открыть итог';
+          return;
+        }
+        prepare.textContent = 'Итог показан';
+      };
+      const renderReceipt = () => {
+        const view = byId('receipt-order-view'); view.replaceChildren();
+        const order = state.order;
+        if (!order || (!order.requiresPacking && order.status !== 'confirmed') || (order.requiresPacking && order.issuance !== 'handed_over')) return;
+        const card = make('article', 'order-card');
+        card.append(make('h4', '', `${order.id} · итог DEMO-заказа`));
+        appendOrderLines(card, order);
+        card.append(make('p', 'journey-status', order.requiresPacking ? 'Передача отмечена в DEMO · дальнейший способ согласуется отдельно' : 'Подтверждён · исполнение согласуется отдельно'), make('p', '', `Доставка: ${order.delivery}`), make('p', '', `Оплата: ${order.payment} · ${currency.format(order.amounts.total)} ₽`));
+        if (order.amounts.discount) card.append(make('p', '', `DEMO10: скидка ${currency.format(order.amounts.discount)} ₽`));
+        view.append(card, make('p', 'receipt-note', 'Локальная DEMO: платёж, чек, трек-номер, доставка, выдача и данные покупателя не создавались и не отправлялись.'));
+      };
+      const renderAll = () => { renderCatalog(); renderCart(); renderUserOrder(); renderAdminOrder(); renderAdminTools(); renderRole(); renderWarehouse(); renderIssuance(); renderReceipt(); renderJourney(); renderStoryStages(); applyAccent(); applyStoreName(); applyScenarioPreview(); applyDensity(); applyScenarioChoice(); };
+      const createOrder = () => {
+        if (state.order) { announce('order-result', 'Этот DEMO-заказ уже создан. Сбросьте демонстрацию, чтобы начать новый.'); return; }
+        const totals = calculateCartTotals();
+        if (!totals.lines.length) { announce('order-result', 'Сначала добавьте товар, услугу или цифровой продукт в корзину.'); return; }
+        for (const line of totals.lines.filter(item => item.product.stock)) { const inventory = state.inventory.get(line.product.id); if (line.quantity > inventory.onHand - inventory.reserved) { announce('order-result', `Недостаточно остатка: ${line.product.title}.`); return; } }
+        const lines = totals.lines.map(item => ({ title: item.product.title, productId: item.product.id, quantity: item.quantity, unitPrice: item.product.price, lineTotal: item.lineTotal, stockTracked: Boolean(item.product.stock) }));
+        lines.filter(line => line.stockTracked).forEach(line => { state.inventory.get(line.productId).reserved += line.quantity; });
+        state.order = { id: `DEMO-${state.orderNumber}`, lines, amounts: totals, delivery: state.delivery, payment: state.payment, paymentStatus: 'awaiting', status: 'created', requiresPacking: lines.some(line => line.stockTracked), fulfillment: lines.some(line => line.stockTracked) ? 'awaiting_confirmation' : 'not_required', issuance: lines.some(line => line.stockTracked) ? 'not_ready' : 'not_required', picked: new Map(), events: [] };
+        addEvent(state.order, 'Пользователь', 'Создан DEMO-заказ'); announce('order-result', `${state.order.id} создан. Теперь сымитируйте оплату.`); renderAll();
+      };
+      const submitPayment = () => {
+        const order = state.order;
+        if (!order || order.paymentStatus !== 'awaiting') return;
+        order.paymentStatus = 'submitted';
+        addEvent(order, 'Пользователь', 'Отправлена симуляция оплаты');
+        announce('order-result', 'Симуляция оплаты отправлена. Ниже открыт следующий этап для администратора.');
+        renderAll();
+        navigateToDemoTarget('story-admin', '#story-admin-heading', 'connector-to-admin', 'story-admin');
+      };
+      const confirmOrder = () => {
+        const order = state.order;
+        if (!order || order.paymentStatus !== 'submitted' || order.status === 'confirmed') return;
+        order.paymentStatus = 'confirmed';
+        order.status = 'confirmed';
+        if (order.requiresPacking) {
+          order.lines.filter(line => line.stockTracked).forEach(line => {
+            const inventory = state.inventory.get(line.productId);
+            inventory.reserved -= line.quantity;
+            inventory.onHand -= line.quantity;
+          });
+          order.fulfillment = 'ready';
+        }
+        addEvent(order, 'Администратор', 'Подтверждена симуляция оплаты');
+        renderAll();
+        navigateToDemoTarget(order.requiresPacking ? 'story-warehouse' : 'story-receipt', order.requiresPacking ? '#fulfillment-heading' : '#story-receipt-heading', 'story-admin', order.requiresPacking ? 'connector-to-warehouse' : 'connector-to-receipt', order.requiresPacking ? 'story-warehouse' : 'story-receipt');
+      };
+      const claimOrder = () => {
+        const order = state.order;
+        if (!order || order.fulfillment !== 'ready') return;
+        order.fulfillment = 'claimed';
+        addEvent(order, 'Кладовщик', 'Взял DEMO-заказ в сборку');
+        announce('pack-result', 'Заказ взят в сборку. Отметьте все позиции в чек-листе.');
+        renderAll();
+        navigateToDemoTarget('story-warehouse', '#packing-checklist button', 'story-warehouse');
+      };
+      const packOrder = () => {
+        const order = state.order;
+        if (!order || order.fulfillment !== 'claimed') return;
+        const complete = [...order.lines.entries()].filter(([, line]) => line.stockTracked).every(([index, line]) => (order.picked.get(index) || 0) === line.quantity);
+        if (!complete) { announce('pack-result', 'Завершите все позиции перед сборкой.'); return; }
+        order.fulfillment = 'packed';
+        order.issuance = 'not_ready';
+        addEvent(order, 'Кладовщик', 'Отметил заказ как «Собран»');
+        announce('pack-result', `${order.id} собран. Ниже открыт отдельный этап выдачи.`);
+        renderAll();
+        navigateToDemoTarget('story-issuance', '#story-issuance-heading', 'story-warehouse', 'connector-to-issuance', 'story-issuance');
+      };
+      const prepareIssuance = () => {
+        const order = state.order;
+        if (!order || order.fulfillment !== 'packed' || order.issuance !== 'not_ready') return;
+        order.issuance = 'ready';
+        addEvent(order, 'Команда', 'Подготовила DEMO-заказ к выдаче');
+        completeIssuance();
+      };
+      const completeIssuance = () => {
+        const order = state.order;
+        if (!order || order.issuance !== 'ready') return;
+        order.issuance = 'handed_over';
+        addEvent(order, 'Команда', 'Отметила передачу DEMO-заказа');
+        announce('issuance-result', 'Передача отмечена в DEMO. Ниже открыт итог для покупателя.');
+        renderAll();
+        navigateToDemoTarget('story-receipt', '#story-receipt-heading', 'story-issuance', 'connector-to-receipt', 'story-receipt');
+      };
+      function applyAccent() { document.documentElement.dataset.accent = state.accent === 'pink' ? '' : state.accent; [...byId('palette-row').querySelectorAll('button')].forEach(button => { const active = button.dataset.accent === state.accent; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }); }
+      function applyStoreName() { const name = byId('store-name').value.trim() || DEFAULT_STORE_NAME; document.querySelectorAll('[data-store-name]').forEach(element => { element.textContent = name; }); byId('brand-name-preview').textContent = name; byId('storefront-title').textContent = `Витрина «${name}»`; byId('admin-store-title').textContent = `Управление «${name}»`; }
+      function applyScenarioPreview() { const scenario = scenarios[state.scenario]; byId('brand-copy-preview').textContent = scenario.copy; document.querySelectorAll('[data-showcase-title]').forEach(element => { element.textContent = scenario.phoneTitle; }); [['one', scenario.phoneItems[0]], ['two', scenario.phoneItems[1]]].forEach(([position, item]) => { byId('phone-preview').querySelector(`[data-preview-icon-${position}]`).textContent = item[0]; byId('phone-preview').querySelector(`[data-preview-product-${position}]`).textContent = item[1]; byId('phone-preview').querySelector(`[data-preview-detail-${position}]`).textContent = item[2]; byId('phone-preview').querySelector(`[data-preview-price-${position}]`).textContent = item[3]; }); [...byId('showcase-row').querySelectorAll('button')].forEach(button => { const active = button.dataset.showcase === state.scenario; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }); }
+      function applyDensity() { byId('phone-preview').dataset.density = state.density; byId('product-list').dataset.density = state.density; byId('catalog-density-note').textContent = state.density === 'compact' ? 'Компактный вид карточек: больше позиций в экране.' : 'Обычный вид карточек: больше деталей для каждой позиции.'; [...byId('density-row').querySelectorAll('button')].forEach(button => { const active = button.dataset.density === state.density; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }); }
+      function applyScenarioChoice() {
+        const scenario = scenarios[state.scenario];
+        document.querySelectorAll('[data-scenario-card]').forEach(card => {
+          const active = card.dataset.scenarioCard === state.scenario;
+          const button = card.querySelector('[data-scenario]');
+          card.classList.toggle('is-selected', active);
+          button.setAttribute('aria-pressed', String(active));
+          button.textContent = active ? 'Выбрано ✓' : 'Выбрать формат';
+        });
+        byId('scenario-choice-note').textContent = `Формат: ${scenario.label.toLocaleLowerCase('ru')}. Далее — заказ.`;
+        byId('scenario-story-summary').textContent = `Формат: ${scenario.label.toLocaleLowerCase('ru')}. Выберите позицию и оформите заказ.`;
+      }
+      const animateScenarioChoice = () => {
+        const card = document.querySelector(`[data-scenario-card="${state.scenario}"]`);
+        const shell = document.querySelector('.demo-shell');
+        const handoff = byId('scenario-handoff');
+        [card, shell].filter(Boolean).forEach(element => delete element.dataset.scenarioMotion);
+        if (isReducedMotion()) return;
+        [card, shell].filter(Boolean).forEach(element => {
+          element.dataset.scenarioMotion = state.scenario;
+          window.setTimeout(() => delete element.dataset.scenarioMotion, 300);
+        });
+        if (!handoff) return;
+        handoff.classList.remove('is-choice-updated');
+        void handoff.offsetWidth;
+        handoff.classList.add('is-choice-updated');
+        window.setTimeout(() => handoff.classList.remove('is-choice-updated'), 600);
+      };
+      const animateDemoUpdate = () => { if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; const shell = document.querySelector('.demo-shell'); shell.classList.remove('is-updated'); void shell.offsetWidth; shell.classList.add('is-updated'); window.setTimeout(() => shell.classList.remove('is-updated'), 500); };
+      const selectScenario = scenario => {
+        if (state.order) {
+          announce('order-result', 'Чтобы выбрать другой формат, сначала сбросьте текущую демонстрацию.');
+          return;
+        }
+        const name = byId('store-name').value;
+        const accent = state.accent;
+        const density = state.density;
+        state = initialState(scenario);
+        state.accent = accent;
+        state.density = density;
+        byId('store-name').value = name;
+        byId('product-search').value = '';
+        byId('promo-code').value = '';
+        announce('promo-result', '');
+        announce('order-result', `Выбран сценарий: ${scenarios[scenario].label}. Данные не сохраняются.`);
+        announce('pack-result', '');
+        announce('issuance-result', '');
+        renderAll();
+        animateDemoUpdate();
+        animateScenarioChoice();
+        navigateToDemoTarget('story-buyer', '#product-search');
+      };
+      const resetDemo = () => {
+        state = initialState();
+        byId('product-search').value = '';
+        byId('promo-code').value = '';
+        byId('store-name').value = DEFAULT_STORE_NAME;
+        announce('promo-result', '');
+        announce('pack-result', '');
+        announce('growth-result', '');
+        byId('broadcast-state').textContent = 'Черновик';
+        byId('toggle-campaign').textContent = 'Включить';
+        announce('issuance-result', '');
+        renderAll();
+        setActiveChoices(byId('delivery-choices'), state.delivery, 'delivery');
+        setActiveChoices(byId('payment-choices'), state.payment, 'payment');
+        announce('order-result', 'Демонстрация сброшена. Начните с выбора формата и товара на витрине.');
+      };
+      const landingTabs = Object.freeze({
+        overview: { tab: byId('overview-tab'), panel: byId('overview-panel') },
+        demo: { tab: byId('demo-tab'), panel: byId('demo-panel') }
+      });
+      landingTabs.demo.panel.append(byId('scenarios'), byId('demo'));
+      let armOverviewReveals = () => {};
+      const activateLandingTab = (key, focusTab = false) => {
+        const selected = landingTabs[key];
+        if (!selected) return;
+        Object.entries(landingTabs).forEach(([name, entry]) => {
+          const active = name === key;
+          entry.tab.setAttribute('aria-selected', String(active));
+          entry.tab.tabIndex = active ? 0 : -1;
+          entry.panel.hidden = !active;
+        });
+        if (key === 'demo') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));
+        if (key === 'overview') armOverviewReveals();
+        if (focusTab) selected.tab.focus();
+      };
+      const overviewNavigation = Object.freeze({
+        features: '#features-heading',
+        'miniapp-screenshots': '#miniapp-screenshots-heading',
+        pricing: '#pricing-heading',
+        launch: '#launch-heading',
+      });
+      let lastHandledOverviewHash = '';
+      const navigateToOverviewTarget = (targetId, updateHistory = false) => {
+        const focusSelector = overviewNavigation[targetId];
+        if (!focusSelector || !navigateToDemoTarget(targetId, focusSelector)) return false;
+        const hash = `#${targetId}`;
+        if (updateHistory && location.hash !== hash) {
+          history.pushState(null, '', hash);
+          lastHandledOverviewHash = hash;
+        }
+        return true;
+      };
+      const activateLandingTabForHash = () => {
+        const targetId = location.hash.slice(1);
+        if (overviewNavigation[targetId]) {
+          if (lastHandledOverviewHash === location.hash) return;
+          lastHandledOverviewHash = location.hash;
+          navigateToOverviewTarget(targetId);
+          return;
+        }
+        lastHandledOverviewHash = '';
+        const target = targetId ? byId(targetId) : null;
+        if (!target) return;
+        activateLandingTab(landingTabs.demo.panel.contains(target) ? 'demo' : 'overview');
+        window.requestAnimationFrame(() => target.scrollIntoView({ behavior: isReducedMotion() ? 'auto' : 'smooth', block: 'start' }));
+      };
+      byId('landing-tab-list').addEventListener('click', event => {
+        const tab = event.target.closest('[data-landing-tab]');
+        if (tab) activateLandingTab(tab.dataset.landingTab);
+      });
+      byId('landing-tab-list').addEventListener('keydown', event => {
+        const tabs = Object.values(landingTabs).map(entry => entry.tab);
+        const current = tabs.indexOf(document.activeElement);
+        if (current < 0) return;
+        let next = current;
+        if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activateLandingTab(tabs[current].dataset.landingTab, true); return; }
+        else return;
+        event.preventDefault();
+        activateLandingTab(tabs[next].dataset.landingTab, true);
+      });
+      document.addEventListener('click', event => {
+        if (!(event.target instanceof Element)) return;
+        const link = event.target.closest('a[href^="#"]');
+        if (!link) return;
+        const targetId = link.getAttribute('href').slice(1);
+        if (link.dataset.overviewTarget === targetId && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+          event.preventDefault();
+          navigateToOverviewTarget(targetId, true);
+          return;
+        }
+        const target = byId(targetId);
+        if (target) activateLandingTab(landingTabs.demo.panel.contains(target) ? 'demo' : 'overview');
+      });
+      window.addEventListener('hashchange', activateLandingTabForHash);
+      window.addEventListener('popstate', activateLandingTabForHash);
+      const prepareInitialScroll = () => {
+        if (location.hash) return null;
+        const initial = { restoration: 'scrollRestoration' in history ? history.scrollRestoration : null };
+        if (initial.restoration !== null) history.scrollRestoration = 'manual';
+        return initial;
+      };
+      const settleInitialScroll = (initial, pageShown = document.readyState === 'complete') => {
+        if (!initial) return;
+        let settled = false;
+        const stop = () => {
+          if (settled) return;
+          settled = true;
+          ['wheel', 'touchstart', 'pointerdown', 'keydown'].forEach(type => window.removeEventListener(type, stop));
+          window.removeEventListener('hashchange', stop);
+          window.removeEventListener('pagehide', stop);
+          if (initial.restoration !== null) history.scrollRestoration = initial.restoration;
+          if (window.__salesInitialScroll === initial) delete window.__salesInitialScroll;
+        };
+        const releaseAfterPageShow = () => window.requestAnimationFrame(stop);
+        ['wheel', 'touchstart', 'pointerdown', 'keydown'].forEach(type => window.addEventListener(type, stop, { once: true, passive: true }));
+        window.addEventListener('hashchange', stop, { once: true });
+        window.addEventListener('pagehide', stop, { once: true });
+        if (location.hash) { stop(); return; }
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+        window.requestAnimationFrame(() => {
+          if (!settled && !location.hash) window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+          if (pageShown) releaseAfterPageShow(); else window.addEventListener('pageshow', releaseAfterPageShow, { once: true });
+        });
+      };
+      activateLandingTab('overview');
+      if (location.hash) activateLandingTabForHash();
+      settleInitialScroll(window.__salesInitialScroll);
+      window.addEventListener('pageshow', event => {
+        if (event.persisted) settleInitialScroll(prepareInitialScroll(), true);
+      });
+      byId('product-search').addEventListener('input', event => { state.query = event.target.value; renderCatalog(); });
+      byId('apply-promo').addEventListener('click', () => { state.promo = byId('promo-code').value.trim().toUpperCase() === 'DEMO10'; renderCart(); announce('promo-result', state.promo ? 'DEMO10 применён: скидка 10%.' : 'Введите DEMO10 для демонстрационной скидки.'); });
+      byId('delivery-choices').addEventListener('click', event => { const button = event.target.closest('button[data-delivery]'); if (!button || state.order) return; state.delivery = button.dataset.delivery; setActiveChoices(byId('delivery-choices'), state.delivery, 'delivery'); });
+      byId('payment-choices').addEventListener('click', event => { const button = event.target.closest('button[data-payment]'); if (!button || state.order) return; state.payment = button.dataset.payment; setActiveChoices(byId('payment-choices'), state.payment, 'payment'); });
+      byId('place-demo-order').addEventListener('click', createOrder);
+      byId('role-row').addEventListener('click', event => { const button = event.target.closest('button[data-role]'); if (!button) return; state.role = button.dataset.role; renderRole(); });
+      byId('pack-order').addEventListener('click', packOrder);
+      byId('toggle-campaign').addEventListener('click', event => { state.campaign = !state.campaign; event.currentTarget.textContent = state.campaign ? 'Выключить' : 'Включить'; announce('growth-result', state.campaign ? 'Демо-кампания включена только в этой вкладке.' : 'Демо-кампания выключена.'); });
+      byId('preview-broadcast').addEventListener('click', () => { byId('broadcast-state').textContent = 'Предпросмотр'; announce('growth-result', 'Предпросмотр: «Новинки недели уже в каталоге». Сообщение никуда не отправлено.'); });
+      byId('store-name').addEventListener('input', applyStoreName);
+      byId('palette-row').addEventListener('click', event => { const button = event.target.closest('button[data-accent]'); if (!button) return; state.accent = button.dataset.accent; applyAccent(); });
+      byId('showcase-row').addEventListener('click', event => {
+        const button = event.target.closest('button[data-showcase]');
+        if (button) selectScenario(button.dataset.showcase);
+      });
+      byId('density-row').addEventListener('click', event => { const button = event.target.closest('button[data-density]'); if (!button) return; state.density = button.dataset.density; applyDensity(); });
+      document.querySelectorAll('[data-scenario]').forEach(button => button.addEventListener('click', () => selectScenario(button.dataset.scenario)));
+      document.querySelectorAll('[data-open-storefront]').forEach(button => button.addEventListener('click', () => { navigateToDemoTarget('story-buyer', '#product-search'); announce('order-result', 'Открыта интерактивная витрина. Данные не отправляются.'); }));
+      byId('handoff-to-admin').addEventListener('click', () => navigateToDemoTarget('story-admin', '#story-admin-heading', 'connector-to-admin', 'story-admin'));
+      byId('handoff-to-warehouse').addEventListener('click', () => navigateToDemoTarget('story-warehouse', '#fulfillment-heading', 'connector-to-warehouse', 'story-warehouse'));
+      byId('handoff-to-issuance').addEventListener('click', () => navigateToDemoTarget('story-issuance', '#story-issuance-heading', 'connector-to-issuance', 'story-issuance'));
+      byId('handoff-to-receipt').addEventListener('click', () => navigateToDemoTarget('story-receipt', '#story-receipt-heading', 'connector-to-receipt', 'story-receipt'));
+      byId('prepare-issuance').addEventListener('click', prepareIssuance);
+      document.querySelectorAll('[data-open-admin-demo]').forEach(button => button.addEventListener('click', () => {
+        const target = button.dataset.openAdminDemo;
+        const order = state.order;
+        if (target === 'growth') {
+          navigateToDemoTarget('growth-preview', '#toggle-campaign');
+          return;
+        }
+        if (!order || order.paymentStatus !== 'confirmed') {
+          announce('admin-tools-result', 'Сначала подтвердите оплату, чтобы открыть следующий рабочий блок.');
+          navigateToDemoTarget('story-admin', '#confirm-demo-order', 'story-admin');
+          return;
+        }
+        if (!order.requiresPacking) {
+          if (target === 'inventory') return;
+          navigateToDemoTarget('story-receipt', '#story-receipt-heading', 'connector-to-receipt', 'story-receipt');
+          return;
+        }
+        navigateToDemoTarget('story-warehouse', target === 'inventory' ? '[data-role="owner"]' : '#fulfillment-heading', 'connector-to-warehouse', 'story-warehouse');
+      }));
+      document.querySelectorAll('[data-price-mode]').forEach(button => button.addEventListener('click', () => { const purchase = button.dataset.priceMode === 'buy'; const prices = purchase ? { start: '89 000 ₽', business: '159 000 ₽', pro: '249 000 ₽' } : { start: '5 900 ₽', business: '11 900 ₽', pro: '19 900 ₽' }; document.querySelectorAll('[data-price]').forEach(element => { element.textContent = prices[element.dataset.price]; }); document.querySelectorAll('[data-unit]').forEach(element => { element.textContent = purchase ? 'единоразово' : 'в месяц'; }); document.querySelectorAll('[data-price-mode]').forEach(control => { const active = control === button; control.classList.toggle('active', active); control.setAttribute('aria-pressed', String(active)); }); byId('terms-title').textContent = purchase ? 'Что включает покупка' : 'Что включает аренда'; byId('terms-copy').textContent = purchase ? 'Развёртывание на инфраструктуре клиента и 3 месяца поддержки. Дальнейшая поддержка — от 5 900 ₽ в месяц.' : 'Управляемый хостинг, обновления, контроль резервного копирования и техническая поддержка.'; }));
+      byId('reset-demo').addEventListener('click', resetDemo);
+      const setupSectionReveals = () => {
+        const panel = landingTabs.overview.panel;
+        const sections = [...panel.querySelectorAll('[data-reveal]')];
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
+          document.querySelectorAll('[data-reveal]').forEach(section => section.classList.add('is-visible'));
+          return;
+        }
+        document.documentElement.classList.add('motion-ready');
+        const pending = new Set();
+        let frame = 0;
+        const observer = new IntersectionObserver(entries => entries.forEach(entry => {
+          if (entry.isIntersecting || entry.boundingClientRect.top < 0) finish(entry.target);
+        }), { threshold: 0, rootMargin: '0px' });
+        const stopPendingChecks = () => {
+          if (pending.size) return;
+          observer.disconnect();
+          window.removeEventListener('scroll', schedulePendingCheck);
+          window.removeEventListener('resize', schedulePendingCheck);
+        };
+        const finish = section => {
+          section.classList.add('is-visible');
+          if (!pending.delete(section)) return;
+          observer.unobserve(section);
+          stopPendingChecks();
+        };
+        const checkPending = () => {
+          frame = 0;
+          if (panel.hidden) return;
+          pending.forEach(section => {
+            if (section.getBoundingClientRect().top < window.innerHeight) finish(section);
+          });
+        };
+        const schedulePendingCheck = () => {
+          if (!frame) frame = window.requestAnimationFrame(checkPending);
+        };
+        armOverviewReveals = () => {
+          if (panel.hidden) return;
+          const toObserve = [];
+          sections.forEach(section => {
+            if (section.classList.contains('is-visible')) return;
+            const rect = section.getBoundingClientRect();
+            if (!rect.width && !rect.height || rect.top < window.innerHeight) {
+              finish(section);
+              return;
+            }
+            toObserve.push(section);
+          });
+          toObserve.forEach(section => {
+            section.classList.add('reveal-pending');
+            pending.add(section);
+            observer.observe(section);
+          });
+          if (pending.size) {
+            window.addEventListener('scroll', schedulePendingCheck, { passive: true });
+            window.addEventListener('resize', schedulePendingCheck);
+            schedulePendingCheck();
+          }
+        };
+        armOverviewReveals();
+      };
+      window.addEventListener('pageshow', setupSectionReveals, { once: true });
+      resetDemo();
+    })();
+  </script>
+</body>
+</html>
