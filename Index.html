@@ -945,8 +945,23 @@
         .operations-row-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; }
         .operations-meta { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
         .operations-form { display: grid; gap: 8px; margin-top: 8px; }
-        .operations-form input, .operations-form select { width: 100%; box-sizing: border-box; }
+        .operations-form input, .operations-form select, .operations-form textarea { width: 100%; box-sizing: border-box; }
+        .catalog-toolbar { display: grid; gap: 8px; }
+        .catalog-toolbar-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+        .catalog-book-actions { margin-top: 10px; }
+        .catalog-media-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+        .catalog-media-item { display: grid; gap: 5px; min-width: 0; }
+        .catalog-media-item img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 8px; background: var(--surface-alt); }
+        .catalog-media-item button { min-height: 36px; }
+        .catalog-selection { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+        .catalog-selection input { width: 20px; height: 20px; }
+        .catalog-form-title { margin: 0; font-size: 18px; color: var(--text-dark); }
+        .catalog-status { min-height: 20px; color: var(--text-secondary); font-size: 13px; }
         .operations-print { display: none; }
+        @media (max-width: 340px) {
+            .catalog-toolbar-row { grid-template-columns: minmax(0, 1fr); }
+            .catalog-media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
         @media (max-width: 340px) {
             .operations-tab-list, .operations-action-grid { grid-template-columns: minmax(0, 1fr); }
             .operations-tab-list button:last-child:nth-child(odd), .operations-action-grid > :last-child:nth-child(odd) { grid-column: auto; }
@@ -3316,6 +3331,13 @@
 
         let adminSession = null;
         let operationsSection = 'home';
+        const catalogState = {
+            view: 'active',
+            query: '',
+            sort: 'default',
+            offset: 0,
+            selectedBookIds: new Set(),
+        };
 
         function hasAdminCapability(capability) {
             return adminSession?.capabilities?.includes('*') || adminSession?.capabilities?.includes(capability);
@@ -3342,6 +3364,7 @@
 
         function operationsTabs() {
             const tabs = [['home', '🏠 Главная']];
+            if (hasAdminCapability('catalog.manage')) tabs.push(['catalog', '📚 Каталог']);
             if (hasAdminCapability('inventory.read')) tabs.push(['inventory', '📦 Остатки']);
             if (hasAdminCapability('fulfillment.manage')) tabs.push(['fulfillment', '🧾 Сборка']);
             if (hasAdminCapability('book.import')) tabs.push(['import', '⬆️ Импорт']);
@@ -3374,6 +3397,7 @@
             content.innerHTML = '<div class="admin-empty">Загрузка...</div>';
             try {
                 if (operationsSection === 'home') renderHomeOperations(content);
+                if (operationsSection === 'catalog') await loadCatalogOperations(content);
                 if (operationsSection === 'inventory') await loadInventoryOperations(content);
                 if (operationsSection === 'fulfillment') await loadFulfillmentOperations(content);
                 if (operationsSection === 'import') renderImportOperations(content);
@@ -3391,6 +3415,335 @@
                 return;
             }
             content.innerHTML = '<div class="admin-empty">На главной вкладке доступны сводки и инструменты, соответствующие вашим правам.</div>';
+        }
+
+        async function catalogRequest(path, {method = 'GET', json, body} = {}) {
+            const options = { method, headers: telegramAuthHeaders(), cache: 'no-store' };
+            if (json !== undefined) {
+                options.headers = telegramAuthHeaders({ 'Content-Type': 'application/json' });
+                options.body = JSON.stringify(json);
+            }
+            if (body) options.body = body;
+            const response = await fetch(path, options);
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || `Ошибка каталога: ${response.status}`);
+            return result;
+        }
+
+        function catalogCategoryOptions(categories, selectedId, {includeKeep = false} = {}) {
+            const selected = Number(selectedId);
+            const options = [
+                includeKeep ? '<option value="keep">Текущая категория</option>' : '',
+                `<option value="none" ${!includeKeep && selectedId === null ? 'selected' : ''}>Без категории</option>`,
+                ...categories.map(category => `<option value="${category.id}" ${category.id === selected ? 'selected' : ''}>${escapeHtml(`${category.emoji || ''} ${category.name}`.trim())}</option>`),
+            ];
+            return options.join('');
+        }
+
+        async function refreshCatalogStorefront() {
+            await Promise.all([loadBooks(), loadCategories()]);
+        }
+
+        async function loadCatalogOperations(content) {
+            if (catalogState.view === 'editor') {
+                await loadCatalogEditor(content, catalogState.bookId || null);
+                return;
+            }
+            if (catalogState.view === 'categories') {
+                await loadCatalogCategories(content);
+                return;
+            }
+            const archived = catalogState.view === 'archived';
+            const params = new URLSearchParams({
+                state: archived ? 'archived' : 'active',
+                sort: catalogState.sort,
+                limit: '20',
+                offset: String(catalogState.offset),
+            });
+            if (catalogState.query) params.set('q', catalogState.query);
+            const [catalog, categoryPayload] = await Promise.all([
+                catalogRequest(`/api/admin/catalog/books?${params}`),
+                catalogRequest('/api/admin/catalog/categories'),
+            ]);
+            catalogState.categories = categoryPayload.categories || [];
+            renderCatalogList(content, catalog, archived);
+        }
+
+        function renderCatalogList(content, catalog, archived) {
+            const books = catalog.books || [];
+            const selectedCount = catalogState.selectedBookIds.size;
+            const list = books.map(book => {
+                const stock = book.stock.mode === 'unlimited' ? '∞' : `${book.stock.available_quantity} из ${book.stock.stock_quantity}`;
+                const category = book.category ? `${book.category.emoji || ''} ${book.category.name}`.trim() : 'Без категории';
+                const selected = catalogState.selectedBookIds.has(book.id);
+                if (archived) {
+                    const replacement = catalogCategoryOptions(catalogState.categories || [], null, {includeKeep: true});
+                    return `<div class="operations-row"><div class="operations-row-head"><span>${escapeHtml(book.title)}</span><span>${book.price} ₽</span></div><div class="operations-meta">${escapeHtml(category)} · архив</div><label class="operations-form"><span>Восстановить в категорию</span><select id="catalogRestore_${book.id}">${replacement}</select></label><div class="operations-action-grid"><button class="operations-action primary" type="button" onclick="restoreCatalogBook(${book.id})">Восстановить</button><button class="operations-action" type="button" onclick="openCatalogList()">К активным</button></div></div>`;
+                }
+                return `<div class="operations-row"><div class="operations-row-head"><span>${escapeHtml(book.title)}</span><span>${book.price} ₽</span></div><div class="operations-meta">${escapeHtml(category)} · остаток: ${escapeHtml(stock)}</div><label class="catalog-selection"><input type="checkbox" ${selected ? 'checked' : ''} onchange="toggleCatalogBookSelection(${book.id}, this.checked)"><span>Выбрать для массового действия</span></label><div class="operations-action-grid catalog-book-actions"><button class="operations-action primary" type="button" onclick="openCatalogEditor(${book.id})">Редактировать</button><button class="operations-action" type="button" onclick="archiveCatalogBook(${book.id})">В архив</button><button class="operations-action" type="button" onclick="moveCatalogWorkspaceBook(${book.id}, 'up')">↑ Выше</button><button class="operations-action" type="button" onclick="moveCatalogWorkspaceBook(${book.id}, 'down')">↓ Ниже</button><button class="operations-action" type="button" onclick="moveCatalogWorkspaceBook(${book.id}, 'top')">⇈ В начало</button><button class="operations-action" type="button" onclick="moveCatalogWorkspaceBook(${book.id}, 'bottom')">⇊ В конец</button></div></div>`;
+            }).join('') || '<div class="admin-empty">Книг по этому запросу нет.</div>';
+            const canMore = catalog.next_offset !== null;
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>${archived ? 'Архив книг' : 'Каталог книг'}</span><span>${catalog.total || 0}</span></div><div class="catalog-toolbar"><form class="operations-form" onsubmit="searchCatalogBooks(event)"><input name="q" value="${escapeHtml(catalogState.query)}" maxlength="120" placeholder="Поиск по названию"><div class="catalog-toolbar-row"><select name="sort"><option value="default" ${catalogState.sort === 'default' ? 'selected' : ''}>Порядок каталога</option><option value="title" ${catalogState.sort === 'title' ? 'selected' : ''}>По названию</option><option value="category" ${catalogState.sort === 'category' ? 'selected' : ''}>По категории</option><option value="date_new" ${catalogState.sort === 'date_new' ? 'selected' : ''}>Сначала новые</option><option value="date_old" ${catalogState.sort === 'date_old' ? 'selected' : ''}>Сначала старые</option></select><button class="operations-action" type="submit">Применить</button></div></form><div class="operations-action-grid">${archived ? `<button class="operations-action primary" type="button" onclick="openCatalogList()">Активные книги</button>` : `<button class="operations-action primary" type="button" onclick="openCatalogEditor()">Добавить книгу</button>`}<button class="operations-action" type="button" onclick="openCatalogArchive()">Архив</button><button class="operations-action" type="button" onclick="openCatalogCategories()">Категории</button></div>${!archived && selectedCount ? `<div class="operations-form"><select id="catalogBulkCategory">${catalogCategoryOptions(catalogState.categories || [], null)}</select><div class="operations-action-grid"><button class="operations-action" type="button" onclick="bulkCatalogCategory()">Сменить категорию: ${selectedCount}</button><button class="operations-action danger" type="button" onclick="bulkArchiveCatalogBooks()">В архив: ${selectedCount}</button></div></div>` : ''}</div></div><div class="operations-list">${list}</div>${canMore ? '<button class="operations-action" type="button" onclick="loadMoreCatalogBooks()">Показать ещё</button>' : ''}`;
+        }
+
+        function searchCatalogBooks(event) {
+            event.preventDefault();
+            catalogState.query = event.currentTarget.elements.q.value.trim();
+            catalogState.sort = event.currentTarget.elements.sort.value;
+            catalogState.offset = 0;
+            catalogState.selectedBookIds.clear();
+            void loadOperations();
+        }
+
+        function toggleCatalogBookSelection(bookId, checked) {
+            if (checked) catalogState.selectedBookIds.add(bookId);
+            else catalogState.selectedBookIds.delete(bookId);
+            void loadOperations();
+        }
+
+        function loadMoreCatalogBooks() {
+            catalogState.offset += 20;
+            void loadOperations();
+        }
+
+        function openCatalogList() {
+            catalogState.view = 'active';
+            catalogState.offset = 0;
+            catalogState.selectedBookIds.clear();
+            void loadOperations();
+        }
+
+        function openCatalogArchive() {
+            catalogState.view = 'archived';
+            catalogState.offset = 0;
+            catalogState.selectedBookIds.clear();
+            void loadOperations();
+        }
+
+        async function moveCatalogWorkspaceBook(bookId, action) {
+            try {
+                await catalogRequest('/api/admin/catalog/order', {method: 'POST', json: {book_id: bookId, action}});
+                tg.HapticFeedback.notificationOccurred('success');
+                await refreshCatalogStorefront();
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось изменить порядок книги.');
+            }
+        }
+
+        async function archiveCatalogBook(bookId) {
+            if (!window.confirm('Перенести книгу в архив? Её можно будет восстановить.')) return;
+            try {
+                await catalogRequest('/api/admin/catalog/books/bulk/archive', {method: 'POST', json: {book_ids: [bookId]}});
+                await refreshCatalogStorefront();
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось архивировать книгу.');
+            }
+        }
+
+        async function bulkArchiveCatalogBooks() {
+            const bookIds = [...catalogState.selectedBookIds];
+            if (!bookIds.length || !window.confirm(`Перенести в архив ${bookIds.length} книг?`)) return;
+            try {
+                const result = await catalogRequest('/api/admin/catalog/books/bulk/archive', {method: 'POST', json: {book_ids: bookIds}});
+                catalogState.selectedBookIds.clear();
+                tg.showAlert(`В архив: ${result.archived_ids.length}; пропущено: ${result.skipped_ids.length}.`);
+                await refreshCatalogStorefront();
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось архивировать книги.');
+            }
+        }
+
+        async function bulkCatalogCategory() {
+            const bookIds = [...catalogState.selectedBookIds];
+            const select = document.getElementById('catalogBulkCategory');
+            if (!bookIds.length || !select || select.value === 'none') {
+                tg.showAlert('Выберите категорию для книг.');
+                return;
+            }
+            try {
+                const result = await catalogRequest('/api/admin/catalog/books/bulk/category', {method: 'POST', json: {book_ids: bookIds, category_id: Number(select.value)}});
+                catalogState.selectedBookIds.clear();
+                tg.showAlert(`Категория изменена: ${result.updated_ids.length}; пропущено: ${result.skipped_ids.length}.`);
+                await refreshCatalogStorefront();
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось изменить категорию.');
+            }
+        }
+
+        async function restoreCatalogBook(bookId) {
+            const select = document.getElementById(`catalogRestore_${bookId}`);
+            const value = select?.value || 'keep';
+            const payload = value === 'keep' ? {} : {category_id: value === 'none' ? null : Number(value)};
+            try {
+                await catalogRequest(`/api/admin/catalog/books/${bookId}/restore`, {method: 'POST', json: payload});
+                await refreshCatalogStorefront();
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert(error.message === 'category_unavailable' ? 'Выберите активную категорию или «Без категории».' : error.message || 'Не удалось восстановить книгу.');
+            }
+        }
+
+        function openCatalogEditor(bookId) {
+            catalogState.view = 'editor';
+            catalogState.bookId = bookId || null;
+            void loadOperations();
+        }
+
+        async function loadCatalogEditor(content, bookId) {
+            const categories = await catalogRequest('/api/admin/catalog/categories');
+            const book = bookId ? (await catalogRequest(`/api/admin/catalog/books/${bookId}`)).book : null;
+            renderCatalogEditor(content, book, categories.categories || []);
+        }
+
+        function renderCatalogEditor(content, book, categories) {
+            const categoryId = book?.category?.id ?? null;
+            const stock = book?.stock || {mode: 'unlimited', stock_quantity: null};
+            const pages = book?.media?.pages || [];
+            const cover = book?.media?.cover;
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><h3 class="catalog-form-title">${book ? 'Редактирование книги' : 'Новая книга'}</h3><button class="operations-action" type="button" onclick="openCatalogList()">К списку</button></div><form class="operations-form" data-book-id="${book?.id || ''}" onsubmit="saveCatalogBook(event)"><label>Название<input name="title" maxlength="160" required value="${escapeHtml(book?.title || '')}"></label><label>Автор<input name="author" maxlength="160" value="${escapeHtml(book?.author || '')}"></label><label>Описание<textarea name="description" maxlength="3500" rows="5">${escapeHtml(book?.description || '')}</textarea></label><div class="catalog-toolbar-row"><label>Цена, ₽<input name="price" type="number" min="1" max="10000000" required value="${book?.price || ''}"></label><label>Категория<select name="category_id">${catalogCategoryOptions(categories, categoryId)}</select></label></div><div class="catalog-toolbar-row"><label>Остаток<select name="stock_mode" onchange="toggleCatalogStockInput(this)"><option value="unlimited" ${stock.mode === 'unlimited' ? 'selected' : ''}>Без ограничений</option><option value="finite" ${stock.mode === 'finite' ? 'selected' : ''}>Ограниченный</option></select></label><label>Количество<input name="stock_quantity" type="number" min="0" max="1000000" ${stock.mode === 'unlimited' ? 'disabled' : ''} value="${stock.stock_quantity ?? ''}"></label></div><div class="operations-action-grid"><button class="operations-action primary" type="submit">${book ? 'Сохранить книгу' : 'Создать книгу'}</button><button class="operations-action" type="button" onclick="openCatalogCategories()">Категории</button></div><div class="catalog-status" aria-live="polite"></div></form></div>${book ? `<div class="operations-row"><div class="operations-row-head"><span>Обложка и страницы</span></div><form class="operations-form" onsubmit="uploadCatalogCover(event, ${book.id})"><input name="file" type="file" accept="image/*" required><button class="operations-action primary" type="submit">Заменить обложку</button></form>${cover ? `<div class="catalog-media-grid"><div class="catalog-media-item"><img src="${escapeHtml(cover.thumbnail_url)}" alt="Обложка"><button class="operations-action danger" type="button" onclick="deleteCatalogCover(${book.id})">Удалить обложку</button></div></div>` : '<div class="operations-meta">Обложка пока не загружена.</div>'}<form class="operations-form" onsubmit="uploadCatalogPages(event, ${book.id})"><input name="files" type="file" accept="image/*" multiple required><button class="operations-action primary" type="submit">Добавить страницы</button></form><div class="catalog-media-grid">${pages.map((page, index) => `<div class="catalog-media-item"><img src="${escapeHtml(page.thumbnail_url)}" alt="Страница ${index + 1}"><button class="operations-action danger" type="button" onclick="deleteCatalogPage(${book.id}, '${page.id}')">Удалить</button></div>`).join('')}</div>${pages.length ? `<button class="operations-action danger" type="button" onclick="clearCatalogPages(${book.id})">Удалить все страницы</button>` : ''}</div>` : ''}`;
+        }
+
+        function toggleCatalogStockInput(select) {
+            const input = select.closest('form').elements.stock_quantity;
+            input.disabled = select.value === 'unlimited';
+            if (input.disabled) input.value = '';
+        }
+
+        async function saveCatalogBook(event) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const status = form.querySelector('.catalog-status');
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            status.textContent = 'Сохраняем...';
+            const values = {
+                title: form.elements.title.value.trim(),
+                author: form.elements.author.value.trim(),
+                description: form.elements.description.value.trim(),
+                price: Number(form.elements.price.value),
+                category_id: form.elements.category_id.value === 'none' ? null : Number(form.elements.category_id.value),
+            };
+            try {
+                const bookId = form.dataset.bookId;
+                const saved = await catalogRequest(bookId ? `/api/admin/catalog/books/${bookId}` : '/api/admin/catalog/books', {method: bookId ? 'PUT' : 'POST', json: values});
+                const stock = form.elements.stock_mode.value === 'unlimited'
+                    ? {mode: 'unlimited'}
+                    : {mode: 'finite', quantity: Number(form.elements.stock_quantity.value)};
+                await catalogRequest(`/api/admin/catalog/books/${saved.book.id}/stock`, {method: 'PUT', json: stock});
+                status.textContent = 'Сохранено.';
+                tg.HapticFeedback.notificationOccurred('success');
+                await refreshCatalogStorefront();
+                openCatalogEditor(saved.book.id);
+            } catch (error) {
+                status.textContent = error.message || 'Не удалось сохранить книгу.';
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function uploadCatalogCover(event, bookId) {
+            event.preventDefault();
+            const file = event.currentTarget.elements.file.files[0];
+            if (!file) return;
+            const body = new FormData();
+            body.append('file', file, file.name);
+            try {
+                await catalogRequest(`/api/admin/catalog/books/${bookId}/cover`, {method: 'PUT', body});
+                await refreshCatalogStorefront();
+                openCatalogEditor(bookId);
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось загрузить обложку.');
+            }
+        }
+
+        async function uploadCatalogPages(event, bookId) {
+            event.preventDefault();
+            const files = [...event.currentTarget.elements.files.files];
+            if (!files.length) return;
+            let failed = 0;
+            for (const file of files) {
+                const body = new FormData();
+                body.append('file', file, file.name);
+                try {
+                    await catalogRequest(`/api/admin/catalog/books/${bookId}/pages`, {method: 'POST', body});
+                } catch (error) {
+                    failed += 1;
+                }
+            }
+            await refreshCatalogStorefront();
+            openCatalogEditor(bookId);
+            if (failed) tg.showAlert(`Не удалось загрузить файлов: ${failed}. Остальные сохранены.`);
+        }
+
+        async function deleteCatalogCover(bookId) {
+            if (!window.confirm('Удалить обложку?')) return;
+            try {
+                await catalogRequest(`/api/admin/catalog/books/${bookId}/cover`, {method: 'DELETE'});
+                await refreshCatalogStorefront();
+                openCatalogEditor(bookId);
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось удалить обложку.');
+            }
+        }
+
+        async function deleteCatalogPage(bookId, assetId) {
+            try {
+                await catalogRequest(`/api/admin/catalog/books/${bookId}/pages/${encodeURIComponent(assetId)}`, {method: 'DELETE'});
+                await refreshCatalogStorefront();
+                openCatalogEditor(bookId);
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось удалить страницу.');
+            }
+        }
+
+        async function clearCatalogPages(bookId) {
+            if (!window.confirm('Удалить все страницы книги?')) return;
+            try {
+                await catalogRequest(`/api/admin/catalog/books/${bookId}/pages`, {method: 'DELETE'});
+                await refreshCatalogStorefront();
+                openCatalogEditor(bookId);
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось удалить страницы.');
+            }
+        }
+
+        function openCatalogCategories() {
+            catalogState.view = 'categories';
+            void loadOperations();
+        }
+
+        async function loadCatalogCategories(content) {
+            const result = await catalogRequest('/api/admin/catalog/categories');
+            const rows = (result.categories || []).map(category => `<div class="operations-row"><div class="operations-row-head"><span>${escapeHtml(`${category.emoji || ''} ${category.name}`.trim())}</span><span>${category.books_count} книг</span></div><form class="operations-form" onsubmit="saveCatalogCategory(event, ${category.id})"><div class="catalog-toolbar-row"><input name="name" maxlength="120" value="${escapeHtml(category.name)}" required><input name="emoji" maxlength="32" value="${escapeHtml(category.emoji || '')}" aria-label="Эмодзи"></div><div class="operations-action-grid"><button class="operations-action" type="submit">Сохранить</button><button class="operations-action danger" type="button" onclick="deactivateCatalogCategory(${category.id})">Отключить</button></div></form></div>`).join('') || '<div class="admin-empty">Категорий пока нет.</div>';
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><h3 class="catalog-form-title">Категории</h3><button class="operations-action" type="button" onclick="openCatalogList()">К книгам</button></div><form class="operations-form" onsubmit="saveCatalogCategory(event)"><div class="catalog-toolbar-row"><input name="name" maxlength="120" placeholder="Название категории" required><input name="emoji" maxlength="32" placeholder="Эмодзи"></div><button class="operations-action primary" type="submit">Добавить категорию</button></form></div><div class="operations-list">${rows}</div>`;
+        }
+
+        async function saveCatalogCategory(event, categoryId) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const values = {name: form.elements.name.value.trim(), emoji: form.elements.emoji.value.trim()};
+            try {
+                await catalogRequest(categoryId ? `/api/admin/catalog/categories/${categoryId}` : '/api/admin/catalog/categories', {method: categoryId ? 'PUT' : 'POST', json: values});
+                await refreshCatalogStorefront();
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось сохранить категорию.');
+            }
+        }
+
+        async function deactivateCatalogCategory(categoryId) {
+            if (!window.confirm('Отключить категорию? Она останется в истории книг.')) return;
+            try {
+                await catalogRequest(`/api/admin/catalog/categories/${categoryId}`, {method: 'DELETE'});
+                await refreshCatalogStorefront();
+                await loadOperations();
+            } catch (error) {
+                tg.showAlert(error.message || 'Не удалось отключить категорию.');
+            }
         }
 
         function inventoryMovementLabel(item) {

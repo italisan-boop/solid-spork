@@ -442,6 +442,7 @@ def set_stock_quantity_sync(
     admin_id: int,
     *,
     actor_role: str = "owner",
+    source: str = "telegram",
 ) -> bool:
     if isinstance(stock_quantity, bool) or (
         stock_quantity is not None and (
@@ -510,7 +511,7 @@ def set_stock_quantity_sync(
             database,
             actor_user_id=admin_id,
             actor_role=actor_role,
-            source="telegram",
+            source=source,
             action=action,
             entity_type="book",
             entity_id=book_id,

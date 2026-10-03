@@ -16,6 +16,7 @@ from runtime.context import maybe_current_tenant_context
 
 MAX_SOURCE_BYTES = 10 * 1024 * 1024
 MAX_PIXELS = 16_000_000
+MAX_PAGE_MEDIA = 20
 THUMBNAIL_SIZE = (400, 600)
 DISPLAY_SIZE = (1200, 1800)
 
@@ -71,11 +72,13 @@ def _save_variant(root: Path, asset_id: str, variant: str, image: Image.Image) -
 def attach_book_media_sync(
     book_id: int,
     role: str,
-    position: int,
+    position: int | None,
     data: bytes,
 ) -> dict:
-    if role not in {"cover", "page"} or position < 0:
+    if role not in {"cover", "page"} or (position is not None and position < 0):
         raise BookMediaError("invalid media role")
+    if role == "cover":
+        position = 0
     source = _decode_image(data)
     try:
         asset_id = uuid.uuid4().hex
@@ -94,6 +97,17 @@ def attach_book_media_sync(
             database.execute("BEGIN IMMEDIATE")
             if not database.execute("SELECT 1 FROM books WHERE id = ?", (book_id,)).fetchone():
                 raise BookMediaError("book not found")
+            if role == "page" and position is None:
+                pages_count = database.execute(
+                    "SELECT COUNT(*) FROM book_media WHERE book_id = ? AND role = 'page'",
+                    (book_id,),
+                ).fetchone()[0]
+                if pages_count >= MAX_PAGE_MEDIA:
+                    raise BookMediaError("book cannot have more than 20 page images")
+                position = database.execute(
+                    "SELECT COALESCE(MAX(position) + 1, 0) FROM book_media WHERE book_id = ? AND role = 'page'",
+                    (book_id,),
+                ).fetchone()[0]
             existing = database.execute(
                 """
                 SELECT asset_id, thumbnail_filename, display_filename

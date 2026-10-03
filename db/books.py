@@ -2,6 +2,7 @@
 import asyncio
 import aiosqlite
 import json
+import sqlite3
 
 from controlplane.plan_policy import FEATURE_CATALOG, LIMIT_BOOKS
 from db.connection import connection
@@ -553,6 +554,409 @@ _BOOKS_SORT_ORDERS = {
     "date_new": "b.created_at DESC, b.id DESC",
     "date_old": "b.created_at ASC, b.id ASC",
 }
+
+
+def _catalog_book_row(database: sqlite3.Connection, book_id: int, state: str | None = None):
+    clauses = ["b.id = ?"]
+    if state == "active":
+        clauses.append("b.is_active = 1")
+        clauses.append("COALESCE(b.is_archived, 0) = 0")
+    elif state == "archived":
+        clauses.append("b.is_archived = 1")
+    row = database.execute(
+        f"""
+        SELECT b.id, b.title, b.author, b.description, b.price, b.category_id, b.category,
+               b.sort_order, b.stock_quantity, b.is_active, b.is_archived, b.created_at,
+               c.name AS category_name, c.emoji AS category_emoji, c.is_active AS category_active,
+               COALESCE((
+                   SELECT SUM(reservation.quantity)
+                   FROM inventory_reservations reservation
+                   WHERE reservation.book_id = b.id AND reservation.state = 'reserved'
+               ), 0) AS reserved_quantity
+        FROM books b
+        LEFT JOIN categories c ON c.id = b.category_id
+        WHERE {' AND '.join(clauses)}
+        """,
+        (book_id,),
+    ).fetchone()
+    return row
+
+
+def _catalog_book_payload(row: sqlite3.Row) -> dict:
+    stock_quantity = row["stock_quantity"]
+    reserved_quantity = row["reserved_quantity"]
+    category_id = row["category_id"] or None
+    category = None if category_id is None else {
+        "id": category_id,
+        "name": row["category_name"] or row["category"] or NO_CATEGORY_NAME,
+        "emoji": row["category_emoji"] or "",
+        "is_active": bool(row["category_active"]),
+    }
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "author": row["author"] or "",
+        "description": row["description"] or "",
+        "price": row["price"],
+        "category": category,
+        "sort_order": row["sort_order"],
+        "stock": {
+            "mode": "unlimited" if stock_quantity is None else "finite",
+            "stock_quantity": stock_quantity,
+            "reserved_quantity": reserved_quantity,
+            "available_quantity": None if stock_quantity is None else max(0, stock_quantity - reserved_quantity),
+        },
+        "is_active": bool(row["is_active"]),
+        "is_archived": bool(row["is_archived"]),
+        "created_at": row["created_at"],
+    }
+
+
+def _with_catalog_media(payload: dict) -> dict:
+    from storage.book_media import media_variants_for_book_sync
+
+    return {**payload, "media": media_variants_for_book_sync(payload["id"])}
+
+
+def get_catalog_book_sync(book_id: int, state: str | None = None) -> dict | None:
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        row = _catalog_book_row(database, book_id, state)
+        return _with_catalog_media(_catalog_book_payload(row)) if row else None
+    finally:
+        database.close()
+
+
+def list_catalog_books_sync(
+    *,
+    state: str = "active",
+    search_query: str = "",
+    sort_by: str = "default",
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    if state not in {"active", "archived"}:
+        raise ValueError("unsupported catalog state")
+    order_clause = _BOOKS_SORT_ORDERS.get(sort_by)
+    if order_clause is None:
+        raise ValueError("unsupported catalog sort")
+    clauses = ["b.is_archived = 1"] if state == "archived" else ["b.is_active = 1", "COALESCE(b.is_archived, 0) = 0"]
+    params: list[object] = []
+    if search_query:
+        clauses.append("unicode_casefold(b.title) LIKE ? ESCAPE '\\'")
+        params.append(_title_search_pattern(search_query))
+    where = " AND ".join(clauses)
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        total = database.execute(
+            f"SELECT COUNT(*) FROM books b WHERE {where}", params
+        ).fetchone()[0]
+        rows = database.execute(
+            f"""
+            SELECT b.id, b.title, b.author, b.description, b.price, b.category_id, b.category,
+                   b.sort_order, b.stock_quantity, b.is_active, b.is_archived, b.created_at,
+                   c.name AS category_name, c.emoji AS category_emoji, c.is_active AS category_active,
+                   COALESCE((
+                       SELECT SUM(reservation.quantity)
+                       FROM inventory_reservations reservation
+                       WHERE reservation.book_id = b.id AND reservation.state = 'reserved'
+                   ), 0) AS reserved_quantity
+            FROM books b
+            LEFT JOIN categories c ON c.id = b.category_id
+            WHERE {where}
+            ORDER BY {order_clause}
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+        return ([_with_catalog_media(_catalog_book_payload(row)) for row in rows], total)
+    finally:
+        database.close()
+
+
+def _catalog_category(database: sqlite3.Connection, category_id: int | None) -> tuple[int | None, str]:
+    if category_id is None:
+        return None, NO_CATEGORY_NAME
+    row = database.execute(
+        "SELECT id, name FROM categories WHERE id = ? AND is_active = 1", (category_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("category is unavailable")
+    return row[0], row[1]
+
+
+def _catalog_audit(
+    database: sqlite3.Connection,
+    *,
+    actor_user_id: int,
+    actor_role: str,
+    action: str,
+    book_id: int,
+    reason_code: str,
+) -> None:
+    from db.audit import append_audit_event
+
+    append_audit_event(
+        database,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        source="mini_app",
+        action=action,
+        entity_type="book",
+        entity_id=book_id,
+        details={"reason_code": reason_code},
+    )
+
+
+def create_catalog_book_sync(
+    *,
+    title: str,
+    author: str,
+    description: str,
+    price: int,
+    category_id: int | None,
+    actor_user_id: int,
+    actor_role: str,
+) -> dict:
+    from runtime.context import maybe_current_tenant_context
+    from runtime.features import require_feature
+    from runtime.quota import require_count_quota
+
+    tenant_context = maybe_current_tenant_context()
+    if tenant_context is not None:
+        require_feature(FEATURE_CATALOG, tenant_context)
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        resolved_category_id, category_name = _catalog_category(database, category_id)
+        active_books = database.execute(
+            "SELECT COUNT(*) FROM books WHERE is_active = 1 AND COALESCE(is_archived, 0) = 0"
+        ).fetchone()[0]
+        require_count_quota(LIMIT_BOOKS, active_books, context=tenant_context)
+        cursor = database.execute(
+            """
+            INSERT INTO books (
+                title, price, category, category_id, author, description, cover_photo,
+                images, emoji, stock_quantity, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, '', '[]', '', NULL, CURRENT_TIMESTAMP)
+            """,
+            (title, price, category_name, resolved_category_id, author, description),
+        )
+        book_id = cursor.lastrowid
+        _catalog_audit(
+            database,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="catalog.book.created",
+            book_id=book_id,
+            reason_code="created",
+        )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+    return get_catalog_book_sync(book_id, "active")
+
+
+def update_catalog_book_sync(
+    book_id: int,
+    *,
+    title: str,
+    author: str,
+    description: str,
+    price: int,
+    category_id: int | None,
+    actor_user_id: int,
+    actor_role: str,
+) -> dict | None:
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        if _catalog_book_row(database, book_id, "active") is None:
+            database.rollback()
+            return None
+        resolved_category_id, category_name = _catalog_category(database, category_id)
+        database.execute(
+            """
+            UPDATE books
+            SET title = ?, author = ?, description = ?, price = ?, category_id = ?, category = ?
+            WHERE id = ? AND is_active = 1 AND COALESCE(is_archived, 0) = 0
+            """,
+            (title, author, description, price, resolved_category_id, category_name, book_id),
+        )
+        _catalog_audit(
+            database,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="catalog.book.updated",
+            book_id=book_id,
+            reason_code="metadata",
+        )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+    return get_catalog_book_sync(book_id, "active")
+
+
+def archive_catalog_books_sync(
+    book_ids: list[int], *, actor_user_id: int, actor_role: str
+) -> dict[str, list[int]]:
+    ids = _normalize_book_ids(book_ids)
+    if not ids:
+        return {"archived_ids": [], "skipped_ids": []}
+    placeholders = ",".join("?" for _ in ids)
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        archived_ids = [
+            row[0]
+            for row in database.execute(
+                f"""
+                SELECT id FROM books
+                WHERE id IN ({placeholders}) AND is_active = 1 AND COALESCE(is_archived, 0) = 0
+                """,
+                ids,
+            ).fetchall()
+        ]
+        if archived_ids:
+            selected = ",".join("?" for _ in archived_ids)
+            database.execute(
+                f"UPDATE books SET is_archived = 1, is_active = 0 WHERE id IN ({selected})",
+                archived_ids,
+            )
+            for book_id in archived_ids:
+                _catalog_audit(
+                    database,
+                    actor_user_id=actor_user_id,
+                    actor_role=actor_role,
+                    action="catalog.book.archived",
+                    book_id=book_id,
+                    reason_code="archive",
+                )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+    archived = set(archived_ids)
+    return {"archived_ids": archived_ids, "skipped_ids": [book_id for book_id in ids if book_id not in archived]}
+
+
+def reassign_catalog_books_category_sync(
+    book_ids: list[int], category_id: int, *, actor_user_id: int, actor_role: str
+) -> dict[str, list[int]]:
+    ids = _normalize_book_ids(book_ids)
+    if not ids:
+        return {"updated_ids": [], "skipped_ids": []}
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        _, category_name = _catalog_category(database, category_id)
+        placeholders = ",".join("?" for _ in ids)
+        updated_ids = [
+            row[0]
+            for row in database.execute(
+                f"""
+                SELECT id FROM books
+                WHERE id IN ({placeholders}) AND is_active = 1 AND COALESCE(is_archived, 0) = 0
+                """,
+                ids,
+            ).fetchall()
+        ]
+        if updated_ids:
+            selected = ",".join("?" for _ in updated_ids)
+            database.execute(
+                f"UPDATE books SET category_id = ?, category = ? WHERE id IN ({selected})",
+                (category_id, category_name, *updated_ids),
+            )
+            for book_id in updated_ids:
+                _catalog_audit(
+                    database,
+                    actor_user_id=actor_user_id,
+                    actor_role=actor_role,
+                    action="catalog.book.category_changed",
+                    book_id=book_id,
+                    reason_code="bulk_category",
+                )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+    updated = set(updated_ids)
+    return {"updated_ids": updated_ids, "skipped_ids": [book_id for book_id in ids if book_id not in updated]}
+
+
+def restore_catalog_book_sync(
+    book_id: int,
+    *,
+    category_id: int | None,
+    reuse_category: bool = True,
+    actor_user_id: int,
+    actor_role: str,
+) -> dict:
+    from runtime.context import maybe_current_tenant_context
+    from runtime.features import require_feature
+    from runtime.quota import require_count_quota
+
+    tenant_context = maybe_current_tenant_context()
+    if tenant_context is not None:
+        require_feature(FEATURE_CATALOG, tenant_context)
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        row = _catalog_book_row(database, book_id, "archived")
+        if row is None:
+            database.rollback()
+            return {"found": False, "category_unavailable": False}
+        stored_category_id = row["category_id"] or None
+        if reuse_category and category_id is None and stored_category_id is not None:
+            active_category = database.execute(
+                "SELECT 1 FROM categories WHERE id = ? AND is_active = 1", (stored_category_id,)
+            ).fetchone()
+            if active_category is None:
+                database.rollback()
+                return {"found": True, "category_unavailable": True}
+            resolved_category_id, category_name = stored_category_id, row["category"]
+        else:
+            resolved_category_id, category_name = _catalog_category(database, category_id)
+        active_books = database.execute(
+            "SELECT COUNT(*) FROM books WHERE is_active = 1 AND COALESCE(is_archived, 0) = 0"
+        ).fetchone()[0]
+        require_count_quota(LIMIT_BOOKS, active_books, context=tenant_context)
+        database.execute(
+            """
+            UPDATE books
+            SET is_archived = 0, is_active = 1, category_id = ?, category = ?
+            WHERE id = ? AND is_archived = 1
+            """,
+            (resolved_category_id, category_name, book_id),
+        )
+        _catalog_audit(
+            database,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="catalog.book.restored",
+            book_id=book_id,
+            reason_code="restore",
+        )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+    return {"found": True, "category_unavailable": False, "book": get_catalog_book_sync(book_id, "active")}
 
 
 async def get_all_books_paginated(

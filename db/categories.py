@@ -1,6 +1,9 @@
 """Модуль для работы с категориями книг"""
 import aiosqlite
+import sqlite3
+
 from db.connection import connection
+from db.schema import connect
 
 
 
@@ -92,6 +95,189 @@ async def get_category_books_count(category_id: int) -> int:
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+def _catalog_category_payload(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "emoji": row["emoji"] or "",
+        "sort_order": row["sort_order"],
+        "books_count": row["books_count"],
+    }
+
+
+def list_catalog_categories_sync() -> list[dict]:
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        rows = database.execute(
+            """
+            SELECT c.id, c.name, c.emoji, c.sort_order,
+                   COUNT(b.id) AS books_count
+            FROM categories c
+            LEFT JOIN books b ON b.category_id = c.id
+                AND b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
+            WHERE c.is_active = 1
+            GROUP BY c.id
+            ORDER BY c.sort_order ASC, c.name ASC
+            """
+        ).fetchall()
+        return [_catalog_category_payload(row) for row in rows]
+    finally:
+        database.close()
+
+
+def _audit_category(
+    database: sqlite3.Connection,
+    *,
+    actor_user_id: int,
+    actor_role: str,
+    action: str,
+    category_id: int,
+    reason_code: str,
+) -> None:
+    from db.audit import append_audit_event
+
+    append_audit_event(
+        database,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        source="mini_app",
+        action=action,
+        entity_type="category",
+        entity_id=category_id,
+        details={"reason_code": reason_code},
+    )
+
+
+def _catalog_category_row(database: sqlite3.Connection, category_id: int):
+    return database.execute(
+        """
+        SELECT c.id, c.name, c.emoji, c.sort_order,
+               COUNT(b.id) AS books_count
+        FROM categories c
+        LEFT JOIN books b ON b.category_id = c.id
+            AND b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
+        WHERE c.id = ? AND c.is_active = 1
+        GROUP BY c.id
+        """,
+        (category_id,),
+    ).fetchone()
+
+
+def create_catalog_category_sync(
+    name: str, emoji: str, *, actor_user_id: int, actor_role: str
+) -> dict:
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        existing = database.execute(
+            "SELECT 1 FROM categories WHERE is_active = 1 AND unicode_casefold(name) = unicode_casefold(?)",
+            (name,),
+        ).fetchone()
+        if existing:
+            raise ValueError("category already exists")
+        sort_order = database.execute(
+            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM categories WHERE is_active = 1"
+        ).fetchone()[0]
+        cursor = database.execute(
+            "INSERT INTO categories (name, emoji, sort_order) VALUES (?, ?, ?)",
+            (name, emoji, sort_order),
+        )
+        category_id = cursor.lastrowid
+        _audit_category(
+            database,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="catalog.category.created",
+            category_id=category_id,
+            reason_code="created",
+        )
+        row = _catalog_category_row(database, category_id)
+        database.commit()
+        return _catalog_category_payload(row)
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def update_catalog_category_sync(
+    category_id: int, name: str, emoji: str, *, actor_user_id: int, actor_role: str
+) -> dict | None:
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        if _catalog_category_row(database, category_id) is None:
+            database.rollback()
+            return None
+        duplicate = database.execute(
+            """
+            SELECT 1 FROM categories
+            WHERE is_active = 1 AND id != ? AND unicode_casefold(name) = unicode_casefold(?)
+            """,
+            (category_id, name),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("category already exists")
+        database.execute(
+            "UPDATE categories SET name = ?, emoji = ? WHERE id = ? AND is_active = 1",
+            (name, emoji, category_id),
+        )
+        database.execute("UPDATE books SET category = ? WHERE category_id = ?", (name, category_id))
+        _audit_category(
+            database,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="catalog.category.updated",
+            category_id=category_id,
+            reason_code="metadata",
+        )
+        row = _catalog_category_row(database, category_id)
+        database.commit()
+        return _catalog_category_payload(row)
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def deactivate_catalog_category_sync(
+    category_id: int, *, actor_user_id: int, actor_role: str
+) -> dict:
+    database = connect()
+    database.row_factory = sqlite3.Row
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        row = _catalog_category_row(database, category_id)
+        if row is None:
+            database.rollback()
+            return {"found": False, "books_count": 0}
+        books_count = row["books_count"]
+        if books_count:
+            database.rollback()
+            return {"found": True, "books_count": books_count}
+        database.execute("UPDATE categories SET is_active = 0 WHERE id = ?", (category_id,))
+        _audit_category(
+            database,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            action="catalog.category.deactivated",
+            category_id=category_id,
+            reason_code="deactivated",
+        )
+        database.commit()
+        return {"found": True, "books_count": 0}
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
 
 
 NO_CATEGORY_NAME = "Без категории"

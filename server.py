@@ -40,6 +40,7 @@ from db.inventory import (
     list_inventory_sync,
     recent_movements_sync,
     reserve_order_inventory,
+    set_stock_quantity_sync,
 )
 from db.operational_events import OperationalEvent, get_latest_event_sync, record_event_sync
 from db.staff import (
@@ -52,7 +53,22 @@ from db.audit import (
     list_audit_events_export_sync,
     list_audit_events_sync,
 )
-from db.books import move_book_sync
+from db.books import (
+    archive_catalog_books_sync,
+    create_catalog_book_sync,
+    get_catalog_book_sync,
+    list_catalog_books_sync,
+    move_book_sync,
+    reassign_catalog_books_category_sync,
+    restore_catalog_book_sync,
+    update_catalog_book_sync,
+)
+from db.categories import (
+    create_catalog_category_sync,
+    deactivate_catalog_category_sync,
+    list_catalog_categories_sync,
+    update_catalog_category_sync,
+)
 from db.book_imports import (
     BookImportError,
     build_book_import_template_xlsx,
@@ -82,7 +98,15 @@ from runtime.context import maybe_current_tenant_context
 from runtime.features import QuotaExceededError
 from runtime.quota import require_count_quota
 from content_defaults import TEMPLATES
-from storage.book_media import media_variants_for_book_sync, resolve_media_variant_sync
+from storage.book_media import (
+    BookMediaError,
+    attach_book_media_sync,
+    clear_book_media_sync,
+    delete_book_media_sync,
+    list_book_media_sync,
+    media_variants_for_book_sync,
+    resolve_media_variant_sync,
+)
 from telegram_auth import TelegramInitDataError, validate_telegram_init_data
 
 BOT_TOKEN = settings.BOT_TOKEN
@@ -182,6 +206,111 @@ def require_telegram_permission(permission: str):
 
 def require_telegram_admin(handler):
     return require_telegram_permission("admin.access")(handler)
+
+
+_CATALOG_BOOK_FIELDS = {"title", "author", "description", "price", "category_id"}
+_CATALOG_SORTS = {"default", "title", "category", "date_new", "date_old"}
+_CATALOG_MAX_SELECTION = 100
+_CATALOG_MAX_TITLE = 160
+_CATALOG_MAX_AUTHOR = 160
+_CATALOG_MAX_CATEGORY = 120
+_CATALOG_MAX_EMOJI = 32
+_CATALOG_MAX_DESCRIPTION = 3500
+_CATALOG_MAX_PRICE = 10_000_000
+_CATALOG_MAX_STOCK = 1_000_000
+_CATALOG_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def _catalog_text(
+    value: object, *, field: str, maximum: int, required: bool = False, multiline: bool = False
+) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be text")
+    normalized = value.strip()
+    invalid_control = any(
+        ord(char) < 32 and (not multiline or char not in "\n\r") for char in normalized
+    )
+    if (required and not normalized) or len(normalized) > maximum or invalid_control:
+        raise ValueError(f"invalid {field}")
+    return normalized
+
+
+def _catalog_positive_id(value: object, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _catalog_book_payload(payload: object) -> dict:
+    if not isinstance(payload, dict) or set(payload) != _CATALOG_BOOK_FIELDS:
+        raise ValueError("title, author, description, price and category_id are required")
+    price = payload["price"]
+    if isinstance(price, bool) or not isinstance(price, int) or not 1 <= price <= _CATALOG_MAX_PRICE:
+        raise ValueError("price must be a positive integer")
+    category_id = payload["category_id"]
+    if category_id is not None:
+        category_id = _catalog_positive_id(category_id, field="category_id")
+    return {
+        "title": _catalog_text(payload["title"], field="title", maximum=_CATALOG_MAX_TITLE, required=True),
+        "author": _catalog_text(payload["author"], field="author", maximum=_CATALOG_MAX_AUTHOR),
+        "description": _catalog_text(payload["description"], field="description", maximum=_CATALOG_MAX_DESCRIPTION, multiline=True),
+        "price": price,
+        "category_id": category_id,
+    }
+
+
+def _catalog_stock_payload(payload: object) -> int | None:
+    if not isinstance(payload, dict) or not isinstance(payload.get("mode"), str):
+        raise ValueError("stock mode is required")
+    if payload["mode"] == "unlimited" and set(payload) == {"mode"}:
+        return None
+    if payload["mode"] == "finite" and set(payload) == {"mode", "quantity"}:
+        quantity = payload["quantity"]
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or not 0 <= quantity <= _CATALOG_MAX_STOCK:
+            raise ValueError("stock quantity must be a non-negative integer")
+        return quantity
+    raise ValueError("invalid stock payload")
+
+
+def _catalog_book_ids(payload: object) -> list[int]:
+    if not isinstance(payload, dict) or set(payload) != {"book_ids"} or not isinstance(payload["book_ids"], list):
+        raise ValueError("book_ids are required")
+    book_ids = payload["book_ids"]
+    if not 1 <= len(book_ids) <= _CATALOG_MAX_SELECTION:
+        raise ValueError("invalid number of books")
+    normalized = [_catalog_positive_id(book_id, field="book_id") for book_id in book_ids]
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("book_ids must be unique")
+    return normalized
+
+
+def _catalog_media_audit(book_id: int, action: str, reason_code: str) -> None:
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        append_audit_event(
+            database,
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+            source="mini_app",
+            action=action,
+            entity_type="book",
+            entity_id=book_id,
+            details={"reason_code": reason_code},
+        )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def _catalog_media_response(book_id: int):
+    book = get_catalog_book_sync(book_id, "active")
+    if book is None:
+        return None
+    return {"book": book, "media": list_book_media_sync(book_id)}
 
 
 def _telegram_request_options(timeout: int) -> dict[str, object]:
@@ -1627,6 +1756,281 @@ def api_admin_catalog_order():
         "total": len(result["book_ids"]),
         "order": result["book_ids"],
     })
+
+
+@app.route('/api/admin/catalog/books', methods=['GET', 'POST'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_books():
+    if request.method == "GET":
+        state = request.args.get("state", "active")
+        sort_by = request.args.get("sort", "default")
+        search_query = request.args.get("q", "").strip()
+        try:
+            limit = int(request.args.get("limit", "20"))
+            offset = int(request.args.get("offset", "0"))
+        except ValueError:
+            return jsonify({"error": "Invalid pagination"}), 400
+        if state not in {"active", "archived"} or sort_by not in _CATALOG_SORTS:
+            return jsonify({"error": "Invalid catalog query"}), 400
+        if (
+            len(search_query) > 120
+            or any(ord(character) < 32 for character in search_query)
+            or not 1 <= limit <= 50
+            or offset < 0
+        ):
+            return jsonify({"error": "Invalid catalog query"}), 400
+        books, total = list_catalog_books_sync(
+            state=state,
+            search_query=search_query,
+            sort_by=sort_by,
+            limit=limit,
+            offset=offset,
+        )
+        return jsonify({
+            "books": books,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "next_offset": offset + len(books) if offset + len(books) < total else None,
+        })
+
+    try:
+        values = _catalog_book_payload(request.get_json(silent=True))
+        book = create_catalog_book_sync(
+            **values,
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+    except QuotaExceededError as error:
+        return jsonify({"error": str(error), "limit": error.limit}), 409
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"book": book}), 201
+
+
+@app.route('/api/admin/catalog/books/<int:book_id>', methods=['GET', 'PUT'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_book(book_id: int):
+    if request.method == "GET":
+        state = request.args.get("state", "active")
+        if state not in {"active", "archived"}:
+            return jsonify({"error": "Invalid catalog state"}), 400
+        book = get_catalog_book_sync(book_id, state)
+        if book is None:
+            return jsonify({"error": "book not found"}), 404
+        return jsonify({"book": book})
+
+    try:
+        values = _catalog_book_payload(request.get_json(silent=True))
+        book = update_catalog_book_sync(
+            book_id,
+            **values,
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    if book is None:
+        return jsonify({"error": "book not found"}), 404
+    return jsonify({"book": book})
+
+
+@app.route('/api/admin/catalog/books/<int:book_id>/stock', methods=['PUT'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_book_stock(book_id: int):
+    if get_catalog_book_sync(book_id, "active") is None:
+        return jsonify({"error": "book not found"}), 404
+    try:
+        stock_quantity = _catalog_stock_payload(request.get_json(silent=True))
+        changed = set_stock_quantity_sync(
+            book_id,
+            stock_quantity,
+            g.telegram_user.id,
+            actor_role=g.staff_role,
+            source="mini_app",
+        )
+    except InventoryUnavailableError as error:
+        return jsonify({"error": str(error)}), 409
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    if not changed:
+        return jsonify({"error": "book not found"}), 404
+    return jsonify({"book": get_catalog_book_sync(book_id, "active")})
+
+
+@app.route('/api/admin/catalog/books/bulk/archive', methods=['POST'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_bulk_archive():
+    try:
+        result = archive_catalog_books_sync(
+            _catalog_book_ids(request.get_json(silent=True)),
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(result)
+
+
+@app.route('/api/admin/catalog/books/bulk/category', methods=['POST'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_bulk_category():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or set(payload) != {"book_ids", "category_id"}:
+        return jsonify({"error": "book_ids and category_id are required"}), 400
+    try:
+        book_ids = _catalog_book_ids({"book_ids": payload["book_ids"]})
+        category_id = _catalog_positive_id(payload["category_id"], field="category_id")
+        result = reassign_catalog_books_category_sync(
+            book_ids,
+            category_id,
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 409
+    return jsonify(result)
+
+
+@app.route('/api/admin/catalog/books/<int:book_id>/restore', methods=['POST'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_book_restore(book_id: int):
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict) or set(payload) - {"category_id"}:
+        return jsonify({"error": "Invalid restore payload"}), 400
+    try:
+        category_id = payload.get("category_id")
+        if category_id is not None:
+            category_id = _catalog_positive_id(category_id, field="category_id")
+        result = restore_catalog_book_sync(
+            book_id,
+            category_id=category_id,
+            reuse_category="category_id" not in payload,
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+    except QuotaExceededError as error:
+        return jsonify({"error": str(error), "limit": error.limit}), 409
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 409
+    if not result["found"]:
+        return jsonify({"error": "book not found"}), 404
+    if result["category_unavailable"]:
+        return jsonify({"error": "category_unavailable"}), 409
+    return jsonify({"book": result["book"]})
+
+
+@app.route('/api/admin/catalog/categories', methods=['GET', 'POST'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_categories():
+    if request.method == "GET":
+        return jsonify({"categories": list_catalog_categories_sync()})
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or set(payload) != {"name", "emoji"}:
+        return jsonify({"error": "name and emoji are required"}), 400
+    try:
+        category = create_catalog_category_sync(
+            _catalog_text(payload["name"], field="name", maximum=_CATALOG_MAX_CATEGORY, required=True),
+            _catalog_text(payload["emoji"], field="emoji", maximum=_CATALOG_MAX_EMOJI),
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 409
+    return jsonify({"category": category}), 201
+
+
+@app.route('/api/admin/catalog/categories/<int:category_id>', methods=['PUT', 'DELETE'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_category(category_id: int):
+    if request.method == "DELETE":
+        result = deactivate_catalog_category_sync(
+            category_id,
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+        if not result["found"]:
+            return jsonify({"error": "category not found"}), 404
+        if result["books_count"]:
+            return jsonify({"error": "category has active books", "books_count": result["books_count"]}), 409
+        return jsonify({"deleted": True})
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or set(payload) != {"name", "emoji"}:
+        return jsonify({"error": "name and emoji are required"}), 400
+    try:
+        category = update_catalog_category_sync(
+            category_id,
+            _catalog_text(payload["name"], field="name", maximum=_CATALOG_MAX_CATEGORY, required=True),
+            _catalog_text(payload["emoji"], field="emoji", maximum=_CATALOG_MAX_EMOJI),
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 409
+    if category is None:
+        return jsonify({"error": "category not found"}), 404
+    return jsonify({"category": category})
+
+
+@app.route('/api/admin/catalog/books/<int:book_id>/cover', methods=['PUT', 'DELETE'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_book_cover(book_id: int):
+    if get_catalog_book_sync(book_id, "active") is None:
+        return jsonify({"error": "book not found"}), 404
+    try:
+        if request.method == "DELETE":
+            cover = next((item for item in list_book_media_sync(book_id) if item["role"] == "cover"), None)
+            if cover is None:
+                return jsonify({"error": "cover not found"}), 404
+            delete_book_media_sync(book_id, cover["asset_id"])
+            _catalog_media_audit(book_id, "catalog.media.cover_deleted", "cover_deleted")
+        else:
+            if set(request.files) != {"file"} or len(request.files.getlist("file")) != 1 or request.form:
+                return jsonify({"error": "Exactly one image file is required"}), 400
+            data = request.files["file"].read(_CATALOG_MAX_IMAGE_BYTES + 1)
+            attach_book_media_sync(book_id, "cover", 0, data)
+            _catalog_media_audit(book_id, "catalog.media.cover_replaced", "cover_replaced")
+    except BookMediaError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(_catalog_media_response(book_id))
+
+
+@app.route('/api/admin/catalog/books/<int:book_id>/pages', methods=['POST', 'DELETE'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_book_pages(book_id: int):
+    if get_catalog_book_sync(book_id, "active") is None:
+        return jsonify({"error": "book not found"}), 404
+    try:
+        if request.method == "DELETE":
+            deleted = clear_book_media_sync(book_id, "page")
+            _catalog_media_audit(book_id, "catalog.media.pages_cleared", "pages_cleared")
+            return jsonify({"deleted": deleted, **_catalog_media_response(book_id)})
+        if set(request.files) != {"file"} or request.form:
+            return jsonify({"error": "Exactly one image file is required"}), 400
+        data = request.files["file"].read(_CATALOG_MAX_IMAGE_BYTES + 1)
+        page = attach_book_media_sync(book_id, "page", None, data)
+        _catalog_media_audit(book_id, "catalog.media.page_added", "page_added")
+    except BookMediaError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"page": page, **_catalog_media_response(book_id)})
+
+
+@app.route('/api/admin/catalog/books/<int:book_id>/pages/<string:asset_id>', methods=['DELETE'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_book_page(book_id: int, asset_id: str):
+    if get_catalog_book_sync(book_id, "active") is None:
+        return jsonify({"error": "book not found"}), 404
+    try:
+        deleted = delete_book_media_sync(book_id, asset_id)
+    except BookMediaError as error:
+        return jsonify({"error": str(error)}), 400
+    if not deleted:
+        return jsonify({"error": "page not found"}), 404
+    _catalog_media_audit(book_id, "catalog.media.page_deleted", "page_deleted")
+    return jsonify(_catalog_media_response(book_id))
 
 
 @app.route('/api/admin/staff', methods=['GET', 'PUT', 'DELETE'])
