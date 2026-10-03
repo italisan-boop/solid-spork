@@ -55,13 +55,13 @@ class FulfillmentApiTests(unittest.TestCase):
         self.client = server.app.test_client()
         connection = schema.connect(self.database_path)
         try:
-            connection.execute(
-                "INSERT INTO staff_members (telegram_user_id, role, changed_by_user_id) VALUES (?, 'warehouse', ?)",
-                (WAREHOUSE_ID, OWNER_ID),
+            connection.executemany(
+                "INSERT INTO staff_members (telegram_user_id, changed_by_user_id) VALUES (?, ?)",
+                [(WAREHOUSE_ID, OWNER_ID), (OTHER_WAREHOUSE_ID, OWNER_ID)],
             )
-            connection.execute(
-                "INSERT INTO staff_members (telegram_user_id, role, changed_by_user_id) VALUES (?, 'warehouse', ?)",
-                (OTHER_WAREHOUSE_ID, OWNER_ID),
+            connection.executemany(
+                "INSERT INTO staff_member_roles (telegram_user_id, role, assigned_by_user_id) VALUES (?, 'warehouse', ?)",
+                [(WAREHOUSE_ID, OWNER_ID), (OTHER_WAREHOUSE_ID, OWNER_ID)],
             )
             connection.execute(
                 "INSERT INTO orders (id, user_id, total, status) VALUES (1, 11, 2000, 'confirmed')"

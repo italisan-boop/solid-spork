@@ -124,11 +124,20 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
 
         connection = sqlite3.connect(self.database_path)
         try:
+            self.assertEqual((101,), connection.execute(
+                "SELECT telegram_user_id FROM staff_members WHERE telegram_user_id = 101"
+            ).fetchone())
             self.assertEqual((101, "manager"), connection.execute(
-                "SELECT telegram_user_id, role FROM staff_members WHERE telegram_user_id = 101"
+                "SELECT telegram_user_id, role FROM staff_member_roles WHERE telegram_user_id = 101"
             ).fetchone())
             connection.execute(
-                "INSERT INTO staff_members (telegram_user_id, role, changed_by_user_id) VALUES (202, 'editor', 1)"
+                "INSERT INTO staff_members (telegram_user_id, changed_by_user_id) VALUES (202, 1)"
+            )
+            connection.execute(
+                "INSERT INTO staff_member_roles (telegram_user_id, role, assigned_by_user_id) VALUES (202, 'editor', 1)"
+            )
+            connection.execute(
+                "INSERT INTO staff_member_roles (telegram_user_id, role, assigned_by_user_id) VALUES (202, 'warehouse', 1)"
             )
             connection.execute(
                 "INSERT INTO audit_events (actor_role, source, action, entity_type, outcome) VALUES ('editor', 'mini_app', 'catalog.book.updated', 'book', 'succeeded')"
@@ -139,12 +148,14 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
                 connection.execute("DELETE FROM audit_events WHERE id = 1")
             indexes = {row[1] for row in connection.execute("PRAGMA index_list(audit_events)")}
             staff_indexes = {row[1] for row in connection.execute("PRAGMA index_list(staff_members)")}
+            staff_role_indexes = {row[1] for row in connection.execute("PRAGMA index_list(staff_member_roles)")}
         finally:
             connection.close()
 
         self.assertIn("idx_audit_events_created", indexes)
         self.assertIn("idx_audit_events_entity", indexes)
-        self.assertIn("idx_staff_members_role_active", staff_indexes)
+        self.assertIn("idx_staff_members_active", staff_indexes)
+        self.assertIn("idx_staff_member_roles_role", staff_role_indexes)
 
     async def test_legacy_order_support_requests_accept_failed_state(self):
         connection = sqlite3.connect(self.database_path)

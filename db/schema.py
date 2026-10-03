@@ -10,7 +10,7 @@ from config import settings
 from content_defaults import TEMPLATES
 
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 _CONNECTION_TIMEOUT_SECONDS = 10
 _INITIALIZATION_LOCK = threading.Lock()
 _CURRENT_DATABASE_PATH: ContextVar[Path | None] = ContextVar(
@@ -383,16 +383,23 @@ def _create_tables(connection: sqlite3.Connection) -> None:
         ON order_fulfillments (state, warehouse_user_id, updated_at);
         CREATE TABLE IF NOT EXISTS staff_members (
             telegram_user_id INTEGER PRIMARY KEY,
-            role TEXT NOT NULL CHECK (role IN ('editor', 'manager', 'warehouse')),
             is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             changed_by_user_id INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS staff_member_roles (
+            telegram_user_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('administrator', 'editor', 'manager', 'warehouse')),
+            assigned_by_user_id INTEGER NOT NULL,
+            assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (telegram_user_id, role),
+            FOREIGN KEY (telegram_user_id) REFERENCES staff_members (telegram_user_id) ON DELETE CASCADE
+        );
         CREATE TABLE IF NOT EXISTS audit_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             actor_user_id INTEGER,
-            actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'editor', 'manager', 'warehouse', 'system')),
+            actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'administrator', 'editor', 'manager', 'warehouse', 'system')),
             source TEXT NOT NULL CHECK (source IN ('telegram', 'mini_app', 'webhook', 'scheduler', 'system')),
             action TEXT NOT NULL,
             entity_type TEXT NOT NULL,
@@ -406,7 +413,7 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_id INTEGER NOT NULL,
             recipient_user_id INTEGER NOT NULL,
-            recipient_role TEXT NOT NULL CHECK (recipient_role IN ('owner', 'manager', 'warehouse')),
+            recipient_role TEXT NOT NULL CHECK (recipient_role IN ('owner', 'administrator', 'manager', 'warehouse')),
             state TEXT NOT NULL DEFAULT 'pending'
                 CHECK (state IN ('pending', 'processing', 'sent', 'failed')),
             attempts INTEGER NOT NULL DEFAULT 0,
@@ -552,8 +559,10 @@ def _create_tables(connection: sqlite3.Connection) -> None:
         ON user_favorites (user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_back_in_stock_active
         ON back_in_stock_subscriptions (book_id, active, user_id);
-        CREATE INDEX IF NOT EXISTS idx_staff_members_role_active
-        ON staff_members (role, is_active, telegram_user_id);
+        CREATE INDEX IF NOT EXISTS idx_staff_members_active
+        ON staff_members (is_active, telegram_user_id);
+        CREATE INDEX IF NOT EXISTS idx_staff_member_roles_role
+        ON staff_member_roles (role, telegram_user_id);
         CREATE INDEX IF NOT EXISTS idx_audit_events_created
         ON audit_events (created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_audit_events_entity
@@ -762,43 +771,68 @@ def _migrate_inventory_movements(connection: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_editor_role_constraints(connection: sqlite3.Connection) -> None:
-    staff_sql = connection.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'staff_members'"
-    ).fetchone()
-    if staff_sql and "'editor'" not in staff_sql[0].lower():
+def _migrate_staff_role_memberships(connection: sqlite3.Connection) -> None:
+    staff_columns = _columns(connection, "staff_members")
+    if "role" in staff_columns:
         connection.executescript(
             """
+            CREATE TEMP TABLE staff_role_migration (
+                telegram_user_id INTEGER PRIMARY KEY,
+                role TEXT NOT NULL,
+                assigned_by_user_id INTEGER NOT NULL,
+                assigned_at TIMESTAMP NOT NULL
+            );
+            INSERT INTO staff_role_migration (
+                telegram_user_id, role, assigned_by_user_id, assigned_at
+            )
+            SELECT telegram_user_id, role, changed_by_user_id, updated_at
+            FROM staff_members;
             CREATE TABLE staff_members_new (
                 telegram_user_id INTEGER PRIMARY KEY,
-                role TEXT NOT NULL CHECK (role IN ('editor', 'manager', 'warehouse')),
                 is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 changed_by_user_id INTEGER NOT NULL
             );
             INSERT INTO staff_members_new (
-                telegram_user_id, role, is_active, created_at, updated_at, changed_by_user_id
+                telegram_user_id, is_active, created_at, updated_at, changed_by_user_id
             )
-            SELECT telegram_user_id, role, is_active, created_at, updated_at, changed_by_user_id
+            SELECT telegram_user_id, is_active, created_at, updated_at, changed_by_user_id
             FROM staff_members;
+            DROP TABLE staff_member_roles;
             DROP TABLE staff_members;
             ALTER TABLE staff_members_new RENAME TO staff_members;
-            CREATE INDEX idx_staff_members_role_active
-            ON staff_members (role, is_active, telegram_user_id);
+            CREATE TABLE staff_member_roles (
+                telegram_user_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('administrator', 'editor', 'manager', 'warehouse')),
+                assigned_by_user_id INTEGER NOT NULL,
+                assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (telegram_user_id, role),
+                FOREIGN KEY (telegram_user_id) REFERENCES staff_members (telegram_user_id) ON DELETE CASCADE
+            );
+            INSERT INTO staff_member_roles (
+                telegram_user_id, role, assigned_by_user_id, assigned_at
+            )
+            SELECT telegram_user_id, role, assigned_by_user_id, assigned_at
+            FROM staff_role_migration;
+            DROP TABLE staff_role_migration;
+            CREATE INDEX idx_staff_members_active
+            ON staff_members (is_active, telegram_user_id);
+            CREATE INDEX idx_staff_member_roles_role
+            ON staff_member_roles (role, telegram_user_id);
             """
         )
 
     audit_sql = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'"
     ).fetchone()
-    if audit_sql and "'editor'" not in audit_sql[0].lower():
+    if audit_sql and "'administrator'" not in audit_sql[0].lower():
         connection.executescript(
             """
             CREATE TABLE audit_events_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 actor_user_id INTEGER,
-                actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'editor', 'manager', 'warehouse', 'system')),
+                actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'administrator', 'editor', 'manager', 'warehouse', 'system')),
                 source TEXT NOT NULL CHECK (source IN ('telegram', 'mini_app', 'webhook', 'scheduler', 'system')),
                 action TEXT NOT NULL,
                 entity_type TEXT NOT NULL,
@@ -833,6 +867,49 @@ def _migrate_editor_role_constraints(connection: sqlite3.Connection) -> None:
             END;
             """
         )
+
+    alert_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'staff_alert_deliveries'"
+    ).fetchone()
+    if alert_sql and "'administrator'" not in alert_sql[0].lower():
+        connection.executescript(
+            """
+            CREATE TABLE staff_alert_deliveries_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id INTEGER NOT NULL,
+                recipient_user_id INTEGER NOT NULL,
+                recipient_role TEXT NOT NULL CHECK (recipient_role IN ('owner', 'administrator', 'manager', 'warehouse')),
+                state TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (state IN ('pending', 'processing', 'sent', 'failed')),
+                attempts INTEGER NOT NULL DEFAULT 0,
+                claimed_at TIMESTAMP,
+                sent_at TIMESTAMP,
+                last_error TEXT NOT NULL DEFAULT '',
+                UNIQUE (event_id, recipient_user_id),
+                FOREIGN KEY (event_id) REFERENCES operational_events (id)
+            );
+            INSERT INTO staff_alert_deliveries_new (
+                id, event_id, recipient_user_id, recipient_role, state, attempts,
+                claimed_at, sent_at, last_error
+            )
+            SELECT id, event_id, recipient_user_id, recipient_role, state, attempts,
+                   claimed_at, sent_at, last_error
+            FROM staff_alert_deliveries;
+            DROP TABLE staff_alert_deliveries;
+            ALTER TABLE staff_alert_deliveries_new RENAME TO staff_alert_deliveries;
+            CREATE INDEX idx_staff_alert_deliveries_lease
+            ON staff_alert_deliveries (state, claimed_at, id);
+            """
+        )
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_staff_members_active "
+        "ON staff_members (is_active, telegram_user_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_staff_member_roles_role "
+        "ON staff_member_roles (role, telegram_user_id)"
+    )
 
 
 def _cleanup_expired_support_messages(connection: sqlite3.Connection) -> None:
@@ -1059,7 +1136,7 @@ def initialize_database(
             _migrate_inventory_movements(connection)
             _migrate_order_deliveries(connection)
             _migrate_order_support_requests(connection)
-            _migrate_editor_role_constraints(connection)
+            _migrate_staff_role_memberships(connection)
             _create_operational_indexes(connection)
             _cleanup_expired_support_messages(connection)
             _cleanup_expired_delivery_pii(connection)

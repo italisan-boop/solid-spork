@@ -354,7 +354,9 @@ def preview_book_import_sync(filename: str, data: bytes, actor_user_id: int) -> 
         database.close()
 
 
-def commit_book_import_sync(batch_id: str, actor_user_id: int) -> dict:
+def commit_book_import_sync(
+    batch_id: str, actor_user_id: int, *, actor_role: str = "owner"
+) -> dict:
     if not isinstance(batch_id, str) or not len(batch_id) == 32:
         raise BookImportError("Invalid import batch")
     tenant_context = maybe_current_tenant_context()
@@ -479,7 +481,7 @@ def commit_book_import_sync(batch_id: str, actor_user_id: int) -> dict:
         append_audit_event(
             database,
             actor_user_id=actor_user_id,
-            actor_role="owner",
+            actor_role=actor_role,
             source="mini_app",
             action="catalog.import.committed",
             entity_type="book_import_batch",

@@ -3353,11 +3353,13 @@
                 adminSession = await response.json();
                 const button = document.getElementById('adminBtn');
                 button.style.display = '';
-                button.title = adminSession.role === 'warehouse'
-                    ? 'Операции склада'
-                    : adminSession.role === 'editor'
-                        ? 'Редактор каталога'
-                        : 'Операции магазина';
+                button.title = adminSession.roles?.includes('administrator')
+                    ? 'Администратор магазина'
+                    : adminSession.role === 'warehouse'
+                        ? 'Операции склада'
+                        : adminSession.role === 'editor'
+                            ? 'Редактор каталога'
+                            : 'Операции магазина';
                 button.setAttribute('aria-label', button.title);
                 return adminSession;
             } catch (error) {
@@ -3368,7 +3370,7 @@
 
         function operationsTabs() {
             const tabs = [];
-            if (adminSession?.role !== 'editor') tabs.push(['home', '🏠 Главная']);
+            tabs.push(['home', '🏠 Главная']);
             if (hasAdminCapability('catalog.manage')) tabs.push(['catalog', '📚 Каталог']);
             if (hasAdminCapability('inventory.read')) tabs.push(['inventory', '📦 Остатки']);
             if (hasAdminCapability('fulfillment.manage')) tabs.push(['fulfillment', '🧾 Сборка']);
@@ -3388,11 +3390,13 @@
             const tabs = operationsTabs();
             if (!tabs.some(([key]) => key === operationsSection)) operationsSection = tabs[0]?.[0] || 'home';
             document.getElementById('adminOwnerDashboard').style.display = operationsSection === 'home' && hasAdminCapability('reports.view') ? '' : 'none';
-            const workspaceTitle = adminSession?.role === 'warehouse'
-                ? 'Операции склада'
-                : adminSession?.role === 'editor'
-                    ? 'Редактор каталога'
-                    : 'Операции магазина';
+            const workspaceTitle = adminSession?.roles?.includes('administrator')
+                ? 'Администратор магазина'
+                : adminSession?.role === 'warehouse'
+                    ? 'Операции склада'
+                    : adminSession?.role === 'editor'
+                        ? 'Редактор каталога'
+                        : 'Операции магазина';
             container.innerHTML = `
                 <div class="operations-header"><h2 class="operations-title">${workspaceTitle}</h2><button class="operations-action" type="button" aria-label="Обновить текущий раздел" onclick="loadOperations()">🔄</button></div>
                 <div class="operations-tab-list">${tabs.map(([key, label]) => `<button type="button" class="${key === operationsSection ? 'active' : ''}" onclick="showOperations('${key}')">${label}</button>`).join('')}</div>
@@ -3505,7 +3509,7 @@
         function renderCatalogList(content, catalog, archived) {
             const books = catalog.books || [];
             const selectedCount = catalogState.selectedBookIds.size;
-            const canManageStock = adminSession?.role !== 'editor';
+            const canManageStock = hasAdminCapability('inventory.adjust');
             const list = books.map(book => {
                 const stock = book.stock.mode === 'unlimited' ? '∞' : `${book.stock.available_quantity} из ${book.stock.stock_quantity}`;
                 const category = book.category ? `${book.category.emoji || ''} ${book.category.name}`.trim() : 'Без категории';
@@ -3638,7 +3642,7 @@
             const stock = book?.stock || {mode: 'unlimited', stock_quantity: null};
             const pages = book?.media?.pages || [];
             const cover = book?.media?.cover;
-            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><h3 class="catalog-form-title">${book ? 'Редактирование книги' : 'Новая книга'}</h3><button class="operations-action" type="button" onclick="openCatalogList()">К списку</button></div><form class="operations-form" data-book-id="${book?.id || ''}" onsubmit="saveCatalogBook(event)"><label>Название<input name="title" maxlength="160" required value="${escapeHtml(book?.title || '')}"></label><label>Автор<input name="author" maxlength="160" value="${escapeHtml(book?.author || '')}"></label><label>Описание<textarea name="description" maxlength="3500" rows="5">${escapeHtml(book?.description || '')}</textarea></label><div class="catalog-toolbar-row"><label>Цена, ₽<input name="price" type="number" min="1" max="10000000" required value="${book?.price || ''}"></label><label>Категория<select name="category_id">${catalogCategoryOptions(categories, categoryId)}</select></label></div>${adminSession?.role !== 'editor' ? `<div class="catalog-toolbar-row"><label>Остаток<select name="stock_mode" onchange="toggleCatalogStockInput(this)"><option value="unlimited" ${stock.mode === 'unlimited' ? 'selected' : ''}>Без ограничений</option><option value="finite" ${stock.mode === 'finite' ? 'selected' : ''}>Ограниченный</option></select></label><label>Количество<input name="stock_quantity" type="number" min="0" max="1000000" ${stock.mode === 'unlimited' ? 'disabled' : ''} value="${stock.stock_quantity ?? ''}"></label></div>` : ''}<div class="operations-action-grid"><button class="operations-action primary" type="submit">${book ? 'Сохранить книгу' : 'Создать книгу'}</button><button class="operations-action" type="button" onclick="openCatalogCategories()">Категории</button></div><div class="catalog-status" aria-live="polite"></div></form></div>${book ? `<div class="operations-row"><div class="operations-row-head"><span>Обложка и страницы</span></div><form class="operations-form" onsubmit="uploadCatalogCover(event, ${book.id})"><input name="file" type="file" accept="image/*" required><button class="operations-action primary" type="submit">Заменить обложку</button></form>${cover ? `<div class="catalog-media-grid"><div class="catalog-media-item"><img src="${escapeHtml(cover.thumbnail_url)}" alt="Обложка"><button class="operations-action danger" type="button" onclick="deleteCatalogCover(${book.id})">Удалить обложку</button></div></div>` : '<div class="operations-meta">Обложка пока не загружена.</div>'}<form class="operations-form" onsubmit="uploadCatalogPages(event, ${book.id})"><input name="files" type="file" accept="image/*" multiple required><button class="operations-action primary" type="submit">Добавить страницы</button></form><div class="catalog-media-grid">${pages.map((page, index) => `<div class="catalog-media-item"><img src="${escapeHtml(page.thumbnail_url)}" alt="Страница ${index + 1}"><button class="operations-action danger" type="button" onclick="deleteCatalogPage(${book.id}, '${page.id}')">Удалить</button></div>`).join('')}</div>${pages.length ? `<button class="operations-action danger" type="button" onclick="clearCatalogPages(${book.id})">Удалить все страницы</button>` : ''}</div>` : ''}`;
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><h3 class="catalog-form-title">${book ? 'Редактирование книги' : 'Новая книга'}</h3><button class="operations-action" type="button" onclick="openCatalogList()">К списку</button></div><form class="operations-form" data-book-id="${book?.id || ''}" onsubmit="saveCatalogBook(event)"><label>Название<input name="title" maxlength="160" required value="${escapeHtml(book?.title || '')}"></label><label>Автор<input name="author" maxlength="160" value="${escapeHtml(book?.author || '')}"></label><label>Описание<textarea name="description" maxlength="3500" rows="5">${escapeHtml(book?.description || '')}</textarea></label><div class="catalog-toolbar-row"><label>Цена, ₽<input name="price" type="number" min="1" max="10000000" required value="${book?.price || ''}"></label><label>Категория<select name="category_id">${catalogCategoryOptions(categories, categoryId)}</select></label></div>${hasAdminCapability('inventory.adjust') ? `<div class="catalog-toolbar-row"><label>Остаток<select name="stock_mode" onchange="toggleCatalogStockInput(this)"><option value="unlimited" ${stock.mode === 'unlimited' ? 'selected' : ''}>Без ограничений</option><option value="finite" ${stock.mode === 'finite' ? 'selected' : ''}>Ограниченный</option></select></label><label>Количество<input name="stock_quantity" type="number" min="0" max="1000000" ${stock.mode === 'unlimited' ? 'disabled' : ''} value="${stock.stock_quantity ?? ''}"></label></div>` : ''}<div class="operations-action-grid"><button class="operations-action primary" type="submit">${book ? 'Сохранить книгу' : 'Создать книгу'}</button><button class="operations-action" type="button" onclick="openCatalogCategories()">Категории</button></div><div class="catalog-status" aria-live="polite"></div></form></div>${book ? `<div class="operations-row"><div class="operations-row-head"><span>Обложка и страницы</span></div><form class="operations-form" onsubmit="uploadCatalogCover(event, ${book.id})"><input name="file" type="file" accept="image/*" required><button class="operations-action primary" type="submit">Заменить обложку</button></form>${cover ? `<div class="catalog-media-grid"><div class="catalog-media-item"><img src="${escapeHtml(cover.thumbnail_url)}" alt="Обложка"><button class="operations-action danger" type="button" onclick="deleteCatalogCover(${book.id})">Удалить обложку</button></div></div>` : '<div class="operations-meta">Обложка пока не загружена.</div>'}<form class="operations-form" onsubmit="uploadCatalogPages(event, ${book.id})"><input name="files" type="file" accept="image/*" multiple required><button class="operations-action primary" type="submit">Добавить страницы</button></form><div class="catalog-media-grid">${pages.map((page, index) => `<div class="catalog-media-item"><img src="${escapeHtml(page.thumbnail_url)}" alt="Страница ${index + 1}"><button class="operations-action danger" type="button" onclick="deleteCatalogPage(${book.id}, '${page.id}')">Удалить</button></div>`).join('')}</div>${pages.length ? `<button class="operations-action danger" type="button" onclick="clearCatalogPages(${book.id})">Удалить все страницы</button>` : ''}</div>` : ''}`;
         }
 
         function toggleCatalogStockInput(select) {
@@ -3664,7 +3668,7 @@
             try {
                 const bookId = form.dataset.bookId;
                 const saved = await catalogRequest(bookId ? `/api/admin/catalog/books/${bookId}` : '/api/admin/catalog/books', {method: bookId ? 'PUT' : 'POST', json: values});
-                if (adminSession?.role !== 'editor') {
+                if (hasAdminCapability('inventory.adjust')) {
                     const stock = form.elements.stock_mode.value === 'unlimited'
                         ? {mode: 'unlimited'}
                         : {mode: 'finite', quantity: Number(form.elements.stock_quantity.value)};
@@ -3997,38 +4001,89 @@
             await showOperations('inventory');
         }
 
-        async function loadStaffOperations(content) {
+        const staffRoleLabels = {
+            administrator: 'Администратор магазина',
+            manager: 'Менеджер',
+            warehouse: 'Кладовщик',
+            editor: 'Редактор каталога',
+        };
+
+        function staffRoleInputs(selectedRoles, disabled = false) {
+            const selected = new Set(selectedRoles || []);
+            const assignable = adminSession?.assignable_roles || [];
+            const roles = [...new Set([...assignable, ...selected])];
+            return roles.map(role => {
+                const administrator = role === 'administrator';
+                const disabledAttribute = disabled || (!assignable.includes(role) && !selected.has(role)) ? 'disabled' : '';
+                return `<label class="operations-meta"><input type="checkbox" name="roles" value="${role}" ${selected.has(role) ? 'checked' : ''} ${disabledAttribute} onchange="syncStaffRoleSelection(this.form, '${role}')"> ${staffRoleLabels[role]}</label>`;
+            }).join('');
+        }
+
+        function staffRolesFromForm(form) {
+            return Array.from(form.querySelectorAll('input[name="roles"]:checked')).map(input => input.value);
+        }
+
+        function syncStaffRoleSelection(form, changedRole) {
+            const administrator = form.querySelector('input[name="roles"][value="administrator"]');
+            const ordinary = Array.from(form.querySelectorAll('input[name="roles"]:not([value="administrator"])'));
+            if (!administrator) return;
+            if (changedRole === 'administrator' && administrator.checked) {
+                ordinary.forEach(input => { input.checked = false; input.disabled = true; });
+            } else if (changedRole !== 'administrator') {
+                if (ordinary.some(input => input.checked)) administrator.checked = false;
+                ordinary.forEach(input => { input.disabled = false; });
+            }
+        }
+
+        function staffRoleSummary(roles) {
+            return (roles || []).map(role => staffRoleLabels[role] || role).join(', ');
+        }
+
+        async function loadStaffOperations(content, statusMessage = '') {
             const response = await fetch('/api/admin/staff', {headers: telegramAuthHeaders(), cache: 'no-store'});
             const result = await response.json();
             if (!response.ok) throw new Error(result.error);
-            const staffRows = (result.staff || []).map(staff => `<div class="operations-row"><div class="operations-row-head"><span>#${staff.telegram_user_id}</span><span>${staff.is_active ? 'активен' : 'отключён'}</span></div><form class="operations-form" data-active="${staff.is_active ? 'true' : 'false'}" onsubmit="saveStaffMember(event)"><input name="telegram_user_id" type="hidden" value="${staff.telegram_user_id}"><select name="role"><option value="manager" ${staff.role === 'manager' ? 'selected' : ''}>Менеджер</option><option value="warehouse" ${staff.role === 'warehouse' ? 'selected' : ''}>Кладовщик</option>${adminSession?.editor_assignable ? `<option value="editor" ${staff.role === 'editor' ? 'selected' : ''}>Редактор каталога</option>` : ''}</select><button class="operations-action" type="submit">Сменить роль</button></form><div class="operations-action-grid">${staff.is_active ? `<button class="operations-action" type="button" onclick="setStaffActive(${staff.telegram_user_id}, false)">Отключить</button>` : `<button class="operations-action" type="button" onclick="setStaffActive(${staff.telegram_user_id}, true, '${staff.role}')">Включить</button><button class="operations-action danger" type="button" onclick="deleteStaffMember(${staff.telegram_user_id})">Удалить</button>`}</div></div>`).join('') || '<div class="operations-meta">Сотрудников пока нет.</div>';
-            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Сотрудники</span></div><form class="operations-form" onsubmit="saveStaffMember(event)"><input name="telegram_user_id" type="number" min="1" placeholder="Telegram ID" required><select name="role"><option value="manager">Менеджер</option><option value="warehouse">Кладовщик</option>${adminSession?.editor_assignable ? '<option value="editor">Редактор каталога</option>' : ''}</select><button class="operations-action primary" type="submit">Добавить</button></form></div>${staffRows}`;
+            const ownerCanAssignAdmin = adminSession?.assignable_roles?.includes('administrator');
+            const staffRows = (result.staff || []).map(staff => {
+                const roles = staff.roles || [];
+                const protectedAdministrator = roles.includes('administrator') && !ownerCanAssignAdmin;
+                const roleEditor = protectedAdministrator
+                    ? `<div class="operations-meta">${escapeHtml(staffRoleSummary(roles))} · назначение меняет только владелец</div>`
+                    : `<form class="operations-form" data-active="${staff.is_active ? 'true' : 'false'}" data-roles="${roles.join(',')}" onsubmit="saveStaffMember(event)"><input name="telegram_user_id" type="hidden" value="${staff.telegram_user_id}">${staffRoleInputs(roles)}<button class="operations-action" type="submit">Сохранить роли</button></form>`;
+                const actions = protectedAdministrator ? '' : `<div class="operations-action-grid">${staff.is_active ? `<button class="operations-action" type="button" onclick="setStaffActive(${staff.telegram_user_id}, false)">Отключить</button>` : `<button class="operations-action" type="button" onclick="setStaffActive(${staff.telegram_user_id}, true)">Включить</button><button class="operations-action danger" type="button" onclick="deleteStaffMember(${staff.telegram_user_id})">Удалить</button>`}</div>`;
+                return `<div class="operations-row" data-staff-id="${staff.telegram_user_id}" data-roles="${roles.join(',')}"><div class="operations-row-head"><span>#${staff.telegram_user_id}</span><span>${staff.is_active ? 'активен' : 'отключён'}</span></div><div class="operations-meta">Роли: ${escapeHtml(staffRoleSummary(roles))}</div>${roleEditor}${actions}</div>`;
+            }).join('') || '<div class="operations-meta">Сотрудников пока нет.</div>';
+            content.innerHTML = `<div class="operations-row"><div class="operations-row-head"><span>Сотрудники</span></div><div class="operations-meta">Можно назначить несколько обычных ролей. Администратор магазина заменяет их и не является владельцем.</div><form class="operations-form" data-active="true" onsubmit="saveStaffMember(event)"><input name="telegram_user_id" type="number" min="1" placeholder="Telegram ID" required>${staffRoleInputs([])}<button class="operations-action primary" type="submit">Добавить сотрудника</button></form><div class="operations-meta" id="staffStatus">${escapeHtml(statusMessage)}</div></div>${staffRows}`;
         }
 
         async function saveStaffMember(event) {
             event.preventDefault();
             const form = event.currentTarget;
             const button = form.querySelector('button[type="submit"]');
+            const roles = staffRolesFromForm(form);
+            if (!roles.length) { tg.showAlert('Выберите хотя бы одну роль.'); return; }
             button.disabled = true;
             try {
-                const response = await fetch('/api/admin/staff', {method: 'PUT', headers: telegramAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({telegram_user_id: Number(form.elements.telegram_user_id.value), role: form.elements.role.value, is_active: form.dataset.active !== 'false'})});
+                const response = await fetch('/api/admin/staff', {method: 'PUT', headers: telegramAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({telegram_user_id: Number(form.elements.telegram_user_id.value), roles, is_active: form.dataset.active !== 'false'})});
                 const result = await response.json();
                 if (!response.ok) { tg.showAlert(result.error || 'Не удалось сохранить сотрудника.'); return; }
-                await loadOperations();
+                const content = document.getElementById('operationsContent');
+                await loadStaffOperations(content, `Сохранено: ${staffRoleSummary(result.staff.roles)}.`);
+                tg.HapticFeedback.notificationOccurred('success');
             } finally {
                 button.disabled = false;
             }
         }
 
-        async function setStaffActive(telegramUserId, isActive, role) {
-            const row = document.querySelector(`input[name="telegram_user_id"][value="${telegramUserId}"]`)?.closest('.operations-row');
-            const currentRole = role || row?.querySelector('select[name="role"]')?.value;
-            if (!currentRole) return;
+        async function setStaffActive(telegramUserId, isActive) {
+            const row = document.querySelector(`[data-staff-id="${telegramUserId}"]`);
+            const roles = row?.dataset.roles?.split(',').filter(Boolean) || [];
+            if (!roles.length) return;
             try {
-                const response = await fetch('/api/admin/staff', {method: 'PUT', headers: telegramAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({telegram_user_id: telegramUserId, role: currentRole, is_active: isActive})});
+                const response = await fetch('/api/admin/staff', {method: 'PUT', headers: telegramAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({telegram_user_id: telegramUserId, roles, is_active: isActive})});
                 const result = await response.json();
                 if (!response.ok) { tg.showAlert(result.error || 'Не удалось изменить сотрудника.'); return; }
-                await loadOperations();
+                await loadStaffOperations(document.getElementById('operationsContent'), `Сохранено: ${staffRoleSummary(result.staff.roles)}.`);
             } catch (error) {
                 tg.showAlert('Не удалось изменить сотрудника.');
             }
@@ -4203,8 +4258,9 @@
                 <div class="operations-row"><div class="operations-row-head"><span>Промокоды</span></div><div class="operations-meta">Промокод можно отключить, но история его применений в заказах сохраняется.</div></div>
                 <form class="operations-form" id="promoForm">
                     <input name="code" maxlength="48" placeholder="Код, например AUTUMN2026" required>
-                    <div class="operations-action-grid"><input name="discount_percent" type="number" min="0" max="100" value="0" placeholder="Скидка, %"><input name="discount_fixed" type="number" min="0" max="10000000" value="0" placeholder="Скидка, ₽"></div>
-                    <div class="operations-action-grid"><input name="min_order" type="number" min="0" max="10000000" value="0" placeholder="Мин. сумма"><input name="max_uses" type="number" min="0" max="1000000" value="0" placeholder="Лимит (0 = без лимита)"></div>
+                    <div class="operations-action-grid"><input name="discount_percent" type="number" min="0" max="100" placeholder="Скидка, %"><input name="discount_fixed" type="number" min="0" max="10000000" placeholder="Скидка, ₽"></div>
+                    <div class="operations-action-grid"><input name="min_order" type="number" min="0" max="10000000" placeholder="Мин. сумма"><input name="max_uses" type="number" min="0" max="1000000" placeholder="Лимит использований"></div>
+                    <div class="operations-meta">Пустые минимум и лимит означают «без ограничений».</div>
                     <input name="expires_at" type="datetime-local"><button class="operations-action" type="submit">Сохранить промокод</button><button class="operations-action" type="button" id="promoCancel" hidden>Отменить редактирование</button><div class="operations-meta" id="promoStatus"></div>
                 </form>
                 <div class="operations-list" id="promoList"></div>`;
@@ -4246,7 +4302,7 @@
                     tg.HapticFeedback.notificationOccurred('success');
                 } catch (error) { status.textContent = error.message; }
             });
-            cancel.addEventListener('click', () => { editingId = null; form.reset(); form.elements.discount_percent.value = 0; form.elements.discount_fixed.value = 0; form.elements.min_order.value = 0; form.elements.max_uses.value = 0; cancel.hidden = true; status.textContent = ''; });
+            cancel.addEventListener('click', () => { editingId = null; form.reset(); cancel.hidden = true; status.textContent = ''; });
             render();
         }
 
@@ -4432,10 +4488,6 @@
         function closeAdminDashboard() {
             document.getElementById('adminOverlay').classList.remove('active');
         }
-
-        document.getElementById('adminOverlay').addEventListener('click', (e) => {
-            if (e.target === document.getElementById('adminOverlay')) closeAdminDashboard();
-        });
 
         let requestedBookHandled = false;
 

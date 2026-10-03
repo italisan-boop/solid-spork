@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 
 _ALLOWED_SOURCES = {"telegram", "mini_app", "webhook", "scheduler", "system"}
-_ALLOWED_ROLES = {"owner", "editor", "manager", "warehouse", "system"}
+_ALLOWED_ROLES = {"owner", "administrator", "editor", "manager", "warehouse", "system"}
 _ALLOWED_OUTCOMES = {"succeeded", "rejected", "failed"}
 _ALLOWED_DETAIL_KEYS = {
     "batch_id",

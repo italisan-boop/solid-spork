@@ -124,6 +124,7 @@ from db.order_support_requests import (
 )
 from db.staff import (
     get_staff_role,
+    get_staff_roles,
     list_staff,
     set_staff_member,
 )

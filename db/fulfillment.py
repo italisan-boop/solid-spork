@@ -166,7 +166,9 @@ def list_fulfillment_queue_sync(
         database.close()
 
 
-def claim_fulfillment_sync(order_id: int, actor_user_id: int, actor_role: str) -> dict:
+def claim_fulfillment_sync(
+    order_id: int, actor_user_id: int, actor_role: str, *, can_override: bool = False
+) -> dict:
     database = connect()
     try:
         database.execute("BEGIN IMMEDIATE")
@@ -176,7 +178,7 @@ def claim_fulfillment_sync(order_id: int, actor_user_id: int, actor_role: str) -
             "SELECT warehouse_user_id, state FROM order_fulfillments WHERE order_id = ?",
             (order_id,),
         ).fetchone()
-        if fulfillment[0] not in {None, actor_user_id}:
+        if fulfillment[0] not in {None, actor_user_id} and not can_override:
             raise FulfillmentError("Order is already assigned", code="assigned")
         if fulfillment[1] == "packed":
             raise FulfillmentError("Order is already packed", code="already_packed")
@@ -199,7 +201,7 @@ def claim_fulfillment_sync(order_id: int, actor_user_id: int, actor_role: str) -
             entity_id=order_id,
         )
         result = _packing_record(
-            database, order_id, actor_user_id, is_owner=actor_role == "owner"
+            database, order_id, actor_user_id, is_owner=can_override
         )
         database.commit()
         return result
@@ -355,7 +357,9 @@ def pack_fulfillment_sync(
         database.close()
 
 
-def packing_print_payload_sync(order_id: int, actor_user_id: int, *, is_owner: bool) -> dict:
+def packing_print_payload_sync(
+    order_id: int, actor_user_id: int, *, actor_role: str = "warehouse", is_owner: bool
+) -> dict:
     database = connect()
     database.row_factory = sqlite3.Row
     try:
@@ -380,7 +384,7 @@ def packing_print_payload_sync(order_id: int, actor_user_id: int, *, is_owner: b
         append_audit_event(
             database,
             actor_user_id=actor_user_id,
-            actor_role="owner" if is_owner else "warehouse",
+            actor_role=actor_role,
             source="mini_app",
             action="fulfillment.print.viewed",
             entity_type="order",

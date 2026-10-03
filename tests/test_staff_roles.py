@@ -67,13 +67,13 @@ class StaffRoleApiTests(unittest.TestCase):
             "PUT",
             "/api/admin/staff",
             OWNER_ID,
-            {"telegram_user_id": MANAGER_ID, "role": "manager", "is_active": True},
+            {"telegram_user_id": MANAGER_ID, "roles": ["manager"], "is_active": True},
         )
         warehouse = self.request(
             "PUT",
             "/api/admin/staff",
             OWNER_ID,
-            {"telegram_user_id": WAREHOUSE_ID, "role": "warehouse", "is_active": True},
+            {"telegram_user_id": WAREHOUSE_ID, "roles": ["warehouse"], "is_active": True},
         )
         self.assertEqual(200, manager.status_code)
         self.assertEqual(200, warehouse.status_code)
@@ -86,7 +86,57 @@ class StaffRoleApiTests(unittest.TestCase):
         self.assertEqual(403, self.request("GET", "/api/admin/audit", MANAGER_ID).status_code)
         self.assertEqual(403, self.request("PUT", "/api/admin/staff", MANAGER_ID, {
             "telegram_user_id": 404,
-            "role": "warehouse",
+            "roles": ["warehouse"],
+            "is_active": True,
+        }).status_code)
+
+    def test_mini_app_staff_and_promo_contracts(self):
+        source = Path(server.app.static_folder, "Index.html").read_text(encoding="utf-8")
+        self.assertIn("syncStaffRoleSelection", source)
+        self.assertIn("Администратор магазина", source)
+        self.assertIn("assignable_roles", source)
+        self.assertIn('name="roles"', source)
+        self.assertIn("Пустые минимум и лимит", source)
+        self.assertNotIn('name="discount_percent" type="number" min="0" max="100" value="0"', source)
+        self.assertNotIn("adminOverlay').addEventListener('click'", source)
+
+    def test_multi_role_memberships_and_administrator_delegation_boundaries(self):
+        combined = self.request("PUT", "/api/admin/staff", OWNER_ID, {
+            "telegram_user_id": MANAGER_ID,
+            "roles": ["manager", "warehouse"],
+            "is_active": True,
+        })
+        self.assertEqual(200, combined.status_code)
+        self.assertEqual(["manager", "warehouse"], combined.get_json()["staff"]["roles"])
+        session = self.request("GET", "/api/admin/session", MANAGER_ID).get_json()
+        self.assertEqual(["manager", "warehouse"], session["roles"])
+        self.assertIn("orders.read", session["capabilities"])
+        self.assertIn("inventory.adjust", session["capabilities"])
+
+        administrator = self.request("PUT", "/api/admin/staff", OWNER_ID, {
+            "telegram_user_id": WAREHOUSE_ID,
+            "roles": ["administrator"],
+            "is_active": True,
+        })
+        self.assertEqual(200, administrator.status_code)
+        admin_session = self.request("GET", "/api/admin/session", WAREHOUSE_ID).get_json()
+        self.assertEqual(["administrator"], admin_session["roles"])
+        self.assertIn("staff.manage", admin_session["capabilities"])
+        self.assertNotIn("admin.maintenance", admin_session["capabilities"])
+        self.assertEqual(403, self.request("GET", "/api/admin/database/backups", WAREHOUSE_ID).status_code)
+        self.assertEqual(200, self.request("PUT", "/api/admin/staff", WAREHOUSE_ID, {
+            "telegram_user_id": 404,
+            "roles": ["warehouse"],
+            "is_active": True,
+        }).status_code)
+        self.assertEqual(403, self.request("PUT", "/api/admin/staff", WAREHOUSE_ID, {
+            "telegram_user_id": 405,
+            "roles": ["administrator"],
+            "is_active": True,
+        }).status_code)
+        self.assertEqual(403, self.request("PUT", "/api/admin/staff", WAREHOUSE_ID, {
+            "telegram_user_id": WAREHOUSE_ID,
+            "roles": ["warehouse"],
             "is_active": True,
         }).status_code)
 
@@ -95,14 +145,14 @@ class StaffRoleApiTests(unittest.TestCase):
             "PUT",
             "/api/admin/staff",
             OWNER_ID,
-            {"telegram_user_id": WAREHOUSE_ID, "role": "warehouse", "is_active": True},
+            {"telegram_user_id": WAREHOUSE_ID, "roles": ["warehouse"], "is_active": True},
         )
         self.assertEqual(200, self.request("GET", "/api/admin/inventory/1", WAREHOUSE_ID).status_code)
         self.request(
             "PUT",
             "/api/admin/staff",
             OWNER_ID,
-            {"telegram_user_id": WAREHOUSE_ID, "role": "warehouse", "is_active": False},
+            {"telegram_user_id": WAREHOUSE_ID, "roles": ["warehouse"], "is_active": False},
         )
         self.assertEqual(403, self.request("GET", "/api/admin/session", WAREHOUSE_ID).status_code)
 
@@ -118,7 +168,7 @@ class StaffRoleApiTests(unittest.TestCase):
     def test_inactive_staff_record_can_be_deleted_but_active_record_cannot(self):
         self.assertEqual(200, self.request("PUT", "/api/admin/staff", OWNER_ID, {
             "telegram_user_id": WAREHOUSE_ID,
-            "role": "warehouse",
+            "roles": ["warehouse"],
             "is_active": True,
         }).status_code)
         self.assertEqual(409, self.request("DELETE", "/api/admin/staff", OWNER_ID, {
@@ -126,7 +176,7 @@ class StaffRoleApiTests(unittest.TestCase):
         }).status_code)
         self.assertEqual(200, self.request("PUT", "/api/admin/staff", OWNER_ID, {
             "telegram_user_id": WAREHOUSE_ID,
-            "role": "manager",
+            "roles": ["manager"],
             "is_active": False,
         }).status_code)
         deleted = self.request("DELETE", "/api/admin/staff", OWNER_ID, {

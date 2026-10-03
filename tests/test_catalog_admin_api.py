@@ -79,7 +79,7 @@ class CatalogAdminApiTests(unittest.TestCase):
             assigned = self.client.put(
                 "/api/admin/staff",
                 headers=self.owner_headers(),
-                json={"telegram_user_id": 202, "role": "editor", "is_active": True},
+                json={"telegram_user_id": 202, "roles": ["editor"], "is_active": True},
             )
             self.assertEqual(200, assigned.status_code)
             editor_session = self.client.get("/api/admin/session", headers=signed_headers(202))
@@ -92,7 +92,11 @@ class CatalogAdminApiTests(unittest.TestCase):
         connection = schema.connect(self.database_path)
         try:
             connection.execute(
-                "INSERT INTO staff_members (telegram_user_id, role, changed_by_user_id) VALUES (?, 'editor', 1)",
+                "INSERT INTO staff_members (telegram_user_id, changed_by_user_id) VALUES (?, 1)",
+                (editor_id,),
+            )
+            connection.execute(
+                "INSERT INTO staff_member_roles (telegram_user_id, role, assigned_by_user_id) VALUES (?, 'editor', 1)",
                 (editor_id,),
             )
             connection.execute(
@@ -255,9 +259,9 @@ class CatalogAdminApiTests(unittest.TestCase):
         self.assertIn("uploadCatalogCover", source)
         self.assertIn("uploadCatalogPages", source)
         self.assertIn("escapeHtml(book.title)", source)
-        self.assertIn("editor_assignable", source)
+        self.assertIn("assignable_roles", source)
         self.assertIn("Редактор каталога", source)
-        self.assertIn("adminSession?.role !== 'editor'", source)
+        self.assertIn("hasAdminCapability('inventory.adjust')", source)
         self.assertIn("catalog.manage", source)
 
     def test_restore_requires_a_replacement_after_category_deactivation(self):

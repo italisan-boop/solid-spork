@@ -18,7 +18,14 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from authz import actor_role_sync, capabilities_for_role, has_permission_sync, is_owner_sync
+from authz import (
+    ADMINISTRATOR,
+    actor_role_sync,
+    actor_roles_sync,
+    capabilities_for_roles,
+    has_permission_sync,
+    is_owner_sync,
+)
 from config import settings
 from db.deliveries import (
     METHOD_LABELS,
@@ -221,6 +228,9 @@ def require_telegram_permission(permission: str):
                 g.telegram_user.id, permission, legacy_admin_ids=ADMIN_IDS
             ):
                 return jsonify({"error": "Forbidden"}), 403
+            g.staff_roles = actor_roles_sync(
+                g.telegram_user.id, legacy_admin_ids=ADMIN_IDS
+            )
             g.staff_role = actor_role_sync(
                 g.telegram_user.id, legacy_admin_ids=ADMIN_IDS
             )
@@ -2041,18 +2051,27 @@ def api_admin_database_backup_upload():
 @app.route('/api/admin/session', methods=['GET'])
 @require_telegram_permission("admin.access")
 def api_admin_session():
-    role = g.staff_role
+    roles = list(g.staff_roles)
     tenant_context = maybe_current_tenant_context()
     editor_assignable = bool(
         tenant_context
         and tenant_context.entitlements.plan in {Plan.BUSINESS, Plan.PRO}
         and "staff" in tenant_context.entitlements.features
     )
+    assignable_roles: list[str] = []
+    if has_permission_sync(g.telegram_user.id, "staff.manage", legacy_admin_ids=ADMIN_IDS):
+        assignable_roles = ["manager", "warehouse"]
+        if editor_assignable:
+            assignable_roles.append("editor")
+        if is_owner_sync(g.telegram_user.id, legacy_admin_ids=ADMIN_IDS):
+            assignable_roles.append(ADMINISTRATOR)
     return jsonify({
         "user_id": g.telegram_user.id,
-        "role": role,
-        "capabilities": capabilities_for_role(role),
+        "role": g.staff_role,
+        "roles": roles,
+        "capabilities": capabilities_for_roles(roles),
         "editor_assignable": editor_assignable,
+        "assignable_roles": assignable_roles,
     })
 
 
@@ -2164,7 +2183,9 @@ def api_admin_catalog_book(book_id: int):
 @app.route('/api/admin/catalog/books/<int:book_id>/stock', methods=['PUT'])
 @require_telegram_permission("catalog.manage")
 def api_admin_catalog_book_stock(book_id: int):
-    if g.staff_role == "editor":
+    if not has_permission_sync(
+        g.telegram_user.id, "inventory.adjust", legacy_admin_ids=ADMIN_IDS
+    ):
         return jsonify({"error": "Forbidden"}), 403
     if get_catalog_book_sync(book_id, "active") is None:
         return jsonify({"error": "book not found"}), 404
@@ -2370,11 +2391,18 @@ def api_admin_staff():
     if not isinstance(payload, dict):
         return jsonify({"error": "JSON object is required"}), 400
     user_id = payload.get("telegram_user_id")
-    if not isinstance(user_id, int) or isinstance(user_id, bool):
+    if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
         return jsonify({"error": "telegram_user_id is required"}), 400
     if is_owner_sync(user_id, legacy_admin_ids=ADMIN_IDS):
         return jsonify({"error": "Owner role is configured outside the database"}), 400
+    actor_is_owner = is_owner_sync(g.telegram_user.id, legacy_admin_ids=ADMIN_IDS)
+    current = next(
+        (staff for staff in list_staff_sync() if staff["telegram_user_id"] == user_id), None
+    )
+    current_roles = set(current["roles"]) if current else set()
     if request.method == 'DELETE':
+        if not actor_is_owner and (user_id == g.telegram_user.id or ADMINISTRATOR in current_roles):
+            return jsonify({"error": "Only the owner can change administrator assignments"}), 403
         try:
             deleted = delete_inactive_staff_member_sync(
                 user_id,
@@ -2387,14 +2415,41 @@ def api_admin_staff():
             return jsonify({"error": "staff member not found"}), 404
         return jsonify({"deleted": True})
 
-    role = payload.get("role")
+    if set(payload) != {"telegram_user_id", "roles", "is_active"}:
+        return jsonify({"error": "telegram_user_id, roles and is_active are required"}), 400
+    roles = payload.get("roles")
     active = payload.get("is_active")
-    if not isinstance(role, str) or not isinstance(active, bool):
-        return jsonify({"error": "role and is_active are required"}), 400
+    if (
+        not isinstance(roles, list)
+        or not roles
+        or len(roles) != len(set(roles))
+        or not all(isinstance(role, str) for role in roles)
+        or not isinstance(active, bool)
+    ):
+        return jsonify({"error": "roles and is_active are invalid"}), 400
+    tenant_context = maybe_current_tenant_context()
+    allowed_roles = {"manager", "warehouse"}
+    if (
+        tenant_context
+        and tenant_context.entitlements.plan in {Plan.BUSINESS, Plan.PRO}
+        and "staff" in tenant_context.entitlements.features
+    ):
+        allowed_roles.add("editor")
+    if actor_is_owner:
+        allowed_roles.add(ADMINISTRATOR)
+    requested_roles = set(roles)
+    if not requested_roles.issubset(allowed_roles):
+        return jsonify({"error": "role assignment is not allowed"}), 403
+    if not actor_is_owner and (
+        user_id == g.telegram_user.id
+        or ADMINISTRATOR in current_roles
+        or ADMINISTRATOR in requested_roles
+    ):
+        return jsonify({"error": "Only the owner can change administrator assignments"}), 403
     try:
         staff = set_staff_member_sync(
             user_id,
-            role,
+            roles,
             active=active,
             actor_user_id=g.telegram_user.id,
             actor_role=g.staff_role,
@@ -2440,7 +2495,11 @@ def api_commit_book_import(batch_id: str):
     if request.get_data(cache=False):
         return jsonify({"error": "Request body is not supported"}), 400
     try:
-        return jsonify(commit_book_import_sync(batch_id, g.telegram_user.id))
+        return jsonify(
+            commit_book_import_sync(
+                batch_id, g.telegram_user.id, actor_role=g.staff_role
+            )
+        )
     except QuotaExceededError as error:
         return jsonify({"error": str(error), "limit": error.limit}), 409
     except BookImportError as error:
@@ -2457,7 +2516,7 @@ def api_fulfillment_queue():
     return jsonify({
         "orders": list_fulfillment_queue_sync(
             actor_user_id=g.telegram_user.id,
-            is_owner=g.staff_role == "owner",
+            is_owner=has_permission_sync(g.telegram_user.id, "fulfillment.override", legacy_admin_ids=ADMIN_IDS),
             limit=limit,
         )
     })
@@ -2470,7 +2529,7 @@ def api_fulfillment_detail(order_id: int):
         record = get_fulfillment_sync(
             order_id,
             g.telegram_user.id,
-            is_owner=g.staff_role == "owner",
+            is_owner=has_permission_sync(g.telegram_user.id, "fulfillment.override", legacy_admin_ids=ADMIN_IDS),
         )
     except FulfillmentError as error:
         return jsonify({"error": str(error), "code": error.code}), 409
@@ -2483,7 +2542,14 @@ def api_fulfillment_claim(order_id: int):
     if request.get_data(cache=False):
         return jsonify({"error": "Request body is not supported"}), 400
     try:
-        record = claim_fulfillment_sync(order_id, g.telegram_user.id, g.staff_role)
+        record = claim_fulfillment_sync(
+            order_id,
+            g.telegram_user.id,
+            g.staff_role,
+            can_override=has_permission_sync(
+                g.telegram_user.id, "fulfillment.override", legacy_admin_ids=ADMIN_IDS
+            ),
+        )
     except FulfillmentError as error:
         return jsonify({"error": str(error), "code": error.code}), 409
     return jsonify({"fulfillment": record})
@@ -2513,7 +2579,7 @@ def api_fulfillment_line(order_id: int):
             picked_quantity,
             g.telegram_user.id,
             g.staff_role,
-            is_owner=g.staff_role == "owner",
+            is_owner=has_permission_sync(g.telegram_user.id, "fulfillment.override", legacy_admin_ids=ADMIN_IDS),
         )
     except FulfillmentError as error:
         return jsonify({"error": str(error), "code": error.code}), 409
@@ -2530,7 +2596,7 @@ def api_fulfillment_pack(order_id: int):
             order_id,
             g.telegram_user.id,
             g.staff_role,
-            is_owner=g.staff_role == "owner",
+            is_owner=has_permission_sync(g.telegram_user.id, "fulfillment.override", legacy_admin_ids=ADMIN_IDS),
         )
     except FulfillmentError as error:
         payload = {"error": str(error), "code": error.code}
@@ -2547,7 +2613,8 @@ def api_fulfillment_print(order_id: int):
         payload = packing_print_payload_sync(
             order_id,
             g.telegram_user.id,
-            is_owner=g.staff_role == "owner",
+            actor_role=g.staff_role,
+            is_owner=has_permission_sync(g.telegram_user.id, "fulfillment.override", legacy_admin_ids=ADMIN_IDS),
         )
         if payload["method"] == METHOD_SELF_PICKUP:
             recipient = {"instructions": payload["public_instructions_snapshot"]}
