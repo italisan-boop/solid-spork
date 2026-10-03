@@ -216,15 +216,18 @@ class SalesLandingTests(unittest.TestCase):
             'id="warehouse-assembly-evidence"',
             'id="story-issuance"',
             'id="miniapp-screenshots"',
-            'href="#miniapp-screenshots" data-overview-target="miniapp-screenshots">Галерея</a>',
+            'href="#miniapp-screenshots" data-landing-target="miniapp-screenshots">Галерея</a>',
             'id="landing-tab-list"',
             'role="tablist"',
             'id="overview-tab"',
             'id="demo-tab"',
+            'id="gallery-tab"',
             'id="overview-panel"',
             'id="demo-panel"',
+            'id="gallery-panel"',
             'data-landing-tab="overview"',
             'data-landing-tab="demo"',
+            'data-landing-tab="gallery"',
             'activateLandingTabForHash',
             'ArrowRight',
             'ArrowLeft',
@@ -425,7 +428,7 @@ class SalesLandingTests(unittest.TestCase):
             response.close()
         for marker in (
             "const navigateToDemoTarget =",
-            "activateLandingTab(landingTabs.demo.panel.contains(target) ? 'demo' : 'overview')",
+            "activateLandingTab(landingTabForTarget(target));",
             "window.requestAnimationFrame(() => {",
             "target.scrollIntoView({ behavior: isReducedMotion() ? 'auto' : 'smooth', block: 'start' })",
             "focus({ preventScroll: true })",
@@ -448,7 +451,7 @@ class SalesLandingTests(unittest.TestCase):
         self.assertNotIn("byId('complete-issuance')", source)
         self.assertNotIn("scrollToStory", source)
 
-    def test_overview_navigation_reuses_guided_transition_and_focused_headings(self):
+    def test_landing_navigation_reuses_guided_transition_and_focused_headings(self):
         response = self.client.get("/sales")
         try:
             source = response.get_data(as_text=True)
@@ -456,7 +459,6 @@ class SalesLandingTests(unittest.TestCase):
             response.close()
         overview_targets = {
             "features": "features-heading",
-            "miniapp-screenshots": "miniapp-screenshots-heading",
             "pricing": "pricing-heading",
             "launch": "launch-heading",
         }
@@ -464,18 +466,26 @@ class SalesLandingTests(unittest.TestCase):
             self.assertIn(f'href="#{target_id}" data-overview-target="{target_id}"', source)
             self.assertIn(f'id="{target_id}" class="section" aria-labelledby="{heading_id}"', source)
             self.assertIn(f'id="{heading_id}" tabindex="-1"', source)
-            key = target_id if target_id.isidentifier() else f"'{target_id}'"
-            self.assertIn(f"{key}: '#{heading_id}'", source)
+            self.assertIn(f"{target_id}: '#{heading_id}'", source)
         for marker in (
-            "const overviewNavigation = Object.freeze({",
-            "const navigateToOverviewTarget = (targetId, updateHistory = false) =>",
+            'href="#miniapp-screenshots" data-landing-target="miniapp-screenshots"',
+            'id="gallery-tab" class="landing-tab"',
+            'aria-controls="gallery-panel"',
+            'id="gallery-panel" class="landing-panel" role="tabpanel" aria-labelledby="gallery-tab" hidden',
+            "gallery: { tab: byId('gallery-tab'), panel: byId('gallery-panel') }",
+            "landingTabs.gallery.panel.append(byId('miniapp-screenshots'));",
+            "const landingTabForTarget = target =>",
+            "const landingNavigation = Object.freeze({",
+            "'miniapp-screenshots': '#miniapp-screenshots-heading'",
+            "const navigateToLandingTarget = (targetId, updateHistory = false) =>",
             "navigateToDemoTarget(targetId, focusSelector)",
             "history.pushState(null, '', hash)",
-            "lastHandledOverviewHash",
-            "link.dataset.overviewTarget === targetId",
+            "lastHandledLandingHash",
+            "link.dataset.landingTarget === targetId",
             "window.addEventListener('popstate', activateLandingTabForHash)",
         ):
             self.assertIn(marker, source)
+        self.assertNotIn("const overviewNavigation", source)
         self.assertNotIn("scrollToOverview", source)
 
     def test_overview_reveals_replay_smoothly_in_both_directions(self):
@@ -485,7 +495,7 @@ class SalesLandingTests(unittest.TestCase):
         finally:
             response.close()
         self.assertIn(
-            "if (key === 'demo') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));",
+            "if (key !== 'overview') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));",
             source,
         )
         for marker in (
@@ -655,11 +665,15 @@ class SalesLandingTests(unittest.TestCase):
             'role="tabpanel"',
             'aria-controls="overview-panel"',
             'aria-controls="demo-panel"',
+            'aria-controls="gallery-panel"',
             'aria-labelledby="overview-tab"',
             'aria-labelledby="demo-tab"',
+            'aria-labelledby="gallery-tab"',
             'id="demo-panel" class="landing-panel" role="tabpanel" aria-labelledby="demo-tab" hidden',
+            'id="gallery-panel" class="landing-panel" role="tabpanel" aria-labelledby="gallery-tab" hidden',
             "landingTabs.demo.panel.append(byId('scenarios'), byId('demo'))",
-            "if (key === 'demo') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));",
+            "landingTabs.gallery.panel.append(byId('miniapp-screenshots'));",
+            "if (key !== 'overview') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));",
             "window.addEventListener('hashchange', activateLandingTabForHash)",
             "order.issuance = 'ready';",
             "completeIssuance();",
@@ -671,6 +685,45 @@ class SalesLandingTests(unittest.TestCase):
         self.assertLess(prepare_body.index("order.issuance = 'ready';"), prepare_body.index("completeIssuance();"))
         self.assertNotIn("resetDemo()", prepare_body)
         self.assertEqual(1, source.count('href="#miniapp-screenshots"'))
+
+    def test_gallery_tab_mobile_layout_and_birthday_surprise_are_local(self):
+        response = self.client.get("/sales")
+        try:
+            source = response.get_data(as_text=True)
+        finally:
+            response.close()
+        for marker in (
+            'id="gallery-tab" class="landing-tab" type="button" role="tab" aria-controls="gallery-panel"',
+            'id="gallery-panel" class="landing-panel" role="tabpanel" aria-labelledby="gallery-tab" hidden',
+            "landingTabs.gallery.panel.append(byId('miniapp-screenshots'));",
+            "const landingTabForTarget = target =>",
+            "if (key !== 'overview') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));",
+            '.landing-tab-list { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); }',
+            'overflow-wrap: anywhere',
+            '.phone { width: min(100%, 300px); }',
+            '.brand-cluster { flex: 1 1 auto;',
+            '.wordmark-name { overflow: hidden; text-overflow: ellipsis; }',
+            'id="birthday-trigger" class="brand-surprise" type="button"',
+            '<dialog id="birthday-surprise" class="birthday-surprise"',
+            'С днем рождения Лера &lt;3',
+            'class="birthday-number" aria-hidden="true">21',
+            '<span class="birthday-token">🎈</span>',
+            'const birthdayTriggerWindowMs = 2500;',
+            'const birthdayTriggerCount = 7;',
+            'birthdayTriggerPresses = birthdayTriggerPresses.filter',
+            'birthdaySurprise.showModal();',
+            "birthdaySurprise.addEventListener('close', () => {",
+            'birthdayTrigger.focus({ preventScroll: true });',
+            '@media (prefers-reduced-motion: no-preference) {',
+            '.birthday-token { animation: birthday-float',
+            'max-height: 94svh;',
+            'height: 100svh;',
+            'height: 100dvh;',
+        ):
+            self.assertIn(marker, source)
+        self.assertNotIn('max-height: 94vh;', source)
+        self.assertNotIn('max-height: min(72vh, 880px);', source)
+        self.assertNotIn('height: 100vh;', source)
 
     def test_plan_comparison_matches_standard_entitlements(self):
         response = self.client.get("/sales")

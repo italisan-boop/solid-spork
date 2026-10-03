@@ -54,8 +54,13 @@
       gap: 18px; margin-top: 12px; padding: 11px 13px 11px 18px; border: 1px solid rgba(255, 255, 255, .11);
       border-radius: 18px; background: rgba(21, 21, 26, .86); backdrop-filter: blur(18px); box-shadow: 0 10px 38px rgba(0,0,0,.24);
     }
-    .wordmark { display: flex; align-items: center; gap: 9px; font-weight: 800; text-decoration: none; white-space: nowrap; }
-    .brand-mark { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 9px; background: var(--accent); box-shadow: 0 0 24px rgba(224,0,118,.55); }
+    .brand-cluster { display: flex; align-items: center; min-width: 0; gap: 9px; }
+    .wordmark { display: flex; min-width: 0; align-items: center; font-weight: 800; text-decoration: none; white-space: nowrap; }
+    .wordmark-name { overflow: hidden; text-overflow: ellipsis; }
+    .brand-surprise { display: grid; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 12px; color: #230011; background: var(--accent); box-shadow: 0 0 24px rgba(224,0,118,.55); font-size: 21px; }
+    .brand-surprise:hover { background: var(--accent-strong); transform: translateY(-1px) rotate(-4deg); }
+    .brand-surprise:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+    .topbar-cta-short { display: none; }
     .topnav { display: flex; align-items: center; gap: 16px; }
     .topnav a { color: var(--muted); font-size: 14px; text-decoration: none; }
     .topnav a:hover { color: var(--ink); }
@@ -287,16 +292,46 @@
     .screenshot-image-trigger:focus-visible { outline: 3px solid #ff8ec2; outline-offset: -3px; }
     .screenshot-image-trigger img { transition: transform .3s cubic-bezier(.2,.8,.2,1), filter .3s ease; }
     .screenshot-image-trigger:hover img, .screenshot-image-trigger:focus-visible img { filter: brightness(1.08); transform: scale(1.018); }
-    .image-lightbox { width: min(96vw, 1120px); max-width: none; max-height: 94vh; padding: 0; overflow: hidden; border: 1px solid #75405c; border-radius: 22px; color: var(--ink); background: #15151a; box-shadow: 0 30px 92px rgba(0,0,0,.62); }
+    .image-lightbox { width: min(96vw, 1120px); max-width: none; max-height: 94svh; max-height: 94dvh; padding: 0; overflow: hidden; border: 1px solid #75405c; border-radius: 22px; color: var(--ink); background: #15151a; box-shadow: 0 30px 92px rgba(0,0,0,.62); }
     .image-lightbox::backdrop { background: rgba(5,4,8,.82); backdrop-filter: blur(5px); }
-    .image-lightbox-content { display: grid; max-height: 94vh; grid-template-rows: auto minmax(0, 1fr) auto; }
+    .image-lightbox-content { display: grid; max-height: 94svh; max-height: 94dvh; grid-template-rows: auto minmax(0, 1fr) auto; }
     .image-lightbox-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
     .image-lightbox-head h2 { margin: 0; font-size: 16px; }
     .image-lightbox-close { min-width: 42px; min-height: 42px; padding: 0; border: 1px solid #75405c; border-radius: 12px; color: #ffd3e4; background: #351024; font: inherit; font-size: 24px; line-height: 1; cursor: pointer; }
     .image-lightbox-close:hover { border-color: #ff8ec2; background: #4b1532; }
     .image-lightbox-close:focus-visible { outline: 3px solid #ff8ec2; outline-offset: 2px; }
-    .image-lightbox-image { display: block; width: 100%; max-height: min(72vh, 880px); background: #0d0d11; object-fit: contain; }
+    .image-lightbox-image { display: block; width: 100%; max-height: min(72svh, 880px); max-height: min(72dvh, 880px); background: #0d0d11; object-fit: contain; }
     .image-lightbox-caption { margin: 0; padding: 13px 16px 16px; color: var(--muted); font-size: 14px; }
+    .birthday-surprise { width: 100%; max-width: none; height: 100svh; height: 100dvh; max-height: none; padding: 0; margin: 0; overflow: hidden; border: 0; color: var(--ink); background: #120710; }
+    .birthday-surprise::backdrop { background: rgba(5,2,7,.88); backdrop-filter: blur(9px); }
+    .birthday-scene { position: relative; isolation: isolate; display: grid; width: 100%; min-height: 100svh; min-height: 100dvh; place-items: center; padding: max(28px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); overflow: hidden; text-align: center; background: radial-gradient(circle at 50% 38%, #7b1a58 0, #321020 34%, #120710 72%); }
+    .birthday-scene::before { position: absolute; z-index: -1; inset: 12%; border: 1px solid rgba(255, 217, 237, .22); border-radius: 50%; box-shadow: 0 0 90px rgba(255, 96, 174, .22); content: ""; }
+    .birthday-content { position: relative; display: grid; justify-items: center; gap: 12px; max-width: 680px; }
+    .birthday-kicker { margin: 0; color: #ffd1e6; font-size: clamp(13px, 3vw, 17px); font-weight: 800; letter-spacing: .17em; text-transform: uppercase; }
+    .birthday-number { margin: 0; color: #fff1f8; font-size: clamp(150px, 45vw, 390px); font-weight: 900; letter-spacing: -.12em; line-height: .76; text-shadow: 0 0 48px rgba(255, 139, 198, .66); }
+    .birthday-title { margin: 8px 0 6px; color: #fff4fa; font-size: clamp(32px, 8vw, 72px); letter-spacing: -.065em; line-height: .98; }
+    .birthday-copy { max-width: 430px; margin: 0; color: #ffd3e7; font-size: clamp(16px, 3.5vw, 21px); }
+    .birthday-close { min-height: 46px; margin-top: 15px; padding: 10px 18px; border: 1px solid rgba(255, 224, 240, .58); border-radius: 999px; color: #2a0719; background: #ffd4e8; font: inherit; font-weight: 850; }
+    .birthday-close:hover { background: #fff1f8; transform: translateY(-2px); }
+    .birthday-close:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+    .birthday-confetti { position: absolute; inset: 0; pointer-events: none; }
+    .birthday-token { position: absolute; display: grid; width: clamp(38px, 9vw, 72px); aspect-ratio: 1; place-items: center; border: 1px solid rgba(255,255,255,.34); border-radius: 18px; color: #fff4fa; background: linear-gradient(145deg, rgba(255,123,183,.72), rgba(86,19,61,.82)); box-shadow: 0 14px 32px rgba(0,0,0,.28); font-size: clamp(24px, 5vw, 42px); transform: rotate(var(--tilt, 0deg)); }
+    .birthday-token:nth-child(1) { top: 7%; left: 7%; --tilt: -17deg; }
+    .birthday-token:nth-child(2) { top: 17%; right: 8%; --tilt: 15deg; }
+    .birthday-token:nth-child(3) { top: 58%; left: 10%; --tilt: 11deg; }
+    .birthday-token:nth-child(4) { top: 68%; right: 10%; --tilt: -12deg; }
+    .birthday-token:nth-child(5) { top: 31%; left: 18%; --tilt: 8deg; }
+    .birthday-token:nth-child(6) { top: 42%; right: 18%; --tilt: -9deg; }
+    .birthday-token:nth-child(7) { bottom: 6%; left: 29%; --tilt: 14deg; }
+    .birthday-token:nth-child(8) { bottom: 7%; right: 29%; --tilt: -14deg; }
+    .birthday-token:nth-child(9) { top: 8%; left: 43%; --tilt: 7deg; }
+    .birthday-token:nth-child(10) { top: 24%; right: 31%; --tilt: -7deg; }
+    .birthday-token:nth-child(11) { bottom: 23%; right: 4%; --tilt: 12deg; }
+    @media (prefers-reduced-motion: no-preference) {
+      .birthday-token { animation: birthday-float 4.8s ease-in-out infinite alternate; }
+      .birthday-token:nth-child(2n) { animation-delay: -2.1s; }
+      .birthday-token:nth-child(3n) { animation-duration: 5.9s; }
+    }
     .demo-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
     .demo-evidence-grid .demo-evidence { margin: 0; }
     .screenshots-heading { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
@@ -305,6 +340,7 @@
     .landing-tabs { display: flex; justify-content: center; padding: 22px 0 6px; }
     .landing-tab-list { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: #15151a; }
     .landing-tab { min-height: 42px; padding: 0 15px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; }
+    .landing-tab-compact { display: none; }
     .landing-tab[aria-selected="true"] { background: var(--accent); color: #1a0717; }
     .landing-tab:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
     .landing-panel[hidden] { display: none; }
@@ -385,6 +421,7 @@
     @keyframes story-enter { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes story-update { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,142,194,0); } 45% { box-shadow: 0 0 0 4px rgba(255,142,194,.18); } }
     @keyframes connector-token { 0% { transform: translateY(-8px); opacity: .2; } 100% { transform: translateY(0); opacity: 1; } }
+    @keyframes birthday-float { from { translate: 0 -10px; } to { translate: 0 18px; } }
     @media (max-width: 900px) {
       .topnav { display: none; }
       .hero, .support { grid-template-columns: 1fr; }
@@ -399,8 +436,18 @@
     }
     @media (max-width: 560px) {
       .page { width: min(100% - 22px, 1180px); }
-      .topbar { padding-left: 12px; }
-      .topbar .button { padding: 9px 11px; font-size: 13px; }
+      .topbar { gap: 8px; padding: 8px 9px; }
+      .brand-cluster { flex: 1 1 auto; max-width: calc(100% - 96px); }
+      .wordmark { min-width: 0; }
+      .topbar .button { flex: 0 0 auto; padding: 9px 11px; font-size: 13px; }
+      .topbar-cta-long { display: none; }
+      .topbar-cta-short { display: inline; }
+      .landing-tabs { padding-top: 16px; }
+      .landing-tab-list { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .landing-tab { min-height: 52px; padding: 7px 5px; overflow-wrap: anywhere; line-height: 1.15; text-wrap: balance; white-space: normal; }
+      .landing-tab-long { display: none; }
+      .landing-tab-compact { display: inline; }
+      .section { padding: 62px 0; }
       .feature-grid, .scenario-grid, .terms, .kpis, .admin-overview, .launch-grid, .demo-evidence-grid { grid-template-columns: 1fr; }
       .screenshot-gallery { columns: 1; }
       .journey-steps { grid-template-columns: 1fr 1fr; }
@@ -408,10 +455,11 @@
       .feature-icon { margin-bottom: 20px; }
       .hero-actions .button { width: 100%; }
       .device-stage { min-height: 400px; }
-      .phone { width: 300px; }
+      .phone { width: min(100%, 300px); }
       .demo-head { align-items: flex-start; }
       .demo-actions .demo-badge { display: none; }
       .catalog-tools { flex-direction: column; }
+      .birthday-token { border-radius: 13px; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
@@ -421,17 +469,18 @@
 <body>
   <a class="skip-link" href="#content">К содержанию</a>
   <header class="page topbar">
-    <a class="wordmark" href="#top" aria-label="#Ваша_платформа — наверх"><span class="brand-mark">🌿</span><span>#Ваша_платформа</span></a>
+    <div class="brand-cluster"><button id="birthday-trigger" class="brand-surprise" type="button" aria-label="Праздничный сюрприз">🌿</button><a class="wordmark" href="#top" aria-label="#Ваша_платформа — наверх"><span class="wordmark-name">#Ваша_платформа</span></a></div>
     <nav class="topnav" aria-label="Навигация по странице">
-      <a href="#features" data-overview-target="features">Возможности</a><a href="#demo">Демо</a><a href="#miniapp-screenshots" data-overview-target="miniapp-screenshots">Галерея</a><a href="#pricing" data-overview-target="pricing">Тарифы</a><a href="#launch" data-overview-target="launch">Запуск</a><a href="#support">Поддержка</a>
+      <a href="#features" data-overview-target="features">Возможности</a><a href="#demo">Демо</a><a href="#miniapp-screenshots" data-landing-target="miniapp-screenshots">Галерея</a><a href="#pricing" data-overview-target="pricing">Тарифы</a><a href="#launch" data-overview-target="launch">Запуск</a><a href="#support">Поддержка</a>
     </nav>
-    <a class="button button-primary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Обсудить запуск</a>
+    <a class="button button-primary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer" aria-label="Обсудить запуск"><span class="topbar-cta-long">Обсудить запуск</span><span class="topbar-cta-short">Написать</span></a>
   </header>
   <main id="content">
     <div class="landing-tabs page">
       <div id="landing-tab-list" class="landing-tab-list" role="tablist" aria-label="Режим страницы">
         <button id="overview-tab" class="landing-tab" type="button" role="tab" aria-controls="overview-panel" aria-selected="true" tabindex="0" data-landing-tab="overview">Обзор</button>
-        <button id="demo-tab" class="landing-tab" type="button" role="tab" aria-controls="demo-panel" aria-selected="false" tabindex="-1" data-landing-tab="demo">Интерактивная DEMO</button>
+        <button id="demo-tab" class="landing-tab" type="button" role="tab" aria-controls="demo-panel" aria-selected="false" tabindex="-1" data-landing-tab="demo" aria-label="Интерактивная DEMO"><span class="landing-tab-long">Интерактивная DEMO</span><span class="landing-tab-compact" aria-hidden="true">DEMO</span></button>
+        <button id="gallery-tab" class="landing-tab" type="button" role="tab" aria-controls="gallery-panel" aria-selected="false" tabindex="-1" data-landing-tab="gallery">Галерея</button>
       </div>
     </div>
     <div id="overview-panel" class="landing-panel" role="tabpanel" aria-labelledby="overview-tab">
@@ -539,12 +588,19 @@
     <section id="support" class="section"><div class="page support" data-reveal><div class="support-main"><p class="eyebrow">ЗАПУСК И СОПРОВОЖДЕНИЕ</p><h2>Обсудим вашу витрину и подберём формат запуска.</h2><p>Расскажите о товарах, услугах, команде и задачах. Поможем выбрать аренду или покупку, спланировать запуск и дальнейшую поддержку.</p><div class="hero-actions"><a class="button button-primary" href="https://t.me/Bubblecubby" target="_blank" rel="noopener noreferrer">Написать @Bubblecubby</a></div></div><aside class="support-aside"><article class="term"><h3>Аренда</h3><p>Готовая управляемая среда с обновлениями, контролем резервных копий и поддержкой.</p></article><article class="term"><h3>Покупка</h3><p>Развёртывание на инфраструктуре клиента и 3 месяца поддержки. Далее — от 5 900 ₽ в месяц.</p></article></aside></div></section>
     </div>
     <div id="demo-panel" class="landing-panel" role="tabpanel" aria-labelledby="demo-tab" hidden></div>
+    <div id="gallery-panel" class="landing-panel" role="tabpanel" aria-labelledby="gallery-tab" hidden></div>
   </main>
   <dialog id="image-lightbox" class="image-lightbox" aria-labelledby="image-lightbox-heading" aria-describedby="image-lightbox-caption">
     <div class="image-lightbox-content">
       <div class="image-lightbox-head"><h2 id="image-lightbox-heading">Снимок рабочего пространства</h2><button id="image-lightbox-close" class="image-lightbox-close" type="button" aria-label="Закрыть увеличенный снимок">×</button></div>
       <img id="image-lightbox-image" class="image-lightbox-image" alt="">
       <p id="image-lightbox-caption" class="image-lightbox-caption"></p>
+    </div>
+  </dialog>
+  <dialog id="birthday-surprise" class="birthday-surprise" aria-labelledby="birthday-title" aria-describedby="birthday-copy">
+    <div class="birthday-scene">
+      <div class="birthday-confetti" aria-hidden="true"><span class="birthday-token">♥</span><span class="birthday-token">🂡</span><span class="birthday-token">♥</span><span class="birthday-token">🂱</span><span class="birthday-token">♦</span><span class="birthday-token">🂽</span><span class="birthday-token">♥</span><span class="birthday-token">♠</span><span class="birthday-token">🎈</span><span class="birthday-token">🎈</span><span class="birthday-token">🎈</span></div>
+      <div class="birthday-content"><p class="birthday-kicker">Секретная раздача</p><p class="birthday-number" aria-hidden="true">21</p><h2 id="birthday-title" class="birthday-title">С днем рождения Лера &lt;3</h2><p id="birthday-copy" class="birthday-copy">Пусть новый год жизни приносит счастливые карты, тёплые сердца и только лучшие истории.</p><button id="birthday-surprise-close" class="birthday-close" type="button">Спасибо ♥</button></div>
     </div>
   </dialog>
   <footer class="page"><p>#Ваша_платформа · демонстрационная страница универсальной платформы продаж в Telegram</p><p class="legal-notice">Сайт и показанные данные демонстрационные и не являются публичной офертой. Возможности, стоимость, состав запуска и итоговые условия согласуются индивидуально в Telegram.</p></footer>
@@ -699,7 +755,7 @@
       const navigateToDemoTarget = (targetId, focusSelector, ...animatedIds) => {
         const target = byId(targetId);
         if (!target) return false;
-        activateLandingTab(landingTabs.demo.panel.contains(target) ? 'demo' : 'overview');
+        activateLandingTab(landingTabForTarget(target));
         if (target.hidden) return false;
         animateStory(...animatedIds);
         window.requestAnimationFrame(() => {
@@ -1018,9 +1074,12 @@
       };
       const landingTabs = Object.freeze({
         overview: { tab: byId('overview-tab'), panel: byId('overview-panel') },
-        demo: { tab: byId('demo-tab'), panel: byId('demo-panel') }
+        demo: { tab: byId('demo-tab'), panel: byId('demo-panel') },
+        gallery: { tab: byId('gallery-tab'), panel: byId('gallery-panel') }
       });
       landingTabs.demo.panel.append(byId('scenarios'), byId('demo'));
+      landingTabs.gallery.panel.append(byId('miniapp-screenshots'));
+      const landingTabForTarget = target => Object.entries(landingTabs).find(([, entry]) => entry.panel.contains(target))?.[0] || 'overview';
       let armOverviewReveals = () => {};
       const activateLandingTab = (key, focusTab = false) => {
         const selected = landingTabs[key];
@@ -1031,39 +1090,39 @@
           entry.tab.tabIndex = active ? 0 : -1;
           entry.panel.hidden = !active;
         });
-        if (key === 'demo') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));
+        if (key !== 'overview') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));
         if (key === 'overview') armOverviewReveals();
         if (focusTab) selected.tab.focus();
       };
-      const overviewNavigation = Object.freeze({
+      const landingNavigation = Object.freeze({
         features: '#features-heading',
         'miniapp-screenshots': '#miniapp-screenshots-heading',
         pricing: '#pricing-heading',
         launch: '#launch-heading',
       });
-      let lastHandledOverviewHash = '';
-      const navigateToOverviewTarget = (targetId, updateHistory = false) => {
-        const focusSelector = overviewNavigation[targetId];
+      let lastHandledLandingHash = '';
+      const navigateToLandingTarget = (targetId, updateHistory = false) => {
+        const focusSelector = landingNavigation[targetId];
         if (!focusSelector || !navigateToDemoTarget(targetId, focusSelector)) return false;
         const hash = `#${targetId}`;
         if (updateHistory && location.hash !== hash) {
           history.pushState(null, '', hash);
-          lastHandledOverviewHash = hash;
+          lastHandledLandingHash = hash;
         }
         return true;
       };
       const activateLandingTabForHash = () => {
         const targetId = location.hash.slice(1);
-        if (overviewNavigation[targetId]) {
-          if (lastHandledOverviewHash === location.hash) return;
-          lastHandledOverviewHash = location.hash;
-          navigateToOverviewTarget(targetId);
+        if (landingNavigation[targetId]) {
+          if (lastHandledLandingHash === location.hash) return;
+          lastHandledLandingHash = location.hash;
+          navigateToLandingTarget(targetId);
           return;
         }
-        lastHandledOverviewHash = '';
+        lastHandledLandingHash = '';
         const target = targetId ? byId(targetId) : null;
         if (!target) return;
-        activateLandingTab(landingTabs.demo.panel.contains(target) ? 'demo' : 'overview');
+        activateLandingTab(landingTabForTarget(target));
         window.requestAnimationFrame(() => target.scrollIntoView({ behavior: isReducedMotion() ? 'auto' : 'smooth', block: 'start' }));
       };
       byId('landing-tab-list').addEventListener('click', event => {
@@ -1089,13 +1148,14 @@
         const link = event.target.closest('a[href^="#"]');
         if (!link) return;
         const targetId = link.getAttribute('href').slice(1);
-        if (link.dataset.overviewTarget === targetId && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+        const isLandingTarget = link.dataset.overviewTarget === targetId || link.dataset.landingTarget === targetId;
+        if (isLandingTarget && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
           event.preventDefault();
-          navigateToOverviewTarget(targetId, true);
+          navigateToLandingTarget(targetId, true);
           return;
         }
         const target = byId(targetId);
-        if (target) activateLandingTab(landingTabs.demo.panel.contains(target) ? 'demo' : 'overview');
+        if (target) activateLandingTab(landingTabForTarget(target));
       });
       window.addEventListener('hashchange', activateLandingTabForHash);
       window.addEventListener('popstate', activateLandingTabForHash);
@@ -1211,6 +1271,31 @@
         const trigger = imageLightboxTrigger;
         imageLightboxTrigger = null;
         if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+      });
+      const birthdayTrigger = byId('birthday-trigger');
+      const birthdaySurprise = byId('birthday-surprise');
+      const birthdaySurpriseClose = byId('birthday-surprise-close');
+      const birthdayTriggerWindowMs = 2500;
+      const birthdayTriggerCount = 7;
+      let birthdayTriggerPresses = [];
+      const closeBirthdaySurprise = () => {
+        if (birthdaySurprise.open) birthdaySurprise.close();
+      };
+      birthdayTrigger.addEventListener('click', () => {
+        const now = Date.now();
+        birthdayTriggerPresses = birthdayTriggerPresses.filter(pressedAt => now - pressedAt <= birthdayTriggerWindowMs);
+        birthdayTriggerPresses.push(now);
+        if (birthdayTriggerPresses.length < birthdayTriggerCount) return;
+        birthdayTriggerPresses = [];
+        birthdaySurprise.showModal();
+      });
+      birthdaySurpriseClose.addEventListener('click', closeBirthdaySurprise);
+      birthdaySurprise.addEventListener('click', event => {
+        if (event.target === birthdaySurprise) closeBirthdaySurprise();
+      });
+      birthdaySurprise.addEventListener('close', () => {
+        birthdayTriggerPresses = [];
+        if (birthdayTrigger.isConnected) birthdayTrigger.focus({ preventScroll: true });
       });
       const setupSectionReveals = () => {
         const panel = landingTabs.overview.panel;
