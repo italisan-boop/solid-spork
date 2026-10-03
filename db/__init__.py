@@ -82,7 +82,8 @@ from db.support_history import (
 from db.books import (
     add_book,
     get_all_books,
-    update_book_sort_order,
+    move_book,
+    move_book_sync,
     get_book,
     delete_book,
     archive_books,

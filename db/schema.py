@@ -48,7 +48,12 @@ def database_context(path: str | Path):
         _CURRENT_DATABASE_PATH.reset(token)
 
 
+def unicode_casefold(value: object) -> str:
+    return "" if value is None else str(value).casefold()
+
+
 def configure_connection(connection: sqlite3.Connection) -> None:
+    connection.create_function("unicode_casefold", 1, unicode_casefold, deterministic=True)
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute(f"PRAGMA busy_timeout = {_CONNECTION_TIMEOUT_SECONDS * 1000}")
 

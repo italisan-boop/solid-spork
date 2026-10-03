@@ -502,19 +502,18 @@ async def book_order_up(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Ошибка", show_alert=True)
         return
 
-    book = await db.get_book(book_id)
-    if not book:
+    result = await db.move_book(
+        book_id,
+        "up",
+        actor_user_id=callback.from_user.id,
+        actor_role="owner",
+    )
+    if not result["found"]:
         await callback.answer("❌ Книга не найдена", show_alert=True)
         return
 
-    current_order = book.get('sort_order', 0) or 0
-    new_order = max(0, current_order - 1)
-
-    await db.update_book_sort_order(book_id, new_order)
-
-    await callback.answer(f"⬆️ Книга поднята (порядок: {new_order})", show_alert=True)
-
-    # Перерисовываем меню редактирования книги
+    message = "⬆️ Книга поднята" if result["moved"] else "ℹ️ Книга уже в начале списка"
+    await callback.answer(message, show_alert=True)
     await _show_edit_book_menu(callback, state, book_id)
 
 
@@ -531,19 +530,18 @@ async def book_order_down(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Ошибка", show_alert=True)
         return
 
-    book = await db.get_book(book_id)
-    if not book:
+    result = await db.move_book(
+        book_id,
+        "down",
+        actor_user_id=callback.from_user.id,
+        actor_role="owner",
+    )
+    if not result["found"]:
         await callback.answer("❌ Книга не найдена", show_alert=True)
         return
 
-    current_order = book.get('sort_order', 0) or 0
-    new_order = current_order + 1
-
-    await db.update_book_sort_order(book_id, new_order)
-
-    await callback.answer(f"⬇️ Книга опущена (порядок: {new_order})", show_alert=True)
-
-    # Перерисовываем меню редактирования книги
+    message = "⬇️ Книга опущена" if result["moved"] else "ℹ️ Книга уже в конце списка"
+    await callback.answer(message, show_alert=True)
     await _show_edit_book_menu(callback, state, book_id)
 
 

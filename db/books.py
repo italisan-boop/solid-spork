@@ -1,10 +1,12 @@
 """Модуль для работы с книгами (каталог)"""
+import asyncio
 import aiosqlite
 import json
 
 from controlplane.plan_policy import FEATURE_CATALOG, LIMIT_BOOKS
 from db.connection import connection
 from db.categories import NO_CATEGORY_NAME
+from db.schema import connect
 
 PAGE_SIZE = 20  # Количество книг на странице
 
@@ -84,8 +86,8 @@ async def find_book_by_title_author(title: str, author: str) -> dict | None:
             """SELECT id, title, author, category
                FROM books
                WHERE is_active = 1 AND COALESCE(is_archived, 0) = 0
-                 AND LOWER(TRIM(title)) = LOWER(TRIM(?))
-                 AND LOWER(TRIM(COALESCE(author, ''))) = LOWER(TRIM(COALESCE(?, '')))
+                 AND unicode_casefold(TRIM(title)) = unicode_casefold(TRIM(?))
+                 AND unicode_casefold(TRIM(COALESCE(author, ''))) = unicode_casefold(TRIM(COALESCE(?, '')))
                LIMIT 1""",
             (title, author or '')
         )
@@ -111,14 +113,102 @@ async def get_all_books() -> list:
         return [dict(r) for r in rows]
 
 
-async def update_book_sort_order(book_id: int, sort_order: int):
-    """Обновить порядок отображения книги"""
-    async with connection() as db:
-        await db.execute(
-            "UPDATE books SET sort_order = ? WHERE id = ?",
-            (sort_order, book_id)
+def move_book_sync(
+    book_id: int,
+    action: str,
+    *,
+    actor_user_id: int | None = None,
+    actor_role: str = "owner",
+    source: str = "mini_app",
+) -> dict:
+    if isinstance(book_id, bool) or not isinstance(book_id, int) or book_id <= 0:
+        raise ValueError("book ID must be a positive integer")
+    if action not in {"top", "up", "down", "bottom"}:
+        raise ValueError("unsupported catalog order action")
+
+    database = connect()
+    try:
+        database.row_factory = None
+        database.execute("BEGIN IMMEDIATE")
+        rows = database.execute(
+            """
+            SELECT id, sort_order
+            FROM books
+            WHERE is_active = 1 AND COALESCE(is_archived, 0) = 0
+            ORDER BY sort_order ASC, id ASC
+            """
+        ).fetchall()
+        book_ids = [row[0] for row in rows]
+        if book_id not in book_ids:
+            database.rollback()
+            return {"found": False, "moved": False, "normalized": False, "position": None, "book_ids": book_ids}
+
+        current_position = book_ids.index(book_id)
+        target_position = {
+            "top": 0,
+            "up": max(0, current_position - 1),
+            "down": min(len(book_ids) - 1, current_position + 1),
+            "bottom": len(book_ids) - 1,
+        }[action]
+        moved = target_position != current_position
+        reordered_ids = list(book_ids)
+        if moved:
+            reordered_ids.pop(current_position)
+            reordered_ids.insert(target_position, book_id)
+
+        normalized = any(
+            current_id != expected_id or current_sort_order != position
+            for position, ((current_id, current_sort_order), expected_id) in enumerate(zip(rows, reordered_ids))
         )
-        await db.commit()
+        if normalized:
+            database.executemany(
+                "UPDATE books SET sort_order = ? WHERE id = ?",
+                [(position, current_id) for position, current_id in enumerate(reordered_ids)],
+            )
+        if moved:
+            from db.audit import append_audit_event
+
+            append_audit_event(
+                database,
+                actor_user_id=actor_user_id,
+                actor_role=actor_role,
+                source=source,
+                action="catalog.position.updated",
+                entity_type="book",
+                entity_id=book_id,
+                details={"reason_code": action},
+            )
+        database.commit()
+        return {
+            "found": True,
+            "moved": moved,
+            "normalized": normalized,
+            "position": reordered_ids.index(book_id),
+            "book_ids": reordered_ids,
+        }
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+async def move_book(
+    book_id: int,
+    action: str,
+    *,
+    actor_user_id: int | None = None,
+    actor_role: str = "owner",
+    source: str = "telegram",
+) -> dict:
+    return await asyncio.to_thread(
+        move_book_sync,
+        book_id,
+        action,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        source=source,
+    )
 
 
 async def get_book(book_id: int) -> dict:
@@ -432,18 +522,18 @@ async def set_book_stock(book_id: int, stock_quantity: int | None) -> bool:
     return cursor.rowcount > 0
 
 
-async def get_books_count(is_active: bool = True, search_query: str = "") -> int:
-    """Получить количество книг с опциональным поиском по названию.
+def _title_search_pattern(search_query: str) -> str:
+    escaped = search_query.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
-    Поиск регистронезависимый и матчит подстроку в title, чтобы админ
-    мог быстро найти книгу, созданную «условно несколько месяцев назад».
-    """
+
+async def get_books_count(is_active: bool = True, search_query: str = "") -> int:
+    """Получить количество книг с Unicode-регистронезависимым поиском по названию."""
     async with connection() as db:
         if search_query:
-            like = f"%{search_query}%"
             cursor = await db.execute(
-                "SELECT COUNT(*) FROM books WHERE is_active = ? AND COALESCE(is_archived, 0) = 0 AND LOWER(title) LIKE LOWER(?)",
-                (1 if is_active else 0, like),
+                "SELECT COUNT(*) FROM books WHERE is_active = ? AND COALESCE(is_archived, 0) = 0 AND unicode_casefold(title) LIKE ? ESCAPE '\\'",
+                (1 if is_active else 0, _title_search_pattern(search_query)),
             )
         else:
             cursor = await db.execute(
@@ -475,24 +565,24 @@ async def get_all_books_paginated(
 
     sort_by: ключ из _BOOKS_SORT_ORDERS; неизвестные значения трактуются
     как «default», чтобы случайный callback не сломал SQL.
-    search_query: подстрока для LOWER(title) LIKE LOWER('%…%').
+    search_query: Unicode-регистронезависимая буквальная подстрока title.
     """
     order_clause = _BOOKS_SORT_ORDERS.get(sort_by, _BOOKS_SORT_ORDERS["default"])
 
     async with connection() as db:
         db.row_factory = aiosqlite.Row
         if search_query:
-            like = f"%{search_query}%"
             cursor = await db.execute(
                 f"""SELECT b.id, b.title, b.price, b.category, b.emoji, b.description, b.images,
                            b.category_id, b.sort_order, b.created_at, b.stock_quantity,
                            c.emoji as category_emoji
                     FROM books b
                     LEFT JOIN categories c ON b.category_id = c.id
-                    WHERE b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0 AND LOWER(b.title) LIKE LOWER(?)
+                    WHERE b.is_active = 1 AND COALESCE(b.is_archived, 0) = 0
+                      AND unicode_casefold(b.title) LIKE ? ESCAPE '\\'
                     ORDER BY {order_clause}
                     LIMIT ? OFFSET ?""",
-                (like, limit, offset),
+                (_title_search_pattern(search_query), limit, offset),
             )
         else:
             cursor = await db.execute(

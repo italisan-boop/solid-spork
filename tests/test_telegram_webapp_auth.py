@@ -132,6 +132,78 @@ class TelegramProtectedRoutesTests(unittest.TestCase):
         self.assertEqual(200, listed.status_code)
         self.assertEqual("vk_september", listed.get_json()["campaigns"][0]["code"])
 
+    def test_catalog_order_endpoint_requires_owner_and_persists_order(self):
+        self.assertEqual(401, self.client.post("/api/admin/catalog/order", json={"book_id": 1, "action": "top"}).status_code)
+        self.assertEqual(
+            403,
+            self.client.post(
+                "/api/admin/catalog/order",
+                headers=self._headers(999),
+                json={"book_id": 1, "action": "top"},
+            ).status_code,
+        )
+        self.assertEqual(
+            400,
+            self.client.post(
+                "/api/admin/catalog/order",
+                headers=self._headers(1, "Admin"),
+                json={"book_id": True, "action": "top"},
+            ).status_code,
+        )
+        self.assertEqual(
+            400,
+            self.client.post(
+                "/api/admin/catalog/order",
+                headers=self._headers(1, "Admin"),
+                json={"book_id": 1, "action": "sideways"},
+            ).status_code,
+        )
+        self.assertEqual(
+            404,
+            self.client.post(
+                "/api/admin/catalog/order",
+                headers=self._headers(1, "Admin"),
+                json={"book_id": 999999, "action": "top"},
+            ).status_code,
+        )
+
+        moved = self.client.post(
+            "/api/admin/catalog/order",
+            headers=self._headers(1, "Admin"),
+            json={"book_id": 2, "action": "top"},
+        )
+        self.assertEqual(200, moved.status_code)
+        self.assertTrue(moved.get_json()["moved"])
+        self.assertEqual(2, moved.get_json()["order"][0])
+        self.assertEqual("private, no-store", moved.headers["Cache-Control"])
+        self.assertEqual(2, server.get_books_sync()[0]["id"])
+
+        repeated = self.client.post(
+            "/api/admin/catalog/order",
+            headers=self._headers(1, "Admin"),
+            json={"book_id": 2, "action": "top"},
+        )
+        self.assertEqual(200, repeated.status_code)
+        self.assertFalse(repeated.get_json()["moved"])
+        connection = schema.connect(self.database_path)
+        try:
+            events = connection.execute(
+                "SELECT action, entity_id, details_json FROM audit_events ORDER BY id"
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual(1, len(events))
+        self.assertEqual(("catalog.position.updated", "2"), events[0][:2])
+        self.assertIn('"reason_code":"top"', events[0][2])
+
+    def test_mini_app_catalog_order_controls_are_capability_gated(self):
+        source = Path(server.app.static_folder, "Index.html").read_text(encoding="utf-8")
+        self.assertIn("hasAdminCapability('catalog.manage')", source)
+        self.assertIn("/api/admin/catalog/order", source)
+        self.assertIn("telegramAuthHeaders({ 'Content-Type': 'application/json' })", source)
+        self.assertIn("body: JSON.stringify({ book_id: book.id, action })", source)
+        self.assertIn('id="catalogOrderControls"', source)
+
     def test_order_uses_signed_identity_not_forged_body_values(self):
         response = self.client.post(
             "/order",

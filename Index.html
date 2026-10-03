@@ -507,6 +507,19 @@
             }
         }
 
+        .catalog-order-controls {
+            margin-top: 18px; padding: 14px; border-radius: 12px;
+            background: var(--surface-alt); border: 1px solid var(--border-sage);
+        }
+        .catalog-order-title { margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; font-weight: 700; }
+        .catalog-order-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .catalog-order-actions button {
+            min-height: 42px; border: 1px solid var(--border-sage); border-radius: 10px;
+            background: var(--card-bg); color: var(--text); font: inherit; font-size: 13px;
+            font-weight: 700; cursor: pointer;
+        }
+        .catalog-order-actions button:disabled { cursor: default; opacity: 0.55; }
+
         .cart-items { max-height: 400px; overflow-y: auto; margin-bottom: 16px; }
         .cart-item {
             display: flex; align-items: center; padding: 12px;
@@ -1104,6 +1117,15 @@
                 <div class="modal-author" id="modalAuthor" hidden></div>
                 <div class="modal-category" id="modalCategory"></div>
                 <div class="modal-description" id="modalDescription"></div>
+                <section class="catalog-order-controls" id="catalogOrderControls" hidden aria-label="Управление порядком книги">
+                    <p class="catalog-order-title">Порядок в каталоге</p>
+                    <div class="catalog-order-actions">
+                        <button type="button" data-catalog-order="top" onclick="moveCatalogBook('top')">⇈ В начало</button>
+                        <button type="button" data-catalog-order="up" onclick="moveCatalogBook('up')">↑ Выше</button>
+                        <button type="button" data-catalog-order="down" onclick="moveCatalogBook('down')">↓ Ниже</button>
+                        <button type="button" data-catalog-order="bottom" onclick="moveCatalogBook('bottom')">⇊ В конец</button>
+                    </div>
+                </section>
                 <div class="modal-price-row">
                     <div class="modal-price" id="modalPrice"></div>
                     <button type="button" class="modal-add-btn" id="modalAddBtn" aria-pressed="false">Добавить в корзину</button>
@@ -2256,6 +2278,44 @@
             renderBooks(filtered);
         }
 
+        function renderCatalogOrderControls(book) {
+            const controls = document.getElementById('catalogOrderControls');
+            controls.hidden = !book || !hasAdminCapability('catalog.manage');
+            if (!controls.hidden) {
+                controls.querySelectorAll('button').forEach(button => { button.disabled = false; });
+            }
+        }
+
+        async function moveCatalogBook(action) {
+            const book = currentModalBook;
+            if (!book || !hasAdminCapability('catalog.manage')) return;
+            const controls = document.getElementById('catalogOrderControls');
+            const buttons = [...controls.querySelectorAll('button')];
+            buttons.forEach(button => { button.disabled = true; });
+            try {
+                const response = await fetch('/api/admin/catalog/order', {
+                    method: 'POST',
+                    headers: telegramAuthHeaders({ 'Content-Type': 'application/json' }),
+                    cache: 'no-store',
+                    body: JSON.stringify({ book_id: book.id, action }),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    tg.showAlert(result.error || 'Не удалось изменить порядок книги.');
+                    return;
+                }
+                await loadBooks();
+                openBookModal(book.id);
+                tg.HapticFeedback.notificationOccurred('success');
+                if (!result.moved) tg.showAlert('Книга уже находится на этой позиции.');
+            } catch (error) {
+                console.error('Не удалось изменить порядок книги:', error);
+                tg.showAlert('Не удалось изменить порядок книги.');
+            } finally {
+                if (currentModalBook?.id === book.id) renderCatalogOrderControls(currentModalBook);
+            }
+        }
+
         function openBookModal(bookId) {
             const book = books.find(b => b.id === bookId);
             if (!book) {
@@ -2276,6 +2336,7 @@
 
             const descEl = document.getElementById('modalDescription');
             descEl.textContent = (book.description && book.description.trim() !== '') ? book.description : 'Описание пока не добавлено.';
+            renderCatalogOrderControls(book);
 
             const isInCart = cart.some(c => c.id === book.id);
             const addBtn = document.getElementById('modalAddBtn');

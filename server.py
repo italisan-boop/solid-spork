@@ -52,6 +52,7 @@ from db.audit import (
     list_audit_events_export_sync,
     list_audit_events_sync,
 )
+from db.books import move_book_sync
 from db.book_imports import (
     BookImportError,
     build_book_import_template_xlsx,
@@ -1597,6 +1598,34 @@ def api_admin_session():
         "user_id": g.telegram_user.id,
         "role": role,
         "capabilities": capabilities_for_role(role),
+    })
+
+
+@app.route('/api/admin/catalog/order', methods=['POST'])
+@require_telegram_permission("catalog.manage")
+def api_admin_catalog_order():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or set(payload) != {"book_id", "action"}:
+        return jsonify({"error": "book_id and action are required"}), 400
+    book_id = payload["book_id"]
+    action = payload["action"]
+    if isinstance(book_id, bool) or not isinstance(book_id, int) or book_id <= 0:
+        return jsonify({"error": "book_id must be a positive integer"}), 400
+    if not isinstance(action, str) or action not in {"top", "up", "down", "bottom"}:
+        return jsonify({"error": "Unsupported catalog order action"}), 400
+    result = move_book_sync(
+        book_id,
+        action,
+        actor_user_id=g.telegram_user.id,
+        actor_role=g.staff_role,
+    )
+    if not result["found"]:
+        return jsonify({"error": "book not found"}), 404
+    return jsonify({
+        "moved": result["moved"],
+        "position": result["position"],
+        "total": len(result["book_ids"]),
+        "order": result["book_ids"],
     })
 
 
