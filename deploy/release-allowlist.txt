@@ -33,6 +33,12 @@ controlplane/sales_assets/sales-buyer-cart.webp
 controlplane/sales_assets/sales-buyer-orders.webp
 controlplane/sales_assets/sales-catalog-import.webp
 controlplane/sales_assets/sales-catalog-management.webp
+controlplane/sales_assets/sales-miniapp-branding.webp
+controlplane/sales_assets/sales-miniapp-checkout-settings.webp
+controlplane/sales_assets/sales-miniapp-database-backups.webp
+controlplane/sales_assets/sales-miniapp-message-templates.webp
+controlplane/sales_assets/sales-miniapp-promo-codes.webp
+controlplane/sales_assets/sales-miniapp-staff-roles.webp
 controlplane/sales_assets/sales-operations-journal.webp
 controlplane/sales_assets/sales-operations-overview.webp
 controlplane/sales_assets/sales-referral-analytics.webp

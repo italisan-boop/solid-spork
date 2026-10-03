@@ -72,6 +72,12 @@ class SalesLandingTests(unittest.TestCase):
                 "sales-buyer-orders.webp",
                 "sales-catalog-import.webp",
                 "sales-catalog-management.webp",
+                "sales-miniapp-branding.webp",
+                "sales-miniapp-checkout-settings.webp",
+                "sales-miniapp-database-backups.webp",
+                "sales-miniapp-message-templates.webp",
+                "sales-miniapp-promo-codes.webp",
+                "sales-miniapp-staff-roles.webp",
                 "sales-operations-journal.webp",
                 "sales-operations-overview.webp",
                 "sales-referral-analytics.webp",
@@ -472,7 +478,7 @@ class SalesLandingTests(unittest.TestCase):
             self.assertIn(marker, source)
         self.assertNotIn("scrollToOverview", source)
 
-    def test_overview_reveals_animate_on_intersection_while_demo_reveals_immediately(self):
+    def test_overview_reveals_replay_smoothly_in_both_directions(self):
         response = self.client.get("/sales")
         try:
             source = response.get_data(as_text=True)
@@ -480,10 +486,6 @@ class SalesLandingTests(unittest.TestCase):
             response.close()
         self.assertIn(
             "if (key === 'demo') selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));",
-            source,
-        )
-        self.assertNotIn(
-            "        selected.panel.querySelectorAll('[data-reveal]').forEach(element => element.classList.add('is-visible'));",
             source,
         )
         for marker in (
@@ -495,36 +497,37 @@ class SalesLandingTests(unittest.TestCase):
             '<section id="pricing" class="section" aria-labelledby="pricing-heading"><div class="page" data-reveal>',
             '<section id="launch" class="section" aria-labelledby="launch-heading"><div class="page" data-reveal>',
             "window.__salesInitialScroll",
-            "if (location.hash) return;",
             "history.scrollRestoration = 'manual'",
-            "const prepareInitialScroll = () =>",
             "const settleInitialScroll = (initial, pageShown = document.readyState === 'complete') =>",
-            "window.scrollTo({ top: 0, left: 0, behavior: 'instant' })",
-            "const releaseAfterPageShow = () => window.requestAnimationFrame(stop);",
             "if (event.persisted) settleInitialScroll(prepareInitialScroll(), true);",
-            "if (location.hash) activateLandingTabForHash();",
             "let armOverviewReveals = () => {};",
             "if (key === 'overview') armOverviewReveals();",
-            ".motion-ready #overview-panel [data-reveal].reveal-pending",
-            ".motion-ready #overview-panel [data-reveal].reveal-pending.is-visible",
-            "opacity: 0",
-            "translateY(28px)",
-            "const panel = landingTabs.overview.panel;",
-            "const sections = [...panel.querySelectorAll('[data-reveal]')];",
-            "window.addEventListener('pageshow', setupSectionReveals, { once: true });",
-            "const pending = new Set();",
-            "entry.isIntersecting || entry.boundingClientRect.top < 0",
+            ".motion-ready #overview-panel [data-reveal].reveal-armed",
+            ".reveal-armed.reveal-from-below",
+            ".reveal-armed.reveal-from-above",
+            "opacity .84s cubic-bezier(.16,1,.3,1)",
+            "const offscreenDirection = rect =>",
+            "if (rect.bottom <= 0) return 'above';",
+            "if (rect.top >= window.innerHeight) return 'below';",
+            "const makeVisible = section =>",
+            "const arm = (section, direction) =>",
+            "const syncOverviewReveals = () =>",
+            "sections.forEach(section => observer.observe(section));",
+            "armOverviewReveals = syncOverviewReveals;",
             "threshold: 0, rootMargin: '0px'",
-            "const schedulePendingCheck = () =>",
-            "window.addEventListener('scroll', schedulePendingCheck, { passive: true });",
-            "section.classList.add('reveal-pending');",
-            "observer.unobserve(section);",
             "prefers-reduced-motion: reduce",
             "!('IntersectionObserver' in window)",
         ):
             self.assertIn(marker, source)
+        for removed in (
+            "reveal-pending",
+            "const pending = new Set();",
+            "observer.unobserve(section);",
+            "observer.disconnect();",
+            "entry.boundingClientRect.top < 0",
+        ):
+            self.assertNotIn(removed, source)
         self.assertNotIn("@keyframes overview-reveal", source)
-        self.assertNotIn("opacity: .12", source)
         self.assertNotIn(".motion-ready [data-reveal] { opacity: 0", source)
         self.assertNotIn("navigation?.type !== 'navigate'", source)
 
@@ -571,6 +574,75 @@ class SalesLandingTests(unittest.TestCase):
         group_positions = [source.index(group) for group in gallery_groups]
         self.assertEqual(group_positions, sorted(group_positions))
         self.assertEqual(len(SALES_ASSET_FILENAMES), source.count('loading="lazy"'))
+
+    def test_gallery_lightbox_stays_on_page_and_covers_every_gallery_image(self):
+        response = self.client.get("/sales")
+        try:
+            source = response.get_data(as_text=True)
+        finally:
+            response.close()
+        gallery_start = source.index('id="miniapp-screenshots"')
+        gallery_end = source.index('id="pricing"', gallery_start)
+        gallery = source[gallery_start:gallery_end]
+        self.assertEqual(1, source.count('<dialog id="image-lightbox"'))
+        self.assertEqual(1, source.count('id="image-lightbox-image"'))
+        self.assertNotIn('id="image-lightbox-image" class="image-lightbox-image" src=', source)
+        self.assertEqual(len(SALES_ASSET_FILENAMES) - 4, gallery.count('data-image-lightbox-trigger'))
+        self.assertEqual(len(SALES_ASSET_FILENAMES) - 4, gallery.count('aria-haspopup="dialog"'))
+        self.assertNotIn('<a ', gallery)
+        for marker in (
+            'const imageLightbox = byId(\'image-lightbox\');',
+            'imageLightbox.showModal();',
+            "imageLightboxClose.addEventListener('click', closeImageLightbox);",
+            "imageLightbox.addEventListener('close', () => {",
+            "trigger.focus({ preventScroll: true });",
+            "if (event.target === imageLightbox) closeImageLightbox();",
+            "imageLightboxImage.removeAttribute('src');",
+            '.screenshot-image-trigger {',
+            'cursor: zoom-in',
+        ):
+            self.assertIn(marker, source)
+
+    def test_mini_app_gallery_copy_states_current_boundaries(self):
+        response = self.client.get("/sales")
+        try:
+            source = response.get_data(as_text=True)
+        finally:
+            response.close()
+        for marker in (
+            'sales-miniapp-staff-roles.webp',
+            'sales-miniapp-promo-codes.webp',
+            'sales-miniapp-checkout-settings.webp',
+            'sales-miniapp-message-templates.webp',
+            'sales-miniapp-branding.webp',
+            'sales-miniapp-database-backups.webp',
+            'Администратор магазина — отдельная роль, не владелец; назначать её может только владелец.',
+            'секреты платёжных сервисов на этом экране не показываются',
+            'обязательные подстановки',
+            'Telegram HTML-разметку',
+            'Только владелец создаёт и скачивает проверенные копии базы',
+            'обложки, страницы книг и другие медиа не входят',
+            'автоматически базу не восстанавливает',
+        ):
+            self.assertIn(marker, source)
+
+    def test_scenario_cards_share_tariff_card_motion_and_confirm_selection(self):
+        response = self.client.get("/sales")
+        try:
+            source = response.get_data(as_text=True)
+        finally:
+            response.close()
+        for marker in (
+            '.scenario-card, .price-card {',
+            '.scenario-card:hover, .scenario-card:focus-within, .price-card:hover, .price-card:focus-within',
+            '.scenario-card.is-selected.is-choice-updated',
+            "card.classList.add('is-choice-updated');",
+            'let scenarioNavigationTimer = 0;',
+            'window.clearTimeout(scenarioNavigationTimer);',
+            'scenarioNavigationTimer = window.setTimeout',
+            'if (!animateScenarioChoice()) {',
+        ):
+            self.assertIn(marker, source)
 
     def test_demo_uses_an_accessible_panel_and_advances_issuance_to_receipt(self):
         response = self.client.get("/sales")

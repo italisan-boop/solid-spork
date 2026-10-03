@@ -96,9 +96,10 @@
     .section { padding: 86px 0; border-top: 1px solid rgba(255,255,255,.09); }
     .section-heading { max-width: 760px; margin-bottom: 36px; }
     @media (prefers-reduced-motion: no-preference) {
-      .motion-ready #overview-panel [data-reveal].reveal-pending { opacity: 0; transform: translateY(28px); }
-      .motion-ready #overview-panel [data-reveal].reveal-pending.is-visible { opacity: 1; transform: translateY(0); transition: opacity .68s cubic-bezier(.2,.8,.2,1), transform .68s cubic-bezier(.2,.8,.2,1); }
-      .scenario-card { transition: border-color .22s ease, background .22s ease, box-shadow .22s ease, transform .22s ease; }
+      .motion-ready #overview-panel [data-reveal].reveal-armed { opacity: 0; }
+      .motion-ready #overview-panel [data-reveal].reveal-armed.reveal-from-below { transform: translateY(34px); }
+      .motion-ready #overview-panel [data-reveal].reveal-armed.reveal-from-above { transform: translateY(-34px); }
+      .motion-ready #overview-panel [data-reveal].is-visible { opacity: 1; transform: translateY(0); transition: opacity .84s cubic-bezier(.16,1,.3,1), transform .84s cubic-bezier(.16,1,.3,1); }
       .scenario-card.is-selected { transform: translateY(-3px); }
       .scenario-card.is-selected.is-choice-updated { animation: scenario-choice .56s cubic-bezier(.2,.8,.2,1); }
       .scenario-card.is-selected[data-scenario-motion="goods"] { animation: scenario-goods .24s ease-out; }
@@ -282,6 +283,20 @@
     .demo-evidence img, .screenshot-figure img { display: block; width: 100%; height: auto; background: #24242c; }
     .demo-evidence img { max-height: 430px; object-fit: contain; }
     .demo-evidence figcaption, .screenshot-figure figcaption { padding: 11px 13px; color: var(--muted); font-size: 13px; }
+    .screenshot-image-trigger { display: block; width: 100%; padding: 0; border: 0; color: inherit; background: transparent; cursor: zoom-in; }
+    .screenshot-image-trigger:focus-visible { outline: 3px solid #ff8ec2; outline-offset: -3px; }
+    .screenshot-image-trigger img { transition: transform .3s cubic-bezier(.2,.8,.2,1), filter .3s ease; }
+    .screenshot-image-trigger:hover img, .screenshot-image-trigger:focus-visible img { filter: brightness(1.08); transform: scale(1.018); }
+    .image-lightbox { width: min(96vw, 1120px); max-width: none; max-height: 94vh; padding: 0; overflow: hidden; border: 1px solid #75405c; border-radius: 22px; color: var(--ink); background: #15151a; box-shadow: 0 30px 92px rgba(0,0,0,.62); }
+    .image-lightbox::backdrop { background: rgba(5,4,8,.82); backdrop-filter: blur(5px); }
+    .image-lightbox-content { display: grid; max-height: 94vh; grid-template-rows: auto minmax(0, 1fr) auto; }
+    .image-lightbox-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .image-lightbox-head h2 { margin: 0; font-size: 16px; }
+    .image-lightbox-close { min-width: 42px; min-height: 42px; padding: 0; border: 1px solid #75405c; border-radius: 12px; color: #ffd3e4; background: #351024; font: inherit; font-size: 24px; line-height: 1; cursor: pointer; }
+    .image-lightbox-close:hover { border-color: #ff8ec2; background: #4b1532; }
+    .image-lightbox-close:focus-visible { outline: 3px solid #ff8ec2; outline-offset: 2px; }
+    .image-lightbox-image { display: block; width: 100%; max-height: min(72vh, 880px); background: #0d0d11; object-fit: contain; }
+    .image-lightbox-caption { margin: 0; padding: 13px 16px 16px; color: var(--muted); font-size: 14px; }
     .demo-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
     .demo-evidence-grid .demo-evidence { margin: 0; }
     .screenshots-heading { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
@@ -321,10 +336,12 @@
     .price-toggle button { min-height: 39px; padding: 0 13px; border: 0; background: transparent; color: var(--muted); font-size: 14px; font-weight: 750; }
     .price-toggle button.active { color: var(--ink); background: #3b1428; }
     .pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
-    .price-card { position: relative; isolation: isolate; display: flex; flex-direction: column; min-height: 452px; padding: 25px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, #17171d, #111116); transition: transform .28s cubic-bezier(.2,.8,.2,1), border-color .28s ease, box-shadow .28s ease; }
-    .price-card::before { position: absolute; z-index: -1; inset: -35%; opacity: 0; background: radial-gradient(circle at 50% 0, rgba(255, 117, 180, .28), transparent 52%); content: ""; transform: translateY(18%); transition: opacity .28s ease, transform .4s cubic-bezier(.2,.8,.2,1); }
-    .price-card:hover, .price-card:focus-within { border-color: #ff8ec2; box-shadow: 0 26px 58px rgba(224,0,118,.26), 0 0 0 1px rgba(255,142,194,.18); transform: translateY(-9px); }
-    .price-card:hover::before, .price-card:focus-within::before { opacity: 1; transform: translateY(0); }
+    .scenario-card, .price-card { position: relative; isolation: isolate; transition: transform .28s cubic-bezier(.2,.8,.2,1), border-color .28s ease, box-shadow .28s ease; }
+    .price-card { display: flex; flex-direction: column; min-height: 452px; padding: 25px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, #17171d, #111116); }
+    .scenario-card::before, .price-card::before { position: absolute; z-index: -1; inset: -35%; opacity: 0; background: radial-gradient(circle at 50% 0, rgba(255, 117, 180, .28), transparent 52%); content: ""; transform: translateY(18%); transition: opacity .28s ease, transform .4s cubic-bezier(.2,.8,.2,1); }
+    .scenario-card:hover, .scenario-card:focus-within, .price-card:hover, .price-card:focus-within { border-color: #ff8ec2; box-shadow: 0 26px 58px rgba(224,0,118,.26), 0 0 0 1px rgba(255,142,194,.18); transform: translateY(-9px); }
+    .scenario-card:hover::before, .scenario-card:focus-within::before, .price-card:hover::before, .price-card:focus-within::before { opacity: 1; transform: translateY(0); }
+    .scenario-card.is-selected:hover, .scenario-card.is-selected:focus-within { transform: translateY(-9px); }
     .price-card.recommended { padding-top: 52px; border-color: var(--accent); box-shadow: 0 0 0 1px rgba(224,0,118,.18), 0 18px 48px rgba(224,0,118,.14); }
     .price-card.recommended:hover, .price-card.recommended:focus-within { box-shadow: 0 30px 64px rgba(224,0,118,.36), 0 0 0 1px rgba(255,142,194,.28); }
     .recommended-label { position: absolute; top: 16px; left: 21px; max-width: calc(100% - 42px); padding: 4px 10px; overflow: hidden; border-radius: 999px; color: #240012; background: #ff8abd; font-size: 12px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
@@ -450,8 +467,8 @@
         <article class="feature"><div class="feature-icon">📦</div><h3>Заказы и доставка</h3><p>Выбор доступного способа доставки, данные получателя и понятный путь заказа.</p></article>
         <article class="feature"><div class="feature-icon">📋</div><h3>Сборка и остатки</h3><p>Роли сотрудников, чек-лист сборки, контроль остатков и история действий.</p></article>
         <article class="feature"><div class="feature-icon">📈</div><h3>Рост продаж</h3><p>Промокоды, реферальные ссылки, рассылки и показатели эффективности.</p></article>
-        <article class="feature"><div class="feature-icon">🎨</div><h3>Гибкая витрина</h3><p>Название, палитра, формат товаров и плотность карточек меняются в одном месте.</p></article>
-        <article class="feature"><div class="feature-icon">👥</div><h3>Команда</h3><p>Права владельца, менеджера и кладовщика — без общего доступа ко всему.</p></article>
+        <article class="feature"><div class="feature-icon">🎨</div><h3>Гибкая витрина</h3><p>Название, палитра, способы оплаты, доставка и тексты для покупателя меняются в Mini App.</p></article>
+        <article class="feature"><div class="feature-icon">👥</div><h3>Команда</h3><p>Обычные роли можно сочетать; администратор магазина — отдельная роль, которую назначает только владелец.</p></article>
         <article class="feature"><div class="feature-icon">📥</div><h3>Импорт каталога</h3><p>Загружайте товары, услуги и остатки из XLSX по готовому шаблону с предварительной проверкой.</p></article>
         <article class="feature"><div class="feature-icon">🛟</div><h3>Поддержка</h3><p>Поможем с запуском, обновлениями и дальнейшим развитием решения.</p></article>
       </div>
@@ -498,10 +515,10 @@
 
     <section id="miniapp-screenshots" class="section" aria-labelledby="miniapp-screenshots-heading"><div class="page">
       <div class="screenshots-heading"><div class="section-heading"><p class="eyebrow">ЭКРАНЫ РАБОЧЕГО ПРОСТРАНСТВА</p><h2 id="miniapp-screenshots-heading" tabindex="-1">Mini App для покупателя. Управление — там, где работает команда.</h2><p>Интерактивная DEMO выше объясняет путь одного заказа. Эти экраны показывают, как покупатель видит витрину, а команда — каталог, операции и рост.</p></div><p class="screenshots-note">Все снимки показывают демонстрационное рабочее пространство. Идентификаторы, заказы, значения и операционные данные в новых экранах необратимо обезличены.</p></div>
-      <section id="buyer-screens" class="screenshot-group" data-reveal aria-labelledby="buyer-screens-heading"><h3 id="buyer-screens-heading">Витрина для покупателя</h3><p>Выберите представление каталога под бренд и формат продаж — карточки остаются узнаваемыми на светлой, тёмной и компактной витрине.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/sales-storefront-light.webp" loading="lazy" alt="Обезличенный светлый вариант витрины с карточками товаров"><figcaption><strong>Светлая витрина</strong>Лёгкое представление каталога с поиском, категориями и карточками.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-storefront-dark.webp" loading="lazy" alt="Обезличенный тёмный вариант витрины с карточками товаров"><figcaption><strong>Тёмная витрина</strong>Тот же путь выбора в контрастном оформлении под ваш бренд.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-storefront-compact.webp" loading="lazy" alt="Обезличенный компактный вариант витрины"><figcaption><strong>Компактный вид</strong>Больше позиций в поле зрения без смены логики каталога.</figcaption></figure></div></section>
-      <section id="operations-screens" class="screenshot-group" data-reveal aria-labelledby="operations-screens-heading"><h3 id="operations-screens-heading">Команда и операции</h3><p>Рабочие экраны помогают поддерживать доступы, каталог и ежедневные процессы без общего доступа ко всем данным.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/sales-staff.webp" loading="lazy" alt="Обезличенный демонстрационный экран управления доступом сотрудников"><figcaption><strong>Сотрудники</strong>Добавляйте рабочие роли в отдельном пространстве управления.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-catalog-import.webp" loading="lazy" alt="Обезличенный демонстрационный экран импорта каталога CSV и XLSX"><figcaption><strong>Импорт каталога</strong>Проверяйте файл по шаблону до обновления демонстрационного каталога.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-operations-journal.webp" loading="lazy" alt="Обезличенный демонстрационный журнал складских операций"><figcaption><strong>Журнал операций</strong>Команда видит историю движения и действий в рабочем контуре.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-operations-overview.webp" loading="lazy" alt="Обезличенный демонстрационный экран операционной сводки"><figcaption><strong>Операционная сводка</strong>Периоды и отчёты собраны отдельно от пути покупателя.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-admin-dashboard.webp" loading="lazy" alt="Обезличенный демонстрационный экран панели администратора в Telegram"><figcaption><strong>Управление в Telegram</strong>Основные разделы команды остаются доступны там, где она работает.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-categories.webp" loading="lazy" alt="Экран Telegram-управления категориями каталога с кнопками редактирования"><figcaption><strong>Категории</strong>Структура каталога остаётся понятной команде: категории можно поддерживать и обновлять из рабочего пространства.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-catalog-management.webp" loading="lazy" alt="Обезличенный демонстрационный экран управления карточками каталога"><figcaption><strong>Управление каталогом</strong>Карточки и остатки поддерживаются в рабочем пространстве, а публичная витрина получает согласованный каталог.</figcaption></figure></div></section>
-      <section id="growth-screens" class="screenshot-group" data-reveal aria-labelledby="growth-screens-heading"><h3 id="growth-screens-heading">Рост и прозрачность</h3><p>Сводки помогают смотреть на привлечение и продажи, не раскрывая посетителям персональные или коммерческие данные.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/sales-referral-analytics.webp" loading="lazy" alt="Обезличенный демонстрационный экран реферальной программы и кампании"><figcaption><strong>Реферальная программа</strong>Кампании и источник привлечения собраны в понятной сводке.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/sales-sales-analytics.webp" loading="lazy" alt="Обезличенный демонстрационный экран аналитики продаж"><figcaption><strong>Аналитика продаж</strong>Предложения и каналы сравниваются в рабочем отчёте.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-analytics.webp" loading="lazy" alt="Экран Telegram со статистикой магазина и суммами по статусам заказов"><figcaption><strong>Картина продаж</strong>Владелец видит заказы, выручку и статусы без ручного свода.</figcaption></figure></div></section>
-      <section id="launch-screens" class="screenshot-group" data-reveal aria-labelledby="launch-screens-heading"><h3 id="launch-screens-heading">Настройка и коммуникации</h3><p>Дополнительные возможности помогают собрать согласованные способы оплаты, выдачи, предложения и тексты до запуска.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><img src="/sales/assets/bot-broadcast.webp" loading="lazy" alt="Экран создания рассылки в Telegram с подсказкой по HTML-разметке"><figcaption><strong>Рассылки</strong>Готовьте сообщение в привычном интерфейсе Telegram и сохраняйте контроль над текстом.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-payment-settings.webp" loading="lazy" alt="Экран настроек способов оплаты с реквизитами, Stars и доставкой"><figcaption><strong>Способы оплаты</strong>Показывайте покупателю только согласованные и включённые варианты.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-delivery-settings.webp" loading="lazy" alt="Экран настроек доставки с самовывозом, почтой и СДЭК"><figcaption><strong>Доставка</strong>Соберите правила выдачи, самовывоза и доставки в одном месте.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-promo-codes.webp" loading="lazy" alt="Экран управления промокодом со скидкой, сроком и количеством использований"><figcaption><strong>Промокоды</strong>Запускайте понятные предложения и отслеживайте условия их применения.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-customer-texts.webp" loading="lazy" alt="Экран редактирования текстов для покупателей в Telegram"><figcaption><strong>Тексты для покупателя</strong>Поддерживайте единый тон сообщений на каждом шаге заказа.</figcaption></figure><figure class="screenshot-figure"><img src="/sales/assets/bot-branding.webp" loading="lazy" alt="Экран редактирования приветственного сообщения и текста о магазине"><figcaption><strong>Ваш бренд</strong>Приветствие и описание магазина остаются узнаваемыми для вашей аудитории.</figcaption></figure></div></section>
+      <section id="buyer-screens" class="screenshot-group" data-reveal aria-labelledby="buyer-screens-heading"><h3 id="buyer-screens-heading">Витрина для покупателя</h3><p>Выберите представление каталога под бренд и формат продаж — карточки остаются узнаваемыми на светлой, тёмной и компактной витрине.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: светлая витрина"><img src="/sales/assets/sales-storefront-light.webp" loading="lazy" alt="Обезличенный светлый вариант витрины с карточками товаров"></button><figcaption><strong>Светлая витрина</strong>Лёгкое представление каталога с поиском, категориями и карточками.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: тёмная витрина"><img src="/sales/assets/sales-storefront-dark.webp" loading="lazy" alt="Обезличенный тёмный вариант витрины с карточками товаров"></button><figcaption><strong>Тёмная витрина</strong>Тот же путь выбора в контрастном оформлении под ваш бренд.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: компактный вид"><img src="/sales/assets/sales-storefront-compact.webp" loading="lazy" alt="Обезличенный компактный вариант витрины"></button><figcaption><strong>Компактный вид</strong>Больше позиций в поле зрения без смены логики каталога.</figcaption></figure></div></section>
+      <section id="operations-screens" class="screenshot-group" data-reveal aria-labelledby="operations-screens-heading"><h3 id="operations-screens-heading">Команда и операции в Mini App</h3><p>Рабочие экраны помогают поддерживать доступы, каталог и ежедневные процессы без общего доступа ко всем данным.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: роли сотрудников"><img src="/sales/assets/sales-miniapp-staff-roles.webp" loading="lazy" alt="Обезличенный Mini App экран с несколькими ролями сотрудника и отдельной ролью администратора магазина"></button><figcaption><strong>Роли без лишнего доступа</strong>Менеджер и кладовщик могут сочетаться. Администратор магазина — отдельная роль, не владелец; назначать её может только владелец.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: сотрудники"><img src="/sales/assets/sales-staff.webp" loading="lazy" alt="Обезличенный демонстрационный экран управления доступом сотрудников"></button><figcaption><strong>Сотрудники</strong>Добавляйте рабочие роли в отдельном пространстве управления.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: импорт каталога"><img src="/sales/assets/sales-catalog-import.webp" loading="lazy" alt="Обезличенный демонстрационный экран импорта каталога CSV и XLSX"></button><figcaption><strong>Импорт каталога</strong>Проверяйте файл по шаблону до обновления демонстрационного каталога.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: журнал операций"><img src="/sales/assets/sales-operations-journal.webp" loading="lazy" alt="Обезличенный демонстрационный журнал складских операций"></button><figcaption><strong>Журнал операций</strong>Команда видит историю движения и действий в рабочем контуре.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: операционная сводка"><img src="/sales/assets/sales-operations-overview.webp" loading="lazy" alt="Обезличенный демонстрационный экран операционной сводки"></button><figcaption><strong>Операционная сводка</strong>Периоды и отчёты собраны отдельно от пути покупателя.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: управление в Telegram"><img src="/sales/assets/sales-admin-dashboard.webp" loading="lazy" alt="Обезличенный демонстрационный экран панели администратора в Telegram"></button><figcaption><strong>Управление в Telegram</strong>Основные разделы команды остаются доступны там, где она работает.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: категории"><img src="/sales/assets/bot-categories.webp" loading="lazy" alt="Экран Telegram-управления категориями каталога с кнопками редактирования"></button><figcaption><strong>Категории</strong>Структура каталога остаётся понятной команде: категории можно поддерживать и обновлять из рабочего пространства.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: управление каталогом"><img src="/sales/assets/sales-catalog-management.webp" loading="lazy" alt="Обезличенный демонстрационный экран управления карточками каталога"></button><figcaption><strong>Управление каталогом</strong>Карточки и остатки поддерживаются в рабочем пространстве, а публичная витрина получает согласованный каталог.</figcaption></figure></div></section>
+      <section id="growth-screens" class="screenshot-group" data-reveal aria-labelledby="growth-screens-heading"><h3 id="growth-screens-heading">Рост и прозрачность</h3><p>Сводки помогают смотреть на привлечение и продажи, не раскрывая посетителям персональные или коммерческие данные.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: реферальная программа"><img src="/sales/assets/sales-referral-analytics.webp" loading="lazy" alt="Обезличенный демонстрационный экран реферальной программы и кампании"></button><figcaption><strong>Реферальная программа</strong>Кампании и источник привлечения собраны в понятной сводке.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: аналитика продаж"><img src="/sales/assets/sales-sales-analytics.webp" loading="lazy" alt="Обезличенный демонстрационный экран аналитики продаж"></button><figcaption><strong>Аналитика продаж</strong>Предложения и каналы сравниваются в рабочем отчёте.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: картина продаж"><img src="/sales/assets/bot-analytics.webp" loading="lazy" alt="Экран Telegram со статистикой магазина и суммами по статусам заказов"></button><figcaption><strong>Картина продаж</strong>Владелец видит заказы, выручку и статусы без ручного свода.</figcaption></figure></div></section>
+      <section id="launch-screens" class="screenshot-group" data-reveal aria-labelledby="launch-screens-heading"><h3 id="launch-screens-heading">Настройка и коммуникации в Mini App</h3><p>В Mini App собраны согласованные способы оплаты и доставки, предложения, тексты, бренд и защищённые операции владельца.</p><div class="screenshot-gallery"><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: промокоды"><img src="/sales/assets/sales-miniapp-promo-codes.webp" loading="lazy" alt="Обезличенный Mini App экран управления промокодами"></button><figcaption><strong>Промокоды</strong>Создавайте, корректируйте и отключайте предложения с понятными условиями применения.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: оплата и доставка"><img src="/sales/assets/sales-miniapp-checkout-settings.webp" loading="lazy" alt="Обезличенный Mini App экран настройки оплаты и доставки"></button><figcaption><strong>Оплата и доставка</strong>Покупатель видит только согласованные включённые способы; секреты платёжных сервисов на этом экране не показываются.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: тексты для покупателя"><img src="/sales/assets/sales-miniapp-message-templates.webp" loading="lazy" alt="Обезличенный Mini App экран шаблонов сообщений покупателю"></button><figcaption><strong>Тексты для покупателя</strong>Шаблоны сохраняют обязательные подстановки и поддерживают только допустимую Telegram HTML-разметку.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: бренд витрины"><img src="/sales/assets/sales-miniapp-branding.webp" loading="lazy" alt="Обезличенный Mini App экран настройки бренда витрины"></button><figcaption><strong>Ваш бренд</strong>Название, палитра и контакт поддержки применяются к витрине.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: резервные копии"><img src="/sales/assets/sales-miniapp-database-backups.webp" loading="lazy" alt="Обезличенный Mini App экран резервных копий базы данных владельца"></button><figcaption><strong>Резервные копии владельца</strong>Только владелец создаёт и скачивает проверенные копии базы: обложки, страницы книг и другие медиа не входят. Загруженная копия проверяется и временно помещается в staging — автоматически базу не восстанавливает.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: рассылки"><img src="/sales/assets/bot-broadcast.webp" loading="lazy" alt="Экран создания рассылки в Telegram с подсказкой по HTML-разметке"></button><figcaption><strong>Рассылки</strong>Готовьте сообщение в привычном интерфейсе Telegram и сохраняйте контроль над текстом.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: способы оплаты"><img src="/sales/assets/bot-payment-settings.webp" loading="lazy" alt="Экран настроек способов оплаты с реквизитами, Stars и доставкой"></button><figcaption><strong>Способы оплаты</strong>Показывайте покупателю только согласованные и включённые варианты.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: доставка"><img src="/sales/assets/bot-delivery-settings.webp" loading="lazy" alt="Экран настроек доставки с самовывозом, почтой и СДЭК"></button><figcaption><strong>Доставка</strong>Соберите правила выдачи, самовывоза и доставки в одном месте.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: промокод в Telegram"><img src="/sales/assets/bot-promo-codes.webp" loading="lazy" alt="Экран управления промокодом со скидкой, сроком и количеством использований"></button><figcaption><strong>Промокоды в Telegram</strong>Запускайте понятные предложения и отслеживайте условия их применения.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: тексты в Telegram"><img src="/sales/assets/bot-customer-texts.webp" loading="lazy" alt="Экран редактирования текстов для покупателей в Telegram"></button><figcaption><strong>Тексты в Telegram</strong>Поддерживайте единый тон сообщений на каждом шаге заказа.</figcaption></figure><figure class="screenshot-figure"><button class="screenshot-image-trigger" type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть увеличенный снимок: бренд в Telegram"><img src="/sales/assets/bot-branding.webp" loading="lazy" alt="Экран редактирования приветственного сообщения и текста о магазине"></button><figcaption><strong>Бренд в Telegram</strong>Приветствие и описание магазина остаются узнаваемыми для вашей аудитории.</figcaption></figure></div></section>
     </div></section>
 
     <section id="pricing" class="section" aria-labelledby="pricing-heading"><div class="page" data-reveal>
@@ -523,6 +540,13 @@
     </div>
     <div id="demo-panel" class="landing-panel" role="tabpanel" aria-labelledby="demo-tab" hidden></div>
   </main>
+  <dialog id="image-lightbox" class="image-lightbox" aria-labelledby="image-lightbox-heading" aria-describedby="image-lightbox-caption">
+    <div class="image-lightbox-content">
+      <div class="image-lightbox-head"><h2 id="image-lightbox-heading">Снимок рабочего пространства</h2><button id="image-lightbox-close" class="image-lightbox-close" type="button" aria-label="Закрыть увеличенный снимок">×</button></div>
+      <img id="image-lightbox-image" class="image-lightbox-image" alt="">
+      <p id="image-lightbox-caption" class="image-lightbox-caption"></p>
+    </div>
+  </dialog>
   <footer class="page"><p>#Ваша_платформа · демонстрационная страница универсальной платформы продаж в Telegram</p><p class="legal-notice">Сайт и показанные данные демонстрационные и не являются публичной офертой. Возможности, стоимость, состав запуска и итоговые условия согласуются индивидуально в Telegram.</p></footer>
   <script>
     (() => {
@@ -920,23 +944,37 @@
         const card = document.querySelector(`[data-scenario-card="${state.scenario}"]`);
         const shell = document.querySelector('.demo-shell');
         const handoff = byId('scenario-handoff');
-        [card, shell].filter(Boolean).forEach(element => delete element.dataset.scenarioMotion);
-        if (isReducedMotion()) return;
-        [card, shell].filter(Boolean).forEach(element => {
-          element.dataset.scenarioMotion = state.scenario;
-          window.setTimeout(() => delete element.dataset.scenarioMotion, 300);
-        });
-        if (!handoff) return;
-        handoff.classList.remove('is-choice-updated');
-        void handoff.offsetWidth;
-        handoff.classList.add('is-choice-updated');
-        window.setTimeout(() => handoff.classList.remove('is-choice-updated'), 600);
+        if (card) delete card.dataset.scenarioMotion;
+        if (shell) delete shell.dataset.scenarioMotion;
+        if (isReducedMotion()) return false;
+        if (shell) {
+          shell.dataset.scenarioMotion = state.scenario;
+          window.setTimeout(() => delete shell.dataset.scenarioMotion, 300);
+        }
+        if (card) {
+          card.classList.remove('is-choice-updated');
+          void card.offsetWidth;
+          card.classList.add('is-choice-updated');
+          window.setTimeout(() => card.classList.remove('is-choice-updated'), 600);
+        }
+        if (handoff) {
+          handoff.classList.remove('is-choice-updated');
+          void handoff.offsetWidth;
+          handoff.classList.add('is-choice-updated');
+          window.setTimeout(() => handoff.classList.remove('is-choice-updated'), 600);
+        }
+        return true;
       };
       const animateDemoUpdate = () => { if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; const shell = document.querySelector('.demo-shell'); shell.classList.remove('is-updated'); void shell.offsetWidth; shell.classList.add('is-updated'); window.setTimeout(() => shell.classList.remove('is-updated'), 500); };
+      let scenarioNavigationTimer = 0;
       const selectScenario = scenario => {
         if (state.order) {
           announce('order-result', 'Чтобы выбрать другой формат, сначала сбросьте текущую демонстрацию.');
           return;
+        }
+        if (scenarioNavigationTimer) {
+          window.clearTimeout(scenarioNavigationTimer);
+          scenarioNavigationTimer = 0;
         }
         const name = byId('store-name').value;
         const accent = state.accent;
@@ -953,8 +991,14 @@
         announce('issuance-result', '');
         renderAll();
         animateDemoUpdate();
-        animateScenarioChoice();
-        navigateToDemoTarget('story-buyer', '#product-search');
+        if (!animateScenarioChoice()) {
+          navigateToDemoTarget('story-buyer', '#product-search');
+          return;
+        }
+        scenarioNavigationTimer = window.setTimeout(() => {
+          scenarioNavigationTimer = 0;
+          navigateToDemoTarget('story-buyer', '#product-search');
+        }, 380);
       };
       const resetDemo = () => {
         state = initialState();
@@ -1134,6 +1178,40 @@
       }));
       document.querySelectorAll('[data-price-mode]').forEach(button => button.addEventListener('click', () => { const purchase = button.dataset.priceMode === 'buy'; const prices = purchase ? { start: '89 000 ₽', business: '159 000 ₽', pro: '249 000 ₽' } : { start: '5 900 ₽', business: '11 900 ₽', pro: '19 900 ₽' }; document.querySelectorAll('[data-price]').forEach(element => { element.textContent = prices[element.dataset.price]; }); document.querySelectorAll('[data-unit]').forEach(element => { element.textContent = purchase ? 'единоразово' : 'в месяц'; }); document.querySelectorAll('[data-price-mode]').forEach(control => { const active = control === button; control.classList.toggle('active', active); control.setAttribute('aria-pressed', String(active)); }); byId('terms-title').textContent = purchase ? 'Что включает покупка' : 'Что включает аренда'; byId('terms-copy').textContent = purchase ? 'Развёртывание на инфраструктуре клиента и 3 месяца поддержки. Дальнейшая поддержка — от 5 900 ₽ в месяц.' : 'Управляемый хостинг, обновления, контроль резервного копирования и техническая поддержка.'; }));
       byId('reset-demo').addEventListener('click', resetDemo);
+      const imageLightbox = byId('image-lightbox');
+      const imageLightboxImage = byId('image-lightbox-image');
+      const imageLightboxCaption = byId('image-lightbox-caption');
+      const imageLightboxHeading = byId('image-lightbox-heading');
+      const imageLightboxClose = byId('image-lightbox-close');
+      let imageLightboxTrigger = null;
+      const closeImageLightbox = () => {
+        if (imageLightbox.open) imageLightbox.close();
+      };
+      document.querySelectorAll('#miniapp-screenshots [data-image-lightbox-trigger]').forEach(trigger => trigger.addEventListener('click', () => {
+        const image = trigger.querySelector('img');
+        const figure = trigger.closest('.screenshot-figure');
+        const caption = figure?.querySelector('figcaption');
+        const title = caption?.querySelector('strong')?.textContent || 'Снимок рабочего пространства';
+        if (!image) return;
+        imageLightboxTrigger = trigger;
+        imageLightboxHeading.textContent = title;
+        imageLightboxImage.src = image.currentSrc || image.src;
+        imageLightboxImage.alt = image.alt;
+        imageLightboxCaption.textContent = caption?.textContent.trim() || image.alt;
+        imageLightbox.showModal();
+      }));
+      imageLightboxClose.addEventListener('click', closeImageLightbox);
+      imageLightbox.addEventListener('click', event => {
+        if (event.target === imageLightbox) closeImageLightbox();
+      });
+      imageLightbox.addEventListener('close', () => {
+        imageLightboxImage.removeAttribute('src');
+        imageLightboxImage.alt = '';
+        imageLightboxCaption.textContent = '';
+        const trigger = imageLightboxTrigger;
+        imageLightboxTrigger = null;
+        if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+      });
       const setupSectionReveals = () => {
         const panel = landingTabs.overview.panel;
         const sections = [...panel.querySelectorAll('[data-reveal]')];
@@ -1142,57 +1220,43 @@
           return;
         }
         document.documentElement.classList.add('motion-ready');
-        const pending = new Set();
-        let frame = 0;
-        const observer = new IntersectionObserver(entries => entries.forEach(entry => {
-          if (entry.isIntersecting || entry.boundingClientRect.top < 0) finish(entry.target);
-        }), { threshold: 0, rootMargin: '0px' });
-        const stopPendingChecks = () => {
-          if (pending.size) return;
-          observer.disconnect();
-          window.removeEventListener('scroll', schedulePendingCheck);
-          window.removeEventListener('resize', schedulePendingCheck);
+        const offscreenDirection = rect => {
+          if (rect.bottom <= 0) return 'above';
+          if (rect.top >= window.innerHeight) return 'below';
+          return null;
         };
-        const finish = section => {
+        const makeVisible = section => {
+          section.classList.remove('reveal-armed', 'reveal-from-above', 'reveal-from-below');
           section.classList.add('is-visible');
-          if (!pending.delete(section)) return;
-          observer.unobserve(section);
-          stopPendingChecks();
         };
-        const checkPending = () => {
-          frame = 0;
+        const arm = (section, direction) => {
+          if (!direction) return;
+          section.classList.remove('is-visible', 'reveal-from-above', 'reveal-from-below');
+          section.classList.add('reveal-armed', `reveal-from-${direction}`);
+        };
+        const syncOverviewReveals = () => {
           if (panel.hidden) return;
-          pending.forEach(section => {
-            if (section.getBoundingClientRect().top < window.innerHeight) finish(section);
+          sections.forEach(section => {
+            const rect = section.getBoundingClientRect();
+            if (!rect.width && !rect.height) return;
+            const direction = offscreenDirection(rect);
+            if (direction) arm(section, direction);
+            else makeVisible(section);
           });
         };
-        const schedulePendingCheck = () => {
-          if (!frame) frame = window.requestAnimationFrame(checkPending);
-        };
-        armOverviewReveals = () => {
+        const observer = new IntersectionObserver(entries => {
           if (panel.hidden) return;
-          const toObserve = [];
-          sections.forEach(section => {
-            if (section.classList.contains('is-visible')) return;
-            const rect = section.getBoundingClientRect();
-            if (!rect.width && !rect.height || rect.top < window.innerHeight) {
-              finish(section);
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              makeVisible(entry.target);
               return;
             }
-            toObserve.push(section);
+            arm(entry.target, offscreenDirection(entry.boundingClientRect));
           });
-          toObserve.forEach(section => {
-            section.classList.add('reveal-pending');
-            pending.add(section);
-            observer.observe(section);
-          });
-          if (pending.size) {
-            window.addEventListener('scroll', schedulePendingCheck, { passive: true });
-            window.addEventListener('resize', schedulePendingCheck);
-            schedulePendingCheck();
-          }
-        };
-        armOverviewReveals();
+        }, { threshold: 0, rootMargin: '0px' });
+        sections.forEach(section => observer.observe(section));
+        armOverviewReveals = syncOverviewReveals;
+        syncOverviewReveals();
       };
       window.addEventListener('pageshow', setupSectionReveals, { once: true });
       resetDemo();
