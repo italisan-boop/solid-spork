@@ -116,6 +116,12 @@ class Settings:
             os.getenv("BACKUP_INTERVAL_SECONDS", str(24 * 60 * 60))
         )
         self.BACKUP_LEASE_SECONDS = int(os.getenv("BACKUP_LEASE_SECONDS", "3600"))
+        self.BACKUP_UPLOAD_MAX_BYTES = int(
+            os.getenv("BACKUP_UPLOAD_MAX_BYTES", str(256 * 1024 * 1024))
+        )
+        self.BACKUP_UPLOAD_STAGING_RETENTION_DAYS = int(
+            os.getenv("BACKUP_UPLOAD_STAGING_RETENTION_DAYS", "7")
+        )
         self.OPERATIONAL_ALERT_LEASE_SECONDS = int(
             os.getenv("OPERATIONAL_ALERT_LEASE_SECONDS", "300")
         )

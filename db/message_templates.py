@@ -6,6 +6,7 @@ import aiosqlite
 
 from content_defaults import TEMPLATES, get_template
 from db.connection import connection
+from db.schema import connect
 
 
 _ALLOWED_TAGS = {
@@ -115,6 +116,44 @@ def render_template(key: str, value: str, **values: object) -> str:
     return value.format(**rendered_values)
 
 
+def get_message_templates_sync() -> dict[str, str]:
+    database = connect()
+    try:
+        rows = database.execute("SELECT template_key, template_value FROM message_templates").fetchall()
+        values = {template.key: template.default for template in TEMPLATES}
+        values.update({row[0]: row[1] for row in rows})
+        return values
+    finally:
+        database.close()
+
+
+def set_message_template_sync(key: str, value: str) -> str:
+    validate_template_value(key, value)
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        database.execute(
+            """
+            INSERT INTO message_templates (template_key, template_value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(template_key) DO UPDATE SET
+                template_value = excluded.template_value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, value),
+        )
+        database.commit()
+        return value
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def reset_message_template_sync(key: str) -> str:
+    definition = get_template(key)
+    return set_message_template_sync(key, definition.default)
 
 
 async def get_message_template(key: str) -> str:

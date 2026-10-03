@@ -3375,6 +3375,11 @@
             if (hasAdminCapability('book.import')) tabs.push(['import', '⬆️ Импорт']);
             if (hasAdminCapability('staff.manage')) tabs.push(['staff', '👥 Сотрудники']);
             if (hasAdminCapability('inventory.read') || hasAdminCapability('audit.read')) tabs.push(['journal', '📜 Журнал']);
+            if (hasAdminCapability('payment.configure')) tabs.push(['promos', '🎟️ Промокоды']);
+            if (hasAdminCapability('payment.configure')) tabs.push(['checkout-settings', '⚙️ Оплата и доставка']);
+            if (hasAdminCapability('branding.manage')) tabs.push(['templates', '✍️ Тексты']);
+            if (hasAdminCapability('branding.manage')) tabs.push(['storefront', '🎨 Брендинг']);
+            if (hasAdminCapability('admin.maintenance')) tabs.push(['backups', '🗄️ Резервные копии']);
             return tabs;
         }
 
@@ -3413,6 +3418,11 @@
                 if (operationsSection === 'import') renderImportOperations(content);
                 if (operationsSection === 'staff') await loadStaffOperations(content);
                 if (operationsSection === 'journal') await loadActionJournal(content);
+                if (operationsSection === 'promos') await loadPromoOperations(content);
+                if (operationsSection === 'checkout-settings') await loadCheckoutSettingsOperations(content);
+                if (operationsSection === 'templates') await loadTemplateOperations(content);
+                if (operationsSection === 'storefront') await loadStorefrontOperations(content);
+                if (operationsSection === 'backups') await loadBackupOperations(content);
             } catch (error) {
                 console.error('Ошибка загрузки операций:', error);
                 content.innerHTML = '<div class="admin-empty">Не удалось загрузить данные.</div>';
@@ -3437,6 +3447,19 @@
             const response = await fetch(path, options);
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.error || `Ошибка каталога: ${response.status}`);
+            return result;
+        }
+
+        async function ownerRequest(path, {method = 'GET', json, body} = {}) {
+            const options = { method, headers: telegramAuthHeaders(), cache: 'no-store' };
+            if (json !== undefined) {
+                options.headers = telegramAuthHeaders({ 'Content-Type': 'application/json' });
+                options.body = JSON.stringify(json);
+            }
+            if (body) options.body = body;
+            const response = await fetch(path, options);
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || `Запрос не выполнен: ${response.status}`);
             return result;
         }
 
@@ -4157,6 +4180,191 @@
             adminData = d;
             renderAdminDashboard(d);
             if (button) button.style.display = '';
+        }
+
+        let ownerPromos = [];
+
+        function promoFormValues(form) {
+            const expires = form.elements.expires_at.value;
+            return {
+                code: form.elements.code.value.trim().toUpperCase(),
+                discount_percent: Number(form.elements.discount_percent.value || 0),
+                discount_fixed: Number(form.elements.discount_fixed.value || 0),
+                min_order: Number(form.elements.min_order.value || 0),
+                max_uses: Number(form.elements.max_uses.value || 0),
+                expires_at: expires ? new Date(expires).toISOString() : null,
+            };
+        }
+
+        async function loadPromoOperations(content) {
+            const result = await ownerRequest('/api/admin/promos');
+            ownerPromos = result.promos || [];
+            content.innerHTML = `
+                <div class="operations-row"><div class="operations-row-head"><span>Промокоды</span></div><div class="operations-meta">Промокод можно отключить, но история его применений в заказах сохраняется.</div></div>
+                <form class="operations-form" id="promoForm">
+                    <input name="code" maxlength="48" placeholder="Код, например AUTUMN2026" required>
+                    <div class="operations-action-grid"><input name="discount_percent" type="number" min="0" max="100" value="0" placeholder="Скидка, %"><input name="discount_fixed" type="number" min="0" max="10000000" value="0" placeholder="Скидка, ₽"></div>
+                    <div class="operations-action-grid"><input name="min_order" type="number" min="0" max="10000000" value="0" placeholder="Мин. сумма"><input name="max_uses" type="number" min="0" max="1000000" value="0" placeholder="Лимит (0 = без лимита)"></div>
+                    <input name="expires_at" type="datetime-local"><button class="operations-action" type="submit">Сохранить промокод</button><button class="operations-action" type="button" id="promoCancel" hidden>Отменить редактирование</button><div class="operations-meta" id="promoStatus"></div>
+                </form>
+                <div class="operations-list" id="promoList"></div>`;
+            const form = document.getElementById('promoForm');
+            let editingId = null;
+            const status = document.getElementById('promoStatus');
+            const cancel = document.getElementById('promoCancel');
+            const render = () => {
+                const list = document.getElementById('promoList');
+                list.innerHTML = ownerPromos.map(promo => `<div class="operations-row"><div class="operations-row-head"><span>${escapeHtml(promo.code)}${promo.is_active ? '' : ' · отключён'}</span></div><div class="operations-meta">${promo.discount_percent ? `${promo.discount_percent}%` : `${promo.discount_fixed} ₽`} · минимум ${promo.min_order || 'нет'} ₽ · использовано ${promo.current_uses}${promo.max_uses ? `/${promo.max_uses}` : ''}${promo.expires_at ? ` · до ${escapeHtml(promo.expires_at)}` : ''}</div><div class="operations-action-grid"><button class="operations-action" type="button" data-edit="${promo.id}">Изменить</button>${promo.is_active ? `<button class="operations-action" type="button" data-disable="${promo.id}">Отключить</button>` : ''}</div></div>`).join('') || '<div class="admin-empty">Промокодов пока нет.</div>';
+                list.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => {
+                    const promo = ownerPromos.find(item => item.id === Number(button.dataset.edit));
+                    if (!promo) return;
+                    editingId = promo.id;
+                    form.elements.code.value = promo.code;
+                    form.elements.discount_percent.value = promo.discount_percent;
+                    form.elements.discount_fixed.value = promo.discount_fixed;
+                    form.elements.min_order.value = promo.min_order;
+                    form.elements.max_uses.value = promo.max_uses;
+                    form.elements.expires_at.value = promo.expires_at ? new Date(promo.expires_at).toISOString().slice(0, 16) : '';
+                    cancel.hidden = false;
+                    status.textContent = `Редактируется ${promo.code}.`;
+                }));
+                list.querySelectorAll('[data-disable]').forEach(button => button.addEventListener('click', async () => {
+                    if (!confirm('Отключить промокод?')) return;
+                    try {
+                        await ownerRequest(`/api/admin/promos/${button.dataset.disable}/disable`, {method: 'POST', json: {}});
+                        await loadPromoOperations(content);
+                    } catch (error) { status.textContent = error.message; }
+                }));
+            };
+            form.addEventListener('submit', async event => {
+                event.preventDefault();
+                status.textContent = 'Сохраняем…';
+                try {
+                    const path = editingId ? `/api/admin/promos/${editingId}` : '/api/admin/promos';
+                    await ownerRequest(path, {method: editingId ? 'PUT' : 'POST', json: promoFormValues(form)});
+                    await loadPromoOperations(content);
+                    tg.HapticFeedback.notificationOccurred('success');
+                } catch (error) { status.textContent = error.message; }
+            });
+            cancel.addEventListener('click', () => { editingId = null; form.reset(); form.elements.discount_percent.value = 0; form.elements.discount_fixed.value = 0; form.elements.min_order.value = 0; form.elements.max_uses.value = 0; cancel.hidden = true; status.textContent = ''; });
+            render();
+        }
+
+        async function loadTemplateOperations(content) {
+            const result = await ownerRequest('/api/admin/templates');
+            content.innerHTML = '<div class="operations-row"><div class="operations-row-head"><span>Тексты для покупателей</span></div><div class="operations-meta">Поддерживается только корректная Telegram HTML-разметка. Не меняйте обязательные плейсхолдеры.</div></div><div class="operations-list" id="templateList"></div>';
+            const list = document.getElementById('templateList');
+            (result.templates || []).forEach(template => {
+                const form = document.createElement('form');
+                form.className = 'operations-form operations-row';
+                const title = document.createElement('strong');
+                title.textContent = `${template.group === 'branding' ? 'Брендинг' : 'Поддержка'} · ${template.title}`;
+                const hints = document.createElement('div');
+                hints.className = 'operations-meta';
+                hints.textContent = template.placeholders.length ? `Плейсхолдеры: ${template.placeholders.map(name => `{${name}}`).join(', ')}` : 'Без плейсхолдеров';
+                const textarea = document.createElement('textarea');
+                textarea.rows = 5;
+                textarea.value = template.value;
+                const actions = document.createElement('div');
+                actions.className = 'operations-action-grid';
+                const save = document.createElement('button'); save.type = 'submit'; save.className = 'operations-action'; save.textContent = 'Сохранить';
+                const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'operations-action'; reset.textContent = 'Сбросить';
+                const status = document.createElement('div'); status.className = 'operations-meta';
+                form.append(title, hints, textarea, actions, status); actions.append(save, reset); list.append(form);
+                form.addEventListener('submit', async event => { event.preventDefault(); try { const saved = await ownerRequest(`/api/admin/templates/${encodeURIComponent(template.key)}`, {method: 'PUT', json: {value: textarea.value}}); textarea.value = saved.value; status.textContent = 'Сохранено.'; tg.HapticFeedback.notificationOccurred('success'); } catch (error) { status.textContent = error.message; } });
+                reset.addEventListener('click', async () => { if (!confirm('Восстановить заводской текст?')) return; try { const saved = await ownerRequest(`/api/admin/templates/${encodeURIComponent(template.key)}/reset`, {method: 'POST', json: {}}); textarea.value = saved.value; status.textContent = 'Заводской текст восстановлен.'; } catch (error) { status.textContent = error.message; } });
+            });
+        }
+
+        async function loadCheckoutSettingsOperations(content) {
+            const settings = await ownerRequest('/api/admin/payment-settings');
+            content.innerHTML = `
+                <div class="operations-row"><div class="operations-row-head"><span>Оплата и доставка</span></div><div class="operations-meta">Сохранённые реквизиты не показываются. Оставьте поле замены пустым, чтобы не менять его.</div></div>
+                <form class="operations-form" id="checkoutSettingsForm">
+                    <div class="operations-row"><strong>Ручная оплата (карта / СБП)</strong><label><input id="manualEnabled" type="checkbox"> Включить</label><input id="manualCard" maxlength="80" placeholder="Номер карты для замены"><input id="manualPhone" maxlength="80" placeholder="Телефон СБП для замены"><input id="manualBank" maxlength="120" placeholder="Банк для замены"><input id="manualRecipient" maxlength="160" placeholder="Получатель для замены"><textarea id="manualInstructions" rows="3" maxlength="1000" placeholder="Инструкция покупателю"></textarea><div class="operations-meta" id="manualConfigured"></div></div>
+                    <div class="operations-row"><strong>Telegram Stars</strong><label><input id="starsEnabled" type="checkbox"> Включить</label><input id="starsRate" type="number" min="1" max="100000" required placeholder="Рублей за Star"></div>
+                    <div class="operations-row"><strong>ЮKassa</strong><label><input id="yookassaEnabled" type="checkbox"> Включить</label><div class="operations-meta" id="yookassaConfigured"></div></div>
+                    <div class="operations-row"><strong>Доставка</strong><label><input id="deliveryEnabled" type="checkbox"> Включить доставку</label><div class="operations-meta" id="deliveryEncryption"></div><label><input id="sdekEnabled" type="checkbox"> СДЭК — пункт выдачи</label><input id="sdekPrice" type="number" min="0" max="100000" required placeholder="Стоимость СДЭК, ₽"><label><input id="postEnabled" type="checkbox"> Почта России — отделение</label><input id="postPrice" type="number" min="0" max="100000" required placeholder="Стоимость Почты, ₽"><label><input id="pickupEnabled" type="checkbox"> Самовывоз</label><input id="pickupPrice" type="number" min="0" max="100000" required placeholder="Стоимость самовывоза, ₽"><input id="pickupLocation" maxlength="240" placeholder="Адрес самовывоза"><input id="pickupSchedule" maxlength="240" placeholder="График"><textarea id="pickupInstructions" rows="3" maxlength="500" placeholder="Инструкции самовывоза"></textarea></div>
+                    <button class="operations-action" type="submit">Сохранить оплату и доставку</button><div class="operations-meta" id="checkoutSettingsStatus"></div>
+                </form>`;
+            document.getElementById('manualEnabled').checked = settings.manual.enabled;
+            document.getElementById('manualInstructions').value = settings.manual.instructions || '';
+            document.getElementById('manualConfigured').textContent = `Карта: ${settings.manual.card_configured ? settings.manual.card_masked : 'не настроена'} · СБП: ${settings.manual.sbp_configured ? settings.manual.sbp_masked : 'не настроен'} · банк: ${settings.manual.bank_configured ? 'настроен' : 'не настроен'} · получатель: ${settings.manual.recipient_configured ? 'настроен' : 'не настроен'}`;
+            document.getElementById('starsEnabled').checked = settings.stars.enabled;
+            document.getElementById('starsRate').value = settings.stars.rubles_per_star;
+            document.getElementById('yookassaEnabled').checked = settings.yookassa.enabled;
+            document.getElementById('yookassaConfigured').textContent = settings.yookassa.configured ? 'Платформенные реквизиты ЮKassa настроены.' : 'ЮKassa не настроена платформой.';
+            document.getElementById('deliveryEnabled').checked = settings.delivery.enabled;
+            document.getElementById('deliveryEncryption').textContent = settings.delivery.encryption_available ? 'Шифрование адресов доступно.' : 'Шифрование адресов недоступно: включить доставку нельзя.';
+            document.getElementById('sdekEnabled').checked = settings.delivery.sdek_pickup.enabled;
+            document.getElementById('sdekPrice').value = settings.delivery.sdek_pickup.price;
+            document.getElementById('postEnabled').checked = settings.delivery.russian_post_pickup.enabled;
+            document.getElementById('postPrice').value = settings.delivery.russian_post_pickup.price;
+            document.getElementById('pickupEnabled').checked = settings.delivery.self_pickup.enabled;
+            document.getElementById('pickupPrice').value = settings.delivery.self_pickup.price;
+            document.getElementById('pickupLocation').value = settings.delivery.self_pickup.location || '';
+            document.getElementById('pickupSchedule').value = settings.delivery.self_pickup.schedule || '';
+            document.getElementById('pickupInstructions').value = settings.delivery.self_pickup.instructions || '';
+            document.getElementById('checkoutSettingsForm').addEventListener('submit', async event => {
+                event.preventDefault();
+                const status = document.getElementById('checkoutSettingsStatus');
+                status.textContent = 'Сохраняем…';
+                const value = id => document.getElementById(id).value.trim();
+                const number = id => Number(document.getElementById(id).value);
+                const checked = id => document.getElementById(id).checked;
+                const payload = {
+                    manual: {enabled: checked('manualEnabled'), card_number: value('manualCard'), sbp_phone: value('manualPhone'), sbp_bank: value('manualBank'), recipient_name: value('manualRecipient'), instructions: value('manualInstructions')},
+                    stars: {enabled: checked('starsEnabled'), rubles_per_star: number('starsRate')},
+                    yookassa: {enabled: checked('yookassaEnabled')},
+                    delivery: {
+                        enabled: checked('deliveryEnabled'),
+                        sdek_pickup: {enabled: checked('sdekEnabled'), price: number('sdekPrice')},
+                        russian_post_pickup: {enabled: checked('postEnabled'), price: number('postPrice')},
+                        self_pickup: {enabled: checked('pickupEnabled'), price: number('pickupPrice'), location: value('pickupLocation'), schedule: value('pickupSchedule'), instructions: value('pickupInstructions')},
+                    },
+                };
+                try { await ownerRequest('/api/admin/payment-settings', {method: 'PUT', json: payload}); status.textContent = 'Сохранено.'; tg.HapticFeedback.notificationOccurred('success'); await loadCheckoutSettingsOperations(content); } catch (error) { status.textContent = error.message; }
+            });
+        }
+
+        async function loadStorefrontOperations(content) {
+            const storefront = await ownerRequest('/api/admin/storefront');
+            content.innerHTML = '<div class="operations-row"><div class="operations-row-head"><span>Брендинг магазина</span></div><div class="operations-meta">Название, цвета и контакт поддержки сразу применяются к витрине.</div></div><form class="operations-form" id="storefrontForm"><input id="storefrontConfigName" maxlength="120" required placeholder="Название магазина"><div class="operations-action-grid"><label>Основной цвет<input id="storefrontPrimary" type="color"></label><label>Акцентный цвет<input id="storefrontAccent" type="color"></label></div><input id="storefrontSupport" maxlength="160" placeholder="Контакт поддержки"><button class="operations-action" type="submit">Сохранить брендинг</button><div class="operations-meta" id="storefrontStatus"></div></form>';
+            document.getElementById('storefrontConfigName').value = storefront.store_name;
+            document.getElementById('storefrontPrimary').value = storefront.primary_color;
+            document.getElementById('storefrontAccent').value = storefront.accent_color;
+            document.getElementById('storefrontSupport').value = storefront.support_contact;
+            document.getElementById('storefrontForm').addEventListener('submit', async event => {
+                event.preventDefault();
+                const status = document.getElementById('storefrontStatus');
+                try {
+                    const saved = await ownerRequest('/api/admin/storefront', {method: 'PUT', json: {store_name: document.getElementById('storefrontConfigName').value.trim(), primary_color: document.getElementById('storefrontPrimary').value, accent_color: document.getElementById('storefrontAccent').value, support_contact: document.getElementById('storefrontSupport').value.trim()}});
+                    applyStorefrontColors(saved.primary_color, saved.accent_color);
+                    document.title = saved.store_name;
+                    document.getElementById('storefrontName').textContent = saved.store_name;
+                    status.textContent = 'Оформление сохранено.';
+                    tg.HapticFeedback.notificationOccurred('success');
+                } catch (error) { status.textContent = error.message; }
+            });
+        }
+
+        function backupRow(backup) {
+            const expiry = backup.expires_at ? ` · хранится до ${escapeHtml(backup.expires_at)}` : '';
+            return `<div class="operations-row"><div class="operations-row-head"><span>${backup.source === 'uploaded' ? 'Загруженная проверенная БД' : 'Созданная резервная БД'}</span></div><div class="operations-meta">${Math.ceil(backup.size / 1024)} КБ · схема ${backup.schema_version} · ${escapeHtml(backup.created_at)}${expiry}</div><div class="operations-action-grid"><button class="operations-action" type="button" data-backup-download="${backup.id}">Скачать</button></div></div>`;
+        }
+
+        async function loadBackupOperations(content) {
+            const result = await ownerRequest('/api/admin/database/backups');
+            content.innerHTML = '<div class="operations-row"><div class="operations-row-head"><span>Резервные копии базы данных</span></div><div class="operations-meta">Файл содержит чувствительные данные и не включает обложки или страницы книг. Загруженная копия только проверяется и временно хранится: автоматического восстановления нет.</div></div><div class="operations-action-grid"><button class="operations-action" type="button" id="createBackup">Создать копию БД</button></div><form class="operations-form" id="backupUploadForm"><input id="backupFile" type="file" accept=".sqlite,application/vnd.sqlite3" required><button class="operations-action" type="submit">Загрузить и проверить БД</button><div class="operations-meta" id="backupStatus"></div></form><div class="operations-list" id="backupList"></div>';
+            const status = document.getElementById('backupStatus');
+            const render = backups => {
+                const list = document.getElementById('backupList');
+                list.innerHTML = backups.map(backupRow).join('') || '<div class="admin-empty">Пока нет доступных резервных копий.</div>';
+                list.querySelectorAll('[data-backup-download]').forEach(button => button.addEventListener('click', () => downloadAdminFile(`/api/admin/database/backups/${button.dataset.backupDownload}/download`, 'database-backup.sqlite')));
+            };
+            render(result.backups || []);
+            document.getElementById('createBackup').addEventListener('click', async () => { status.textContent = 'Создаём и проверяем копию…'; try { await ownerRequest('/api/admin/database/backups', {method: 'POST'}); await loadBackupOperations(content); tg.HapticFeedback.notificationOccurred('success'); } catch (error) { status.textContent = error.message; } });
+            document.getElementById('backupUploadForm').addEventListener('submit', async event => { event.preventDefault(); const file = document.getElementById('backupFile').files[0]; if (!file) return; status.textContent = 'Загружаем и проверяем…'; const form = new FormData(); form.append('file', file, file.name); try { await ownerRequest('/api/admin/database/backups/upload', {method: 'POST', body: form}); await loadBackupOperations(content); tg.HapticFeedback.notificationOccurred('success'); } catch (error) { status.textContent = error.message; } });
         }
 
         async function downloadAdminFile(path, fallbackName) {

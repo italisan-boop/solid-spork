@@ -85,6 +85,35 @@ from db.fulfillment import (
     set_picked_quantity_sync,
 )
 from db.schema import DB_PATH, connect, initialize_database
+from db.backups import (
+    create_owner_backup_sync,
+    list_backup_artifacts_sync,
+    resolve_backup_artifact_sync,
+    stage_uploaded_backup_sync,
+)
+from db.message_templates import (
+    TemplateValidationError,
+    get_message_templates_sync,
+    reset_message_template_sync,
+    set_message_template_sync,
+)
+from db.payments import (
+    PAYMENT_SETTING_KEYS,
+    STARS_SETTING_KEYS,
+    get_payment_settings_sync,
+    get_stars_settings_sync,
+    replace_checkout_settings_sync,
+)
+from db.promo_codes import (
+    PromoValidationError,
+    create_promo_code_sync,
+    disable_promo_code_sync,
+    list_promo_codes_sync,
+    update_promo_code_sync,
+    validate_and_claim_promo,
+    validate_promo_code_sync,
+)
+from db.storefront import get_storefront_settings_sync, save_storefront_settings_sync
 from utils import log_event, setup_logger
 from utils.delivery_crypto import (
     DeliveryCryptoError,
@@ -93,9 +122,9 @@ from utils.delivery_crypto import (
     decrypt_destination,
 )
 
-from controlplane.plan_policy import LIMIT_CAMPAIGNS, Plan
+from controlplane.plan_policy import FEATURE_BRANDING, FEATURE_STORE_SETTINGS, LIMIT_CAMPAIGNS, Plan
 from runtime.context import maybe_current_tenant_context
-from runtime.features import QuotaExceededError
+from runtime.features import QuotaExceededError, require_feature
 from runtime.quota import require_count_quota
 from content_defaults import TEMPLATES
 from storage.book_media import (
@@ -1376,80 +1405,6 @@ def get_dashboard_stats():
 
 
 # ============================================
-# ПРОМОКОДЫ
-# ============================================
-
-def validate_promo_code_sync(code: str, order_total: int) -> dict:
-    """Проверить промокод"""
-    conn = connect()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM promo_codes WHERE code = ? AND is_active = 1",
-        (code.upper(),)
-    )
-    promo = cursor.fetchone()
-
-    if not promo:
-        conn.close()
-        return {'valid': False, 'error': 'Промокод не найден'}
-
-    promo = dict(promo)
-
-    # Проверка срока действия
-    if promo.get('expires_at'):
-        try:
-            expires = datetime.fromisoformat(promo['expires_at'])
-            if datetime.now() > expires:
-                conn.close()
-                return {'valid': False, 'error': 'Промокод истёк'}
-        except Exception:
-            pass
-
-    # Проверка минимальной суммы
-    if promo['min_order'] > 0 and order_total < promo['min_order']:
-        conn.close()
-        return {'valid': False, 'error': f"Минимальная сумма заказа: {promo['min_order']} ₽"}
-
-    # Проверка лимита использований
-    if promo['max_uses'] > 0 and promo['current_uses'] >= promo['max_uses']:
-        conn.close()
-        return {'valid': False, 'error': 'Промокод больше не действует'}
-
-    # Расчёт скидки
-    discount = 0
-    if promo['discount_percent'] > 0:
-        discount = int(order_total * promo['discount_percent'] / 100)
-    elif promo['discount_fixed'] > 0:
-        discount = promo['discount_fixed']
-
-    discount = min(discount, order_total)
-
-    conn.close()
-
-    return {
-        'valid': True,
-        'discount': discount,
-        'discount_percent': promo['discount_percent'],
-        'discount_fixed': promo['discount_fixed'],
-        'final_total': order_total - discount,
-        'promo_code': promo['code']
-    }
-
-
-def increment_promo_usage_sync(code: str):
-    """Увеличить счётчик использований промокода"""
-    conn = connect()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE promo_codes SET current_uses = current_uses + 1 WHERE code = ?",
-        (code.upper(),)
-    )
-    conn.commit()
-    conn.close()
-
-
-# ============================================
 # ОТПРАВКА В TELEGRAM
 # ============================================
 
@@ -1717,6 +1672,370 @@ def api_admin_inventory(book_id: int):
     if not changed:
         return jsonify({"error": "book not found"}), 404
     return jsonify({"summary": inventory_summary_sync(book_id)})
+
+
+def _owner_audit(action: str, entity_type: str, entity_id: str | int = "", *, reason_code: str = "") -> None:
+    database = connect()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        append_audit_event(
+            database,
+            actor_user_id=g.telegram_user.id,
+            actor_role=g.staff_role,
+            source="mini_app",
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            details={"reason_code": reason_code} if reason_code else None,
+        )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.close()
+
+
+def _masked_payment_value(value: str) -> str:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return ""
+    return "•" * max(0, len(cleaned) - 4) + cleaned[-4:]
+
+
+def _owner_checkout_settings_payload() -> dict:
+    payment = get_payment_settings_sync()
+    stars = get_stars_settings_sync()
+    return {
+        "manual": {
+            "enabled": payment.get("payment_enabled") == "1",
+            "card_configured": bool(payment.get("card_number", "").strip()),
+            "card_masked": _masked_payment_value(payment.get("card_number", "")),
+            "sbp_configured": bool(payment.get("sbp_phone", "").strip()),
+            "sbp_masked": _masked_payment_value(payment.get("sbp_phone", "")),
+            "bank_configured": bool(payment.get("sbp_bank", "").strip()),
+            "recipient_configured": bool(payment.get("recipient_name", "").strip()),
+            "instructions": payment.get("payment_instructions", ""),
+        },
+        "stars": {
+            "enabled": stars.get("stars_enabled") == "1",
+            "rubles_per_star": int(stars.get("rubles_per_star", "0") or 0),
+        },
+        "yookassa": {
+            "enabled": payment.get("yookassa_enabled") == "1",
+            "configured": yookassa_is_configured(),
+        },
+        "delivery": {
+            "enabled": payment.get("delivery_enabled") == "1",
+            "sdek_pickup": {
+                "enabled": payment.get("delivery_sdek_pickup_enabled") == "1",
+                "price": int(payment.get("delivery_sdek_pickup_price_rub", "0") or 0),
+            },
+            "russian_post_pickup": {
+                "enabled": payment.get("delivery_russian_post_pickup_enabled") == "1",
+                "price": int(payment.get("delivery_russian_post_pickup_price_rub", "0") or 0),
+            },
+            "self_pickup": {
+                "enabled": payment.get("delivery_self_pickup_enabled") == "1",
+                "price": int(payment.get("delivery_self_pickup_price_rub", "0") or 0),
+                "location": payment.get("delivery_self_pickup_location", ""),
+                "schedule": payment.get("delivery_self_pickup_schedule", ""),
+                "instructions": payment.get("delivery_self_pickup_instructions", ""),
+            },
+            "encryption_available": delivery_encryption_is_available(),
+        },
+    }
+
+
+def _owner_checkout_settings_update(payload: object) -> None:
+    fields = {"manual", "stars", "yookassa", "delivery"}
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise ValueError("invalid checkout settings")
+    manual = payload["manual"]
+    stars = payload["stars"]
+    yookassa = payload["yookassa"]
+    delivery = payload["delivery"]
+    if (
+        not isinstance(manual, dict)
+        or set(manual) != {"enabled", "card_number", "sbp_phone", "sbp_bank", "recipient_name", "instructions"}
+        or not isinstance(stars, dict)
+        or set(stars) != {"enabled", "rubles_per_star"}
+        or not isinstance(yookassa, dict)
+        or set(yookassa) != {"enabled"}
+        or not isinstance(delivery, dict)
+        or set(delivery) != {"enabled", "sdek_pickup", "russian_post_pickup", "self_pickup"}
+    ):
+        raise ValueError("invalid checkout settings")
+
+    def flag(value: object, field: str) -> str:
+        if not isinstance(value, bool):
+            raise ValueError(f"{field} is invalid")
+        return "1" if value else "0"
+
+    def positive_price(value: object, field: str) -> str:
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100_000:
+            raise ValueError(f"{field} is invalid")
+        return str(value)
+
+    def text(value: object, field: str, maximum: int, *, required: bool = False) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"{field} is invalid")
+        normalized = value.strip()
+        if len(normalized) > maximum or (required and not normalized):
+            raise ValueError(f"{field} is invalid")
+        return normalized
+
+    def delivery_method(value: object, field: str, self_pickup: bool = False) -> dict[str, str]:
+        expected = {"enabled", "price"}
+        if self_pickup:
+            expected |= {"location", "schedule", "instructions"}
+        if not isinstance(value, dict) or set(value) != expected:
+            raise ValueError(f"{field} is invalid")
+        result = {
+            "enabled": flag(value["enabled"], f"{field}.enabled"),
+            "price": positive_price(value["price"], f"{field}.price"),
+        }
+        if self_pickup:
+            result.update({
+                "location": text(value["location"], "self pickup location", 240),
+                "schedule": text(value["schedule"], "self pickup schedule", 240),
+                "instructions": text(value["instructions"], "self pickup instructions", 500),
+            })
+        return result
+
+    current = get_payment_settings_sync()
+    card = text(manual["card_number"], "card number", 80)
+    phone = text(manual["sbp_phone"], "sbp phone", 80)
+    bank = text(manual["sbp_bank"], "sbp bank", 120)
+    recipient = text(manual["recipient_name"], "recipient", 160)
+    instructions = text(manual["instructions"], "payment instructions", 1000)
+    payment_values = {key: current.get(key, "") for key in PAYMENT_SETTING_KEYS}
+    payment_values.update({
+        "payment_enabled": flag(manual["enabled"], "manual.enabled"),
+        "card_number": card or current.get("card_number", ""),
+        "sbp_phone": phone or current.get("sbp_phone", ""),
+        "sbp_bank": bank or current.get("sbp_bank", ""),
+        "recipient_name": recipient or current.get("recipient_name", ""),
+        "payment_instructions": instructions,
+        "yookassa_enabled": flag(yookassa["enabled"], "yookassa.enabled"),
+        "delivery_enabled": flag(delivery["enabled"], "delivery.enabled"),
+    })
+    if payment_values["payment_enabled"] == "1" and not (
+        payment_values["card_number"] or payment_values["sbp_phone"]
+    ):
+        raise ValueError("manual payment details are required")
+    if payment_values["yookassa_enabled"] == "1" and not yookassa_is_configured():
+        raise ValueError("YooKassa is not configured")
+    sdek = delivery_method(delivery["sdek_pickup"], "sdek")
+    russian_post = delivery_method(delivery["russian_post_pickup"], "russian post")
+    pickup = delivery_method(delivery["self_pickup"], "self pickup", self_pickup=True)
+    payment_values.update({
+        "delivery_sdek_pickup_enabled": sdek["enabled"],
+        "delivery_sdek_pickup_price_rub": sdek["price"],
+        "delivery_russian_post_pickup_enabled": russian_post["enabled"],
+        "delivery_russian_post_pickup_price_rub": russian_post["price"],
+        "delivery_self_pickup_enabled": pickup["enabled"],
+        "delivery_self_pickup_price_rub": pickup["price"],
+        "delivery_self_pickup_location": pickup["location"],
+        "delivery_self_pickup_schedule": pickup["schedule"],
+        "delivery_self_pickup_instructions": pickup["instructions"],
+    })
+    if payment_values["delivery_enabled"] == "1":
+        if not delivery_encryption_is_available() or not _delivery_options(payment_values):
+            raise ValueError("delivery configuration is unavailable")
+    stars_rate = stars["rubles_per_star"]
+    if isinstance(stars_rate, bool) or not isinstance(stars_rate, int) or not 1 <= stars_rate <= 100_000:
+        raise ValueError("Stars rate is invalid")
+    stars_values = {
+        "stars_enabled": flag(stars["enabled"], "stars.enabled"),
+        "rubles_per_star": str(stars_rate),
+    }
+    if set(payment_values) != PAYMENT_SETTING_KEYS or set(stars_values) != STARS_SETTING_KEYS:
+        raise ValueError("invalid checkout settings")
+    replace_checkout_settings_sync(payment_values, stars_values)
+
+
+@app.route('/api/admin/promos', methods=['GET', 'POST'])
+@require_telegram_permission("payment.configure")
+def api_admin_promos():
+    if request.method == "GET":
+        return jsonify({"promos": list_promo_codes_sync()})
+    try:
+        promo = create_promo_code_sync(request.get_json(silent=True))
+    except PromoValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "promo code already exists"}), 409
+    _owner_audit("promo.created", "promo", promo["id"])
+    return jsonify({"promo": promo}), 201
+
+
+@app.route('/api/admin/promos/<int:promo_id>', methods=['PUT'])
+@require_telegram_permission("payment.configure")
+def api_admin_promo(promo_id: int):
+    try:
+        promo = update_promo_code_sync(promo_id, request.get_json(silent=True))
+    except PromoValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "promo code already exists"}), 409
+    if promo is None:
+        return jsonify({"error": "promo not found"}), 404
+    _owner_audit("promo.updated", "promo", promo_id)
+    return jsonify({"promo": promo})
+
+
+@app.route('/api/admin/promos/<int:promo_id>/disable', methods=['POST'])
+@require_telegram_permission("payment.configure")
+def api_admin_promo_disable(promo_id: int):
+    if request.get_json(silent=True) not in ({}, None):
+        return jsonify({"error": "request body is invalid"}), 400
+    promo = disable_promo_code_sync(promo_id)
+    if promo is None:
+        return jsonify({"error": "promo not found"}), 404
+    _owner_audit("promo.disabled", "promo", promo_id)
+    return jsonify({"promo": promo})
+
+
+@app.route('/api/admin/payment-settings', methods=['GET', 'PUT'])
+@require_telegram_permission("payment.configure")
+def api_admin_payment_settings():
+    if request.method == "GET":
+        return jsonify(_owner_checkout_settings_payload())
+    try:
+        _owner_checkout_settings_update(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    _owner_audit("payment_settings.updated", "payment_settings")
+    return jsonify(_owner_checkout_settings_payload())
+
+
+def _require_storefront_features():
+    context = maybe_current_tenant_context()
+    if context is None:
+        return None
+    try:
+        require_feature(FEATURE_BRANDING, context)
+        require_feature(FEATURE_STORE_SETTINGS, context)
+    except PermissionError:
+        return jsonify({"error": "feature_not_available"}), 403
+    return None
+
+
+@app.route('/api/admin/templates', methods=['GET'])
+@require_telegram_permission("branding.manage")
+def api_admin_templates():
+    values = get_message_templates_sync()
+    return jsonify({
+        "templates": [
+            {
+                "key": template.key,
+                "group": template.group,
+                "title": template.title,
+                "placeholders": sorted(template.placeholders),
+                "value": values[template.key],
+            }
+            for template in TEMPLATES
+        ]
+    })
+
+
+@app.route('/api/admin/templates/<string:key>', methods=['PUT'])
+@require_telegram_permission("branding.manage")
+def api_admin_template(key: str):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or set(payload) != {"value"}:
+        return jsonify({"error": "value is required"}), 400
+    try:
+        value = set_message_template_sync(key, payload["value"])
+    except (KeyError, TemplateValidationError) as exc:
+        return jsonify({"error": str(exc) or "template is invalid"}), 400
+    _owner_audit("template.updated", "template", key)
+    return jsonify({"key": key, "value": value})
+
+
+@app.route('/api/admin/templates/<string:key>/reset', methods=['POST'])
+@require_telegram_permission("branding.manage")
+def api_admin_template_reset(key: str):
+    if request.get_json(silent=True) not in ({}, None):
+        return jsonify({"error": "request body is invalid"}), 400
+    try:
+        value = reset_message_template_sync(key)
+    except KeyError:
+        return jsonify({"error": "template is invalid"}), 404
+    _owner_audit("template.reset", "template", key)
+    return jsonify({"key": key, "value": value})
+
+
+@app.route('/api/admin/storefront', methods=['GET', 'PUT'])
+@require_telegram_permission("branding.manage")
+def api_admin_storefront():
+    unavailable = _require_storefront_features()
+    if unavailable is not None:
+        return unavailable
+    if request.method == "GET":
+        return jsonify(get_storefront_settings_sync())
+    try:
+        storefront = save_storefront_settings_sync(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    _owner_audit("storefront.updated", "storefront")
+    return jsonify(storefront)
+
+
+@app.route('/api/admin/database/backups', methods=['GET', 'POST'])
+@require_telegram_permission("admin.maintenance")
+def api_admin_database_backups():
+    if request.method == "GET":
+        return jsonify({"backups": list_backup_artifacts_sync()})
+    if request.get_data(cache=False):
+        return jsonify({"error": "request body is not supported"}), 400
+    try:
+        artifact = create_owner_backup_sync()
+    except RuntimeError:
+        return jsonify({"error": "backup is already running"}), 409
+    except (OSError, sqlite3.Error, ValueError):
+        return jsonify({"error": "backup could not be created"}), 503
+    _owner_audit("backup.created", "backup", artifact["id"])
+    return jsonify({"backup": artifact}), 201
+
+
+@app.route('/api/admin/database/backups/<string:artifact_id>/download', methods=['GET'])
+@require_telegram_permission("admin.maintenance")
+def api_admin_database_backup_download(artifact_id: str):
+    resolved = resolve_backup_artifact_sync(artifact_id)
+    if resolved is None:
+        return jsonify({"error": "backup not found"}), 404
+    path, artifact = resolved
+    _owner_audit("backup.downloaded", "backup", artifact["id"])
+    response = send_file(
+        path,
+        mimetype="application/vnd.sqlite3",
+        as_attachment=True,
+        download_name=f"database-backup-{artifact['id']}.sqlite",
+        conditional=False,
+        max_age=0,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@app.route('/api/admin/database/backups/upload', methods=['POST'])
+@require_telegram_permission("admin.maintenance")
+def api_admin_database_backup_upload():
+    if request.form or set(request.files) != {"file"} or len(request.files.getlist("file")) != 1:
+        return jsonify({"error": "exactly one backup file is required"}), 400
+    uploaded = request.files["file"]
+    if not uploaded.filename:
+        return jsonify({"error": "exactly one backup file is required"}), 400
+    try:
+        artifact = stage_uploaded_backup_sync(uploaded.stream)
+    except (OSError, sqlite3.Error, ValueError):
+        _owner_audit("backup.upload.rejected", "backup", reason_code="validation_failed")
+        return jsonify({"error": "backup validation failed"}), 400
+    _owner_audit("backup.upload.validated", "backup", artifact["id"])
+    return jsonify({"backup": artifact, "restore_available": False}), 201
 
 
 @app.route('/api/admin/session', methods=['GET'])
@@ -3562,17 +3881,7 @@ def receive_order():
         discount = 0
         discounted_items_total = items_total
         applied_promo = None
-        promo_code_to_consume = None
-
-        # 1. Применяем промокод
-        if promo_code:
-            promo_result = validate_promo_code_sync(promo_code, items_total)
-            if promo_result['valid']:
-                discount = promo_result['discount']
-                discounted_items_total = items_total - discount
-                applied_promo = promo_result['promo_code']
-                promo_code_to_consume = promo_result['promo_code']
-        promo_discount = discount
+        promo_discount = 0
         bonus_discount = 0
 
         # 2. Применяем бонусы пользователя
@@ -3609,6 +3918,16 @@ def receive_order():
             conn.rollback()
             conn.close()
             return jsonify({'error': 'book is unavailable'}), 400
+        if promo_code:
+            promo_result = validate_and_claim_promo(conn, promo_code, items_total)
+            if not promo_result["valid"]:
+                conn.rollback()
+                conn.close()
+                return jsonify({"error": promo_result["error"]}), 409
+            discount = promo_result["discount"]
+            promo_discount = discount
+            discounted_items_total = items_total - discount
+            applied_promo = promo_result["promo_code"]
 
         # 2. Получаем актуальные настройки внутри checkout-транзакции.
         cursor.execute("SELECT setting_key, setting_value FROM payment_settings")
@@ -3695,20 +4014,6 @@ def receive_order():
         else:
             status = 'new'
             stars_amount = None
-
-        if promo_code_to_consume:
-            updated = cursor.execute(
-                """
-                UPDATE promo_codes
-                SET current_uses = current_uses + 1
-                WHERE code = ? AND (max_uses = 0 OR current_uses < max_uses)
-                """,
-                (promo_code_to_consume,),
-            )
-            if updated.rowcount != 1:
-                conn.rollback()
-                conn.close()
-                return jsonify({'error': 'Промокод больше не действует'}), 409
 
         _ensure_authenticated_user(conn)
         acquisition = cursor.execute(

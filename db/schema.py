@@ -10,7 +10,7 @@ from config import settings
 from content_defaults import TEMPLATES
 
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 _CONNECTION_TIMEOUT_SECONDS = 10
 _INITIALIZATION_LOCK = threading.Lock()
 _CURRENT_DATABASE_PATH: ContextVar[Path | None] = ContextVar(
@@ -478,6 +478,19 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             template_value TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS database_backup_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            source_kind TEXT NOT NULL CHECK (source_kind IN ('generated', 'uploaded')),
+            storage_name TEXT NOT NULL UNIQUE,
+            byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+            schema_version INTEGER NOT NULL CHECK (schema_version >= 0),
+            validation_state TEXT NOT NULL CHECK (validation_state = 'verified'),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,
+            downloaded_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_database_backup_artifacts_expiry
+        ON database_backup_artifacts (expires_at, created_at DESC);
         CREATE TABLE IF NOT EXISTS fsm_records (
             fsm_key TEXT PRIMARY KEY,
             state TEXT,
