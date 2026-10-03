@@ -47,8 +47,8 @@ db/promo_codes.py
 db/referrals.py
 db/schema.py
 db/staff.py
-db/storefront.py
 db/stars.py
+db/storefront.py
 db/support_history.py
 db/users.py
 deploy/bootstrap-managed-platform.sh
