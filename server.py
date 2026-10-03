@@ -93,7 +93,7 @@ from utils.delivery_crypto import (
     decrypt_destination,
 )
 
-from controlplane.plan_policy import LIMIT_CAMPAIGNS
+from controlplane.plan_policy import LIMIT_CAMPAIGNS, Plan
 from runtime.context import maybe_current_tenant_context
 from runtime.features import QuotaExceededError
 from runtime.quota import require_count_quota
@@ -1723,10 +1723,17 @@ def api_admin_inventory(book_id: int):
 @require_telegram_permission("admin.access")
 def api_admin_session():
     role = g.staff_role
+    tenant_context = maybe_current_tenant_context()
+    editor_assignable = bool(
+        tenant_context
+        and tenant_context.entitlements.plan in {Plan.BUSINESS, Plan.PRO}
+        and "staff" in tenant_context.entitlements.features
+    )
     return jsonify({
         "user_id": g.telegram_user.id,
         "role": role,
         "capabilities": capabilities_for_role(role),
+        "editor_assignable": editor_assignable,
     })
 
 
@@ -1838,6 +1845,8 @@ def api_admin_catalog_book(book_id: int):
 @app.route('/api/admin/catalog/books/<int:book_id>/stock', methods=['PUT'])
 @require_telegram_permission("catalog.manage")
 def api_admin_catalog_book_stock(book_id: int):
+    if g.staff_role == "editor":
+        return jsonify({"error": "Forbidden"}), 403
     if get_catalog_book_sync(book_id, "active") is None:
         return jsonify({"error": "book not found"}), 404
     try:

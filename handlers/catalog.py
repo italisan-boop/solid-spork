@@ -5,7 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
 import db
-from authz import has_permission_sync
+from authz import is_owner_sync
 from config import settings
 from handlers.admin_books import books_menu, start_add_book
 from states import AddBookState, EditBookState
@@ -16,7 +16,7 @@ router = Router()
 
 
 def is_admin(user_id: int) -> bool:
-    return has_permission_sync(user_id, "catalog.manage")
+    return is_owner_sync(user_id)
 
 
 # ============================================

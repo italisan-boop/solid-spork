@@ -83,6 +83,69 @@ class DatabaseInitializationSmokeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(2, self._query_one("SELECT COUNT(*) FROM stars_settings"))
 
+    async def test_editor_role_migration_preserves_staff_and_immutable_audit_history(self):
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE staff_members (
+                    telegram_user_id INTEGER PRIMARY KEY,
+                    role TEXT NOT NULL CHECK (role IN ('manager', 'warehouse')),
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    changed_by_user_id INTEGER NOT NULL
+                );
+                CREATE TABLE audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    actor_user_id INTEGER,
+                    actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'manager', 'warehouse', 'system')),
+                    source TEXT NOT NULL CHECK (source IN ('telegram', 'mini_app', 'webhook', 'scheduler', 'system')),
+                    action TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL DEFAULT '',
+                    correlation_id TEXT NOT NULL DEFAULT '',
+                    details_json TEXT NOT NULL DEFAULT '{}',
+                    outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'rejected', 'failed')),
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                INSERT INTO staff_members (telegram_user_id, role, changed_by_user_id)
+                VALUES (101, 'manager', 1);
+                INSERT INTO audit_events (actor_user_id, actor_role, source, action, entity_type, outcome)
+                VALUES (1, 'owner', 'mini_app', 'legacy.event', 'legacy', 'succeeded');
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        await db.init_db()
+        await db.init_db()
+
+        connection = sqlite3.connect(self.database_path)
+        try:
+            self.assertEqual((101, "manager"), connection.execute(
+                "SELECT telegram_user_id, role FROM staff_members WHERE telegram_user_id = 101"
+            ).fetchone())
+            connection.execute(
+                "INSERT INTO staff_members (telegram_user_id, role, changed_by_user_id) VALUES (202, 'editor', 1)"
+            )
+            connection.execute(
+                "INSERT INTO audit_events (actor_role, source, action, entity_type, outcome) VALUES ('editor', 'mini_app', 'catalog.book.updated', 'book', 'succeeded')"
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("UPDATE audit_events SET action = 'changed' WHERE id = 1")
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("DELETE FROM audit_events WHERE id = 1")
+            indexes = {row[1] for row in connection.execute("PRAGMA index_list(audit_events)")}
+            staff_indexes = {row[1] for row in connection.execute("PRAGMA index_list(staff_members)")}
+        finally:
+            connection.close()
+
+        self.assertIn("idx_audit_events_created", indexes)
+        self.assertIn("idx_audit_events_entity", indexes)
+        self.assertIn("idx_staff_members_role_active", staff_indexes)
+
     async def test_legacy_order_support_requests_accept_failed_state(self):
         connection = sqlite3.connect(self.database_path)
         try:

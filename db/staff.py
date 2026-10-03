@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-from controlplane.plan_policy import FEATURE_STAFF, LIMIT_STAFF_MEMBERS
+from controlplane.plan_policy import FEATURE_STAFF, LIMIT_STAFF_MEMBERS, Plan
 from db.audit import append_audit_event
 from db.schema import connect
 
 
-STAFF_ROLES = {"manager", "warehouse"}
+STAFF_ROLES = {"editor", "manager", "warehouse"}
 
 
 def _validate_staff_id(user_id: int) -> None:
@@ -62,6 +62,10 @@ def set_staff_member_sync(
     if role not in STAFF_ROLES:
         raise ValueError("unsupported staff role")
     tenant_context = maybe_current_tenant_context()
+    if role == "editor" and (
+        tenant_context is None or tenant_context.entitlements.plan not in {Plan.BUSINESS, Plan.PRO}
+    ):
+        raise ValueError("editor role requires Business or Pro plan")
     if tenant_context is not None:
         require_feature(FEATURE_STAFF, tenant_context)
     database = connect()

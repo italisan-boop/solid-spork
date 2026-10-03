@@ -10,7 +10,7 @@ from config import settings
 from content_defaults import TEMPLATES
 
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 _CONNECTION_TIMEOUT_SECONDS = 10
 _INITIALIZATION_LOCK = threading.Lock()
 _CURRENT_DATABASE_PATH: ContextVar[Path | None] = ContextVar(
@@ -383,7 +383,7 @@ def _create_tables(connection: sqlite3.Connection) -> None:
         ON order_fulfillments (state, warehouse_user_id, updated_at);
         CREATE TABLE IF NOT EXISTS staff_members (
             telegram_user_id INTEGER PRIMARY KEY,
-            role TEXT NOT NULL CHECK (role IN ('manager', 'warehouse')),
+            role TEXT NOT NULL CHECK (role IN ('editor', 'manager', 'warehouse')),
             is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -392,7 +392,7 @@ def _create_tables(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS audit_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             actor_user_id INTEGER,
-            actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'manager', 'warehouse', 'system')),
+            actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'editor', 'manager', 'warehouse', 'system')),
             source TEXT NOT NULL CHECK (source IN ('telegram', 'mini_app', 'webhook', 'scheduler', 'system')),
             action TEXT NOT NULL,
             entity_type TEXT NOT NULL,
@@ -749,6 +749,79 @@ def _migrate_inventory_movements(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_editor_role_constraints(connection: sqlite3.Connection) -> None:
+    staff_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'staff_members'"
+    ).fetchone()
+    if staff_sql and "'editor'" not in staff_sql[0].lower():
+        connection.executescript(
+            """
+            CREATE TABLE staff_members_new (
+                telegram_user_id INTEGER PRIMARY KEY,
+                role TEXT NOT NULL CHECK (role IN ('editor', 'manager', 'warehouse')),
+                is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                changed_by_user_id INTEGER NOT NULL
+            );
+            INSERT INTO staff_members_new (
+                telegram_user_id, role, is_active, created_at, updated_at, changed_by_user_id
+            )
+            SELECT telegram_user_id, role, is_active, created_at, updated_at, changed_by_user_id
+            FROM staff_members;
+            DROP TABLE staff_members;
+            ALTER TABLE staff_members_new RENAME TO staff_members;
+            CREATE INDEX idx_staff_members_role_active
+            ON staff_members (role, is_active, telegram_user_id);
+            """
+        )
+
+    audit_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'"
+    ).fetchone()
+    if audit_sql and "'editor'" not in audit_sql[0].lower():
+        connection.executescript(
+            """
+            CREATE TABLE audit_events_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_user_id INTEGER,
+                actor_role TEXT NOT NULL CHECK (actor_role IN ('owner', 'editor', 'manager', 'warehouse', 'system')),
+                source TEXT NOT NULL CHECK (source IN ('telegram', 'mini_app', 'webhook', 'scheduler', 'system')),
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL DEFAULT '',
+                correlation_id TEXT NOT NULL DEFAULT '',
+                details_json TEXT NOT NULL DEFAULT '{}',
+                outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'rejected', 'failed')),
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO audit_events_new (
+                id, actor_user_id, actor_role, source, action, entity_type, entity_id,
+                correlation_id, details_json, outcome, created_at
+            )
+            SELECT id, actor_user_id, actor_role, source, action, entity_type, entity_id,
+                   correlation_id, details_json, outcome, created_at
+            FROM audit_events;
+            DROP TABLE audit_events;
+            ALTER TABLE audit_events_new RENAME TO audit_events;
+            CREATE INDEX idx_audit_events_created
+            ON audit_events (created_at DESC, id DESC);
+            CREATE INDEX idx_audit_events_entity
+            ON audit_events (entity_type, entity_id, id DESC);
+            CREATE TRIGGER audit_events_no_update
+            BEFORE UPDATE ON audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'audit events are immutable');
+            END;
+            CREATE TRIGGER audit_events_no_delete
+            BEFORE DELETE ON audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'audit events are immutable');
+            END;
+            """
+        )
+
+
 def _cleanup_expired_support_messages(connection: sqlite3.Connection) -> None:
     connection.execute(
         "DELETE FROM support_messages WHERE date(created_at) < date('now', '-90 days')"
@@ -973,6 +1046,7 @@ def initialize_database(
             _migrate_inventory_movements(connection)
             _migrate_order_deliveries(connection)
             _migrate_order_support_requests(connection)
+            _migrate_editor_role_constraints(connection)
             _create_operational_indexes(connection)
             _cleanup_expired_support_messages(connection)
             _cleanup_expired_delivery_pii(connection)

@@ -7,6 +7,7 @@ from controlplane.plan_policy import (
     FEATURE_ANALYTICS,
     FEATURE_BOOK_IMPORT,
     FEATURE_BRANDING,
+    FEATURE_CATALOG,
     FEATURE_BROADCAST,
     FEATURE_CAMPAIGNS,
     FEATURE_INVENTORY,
@@ -19,6 +20,7 @@ from runtime.context import maybe_current_tenant_context
 OWNER = "owner"
 MANAGER = "manager"
 WAREHOUSE = "warehouse"
+EDITOR = "editor"
 
 _ROLE_PERMISSIONS = {
     OWNER: {"*"},
@@ -36,6 +38,10 @@ _ROLE_PERMISSIONS = {
         "inventory.adjust",
         "fulfillment.manage",
     },
+    EDITOR: {
+        "admin.access",
+        "catalog.manage",
+    },
 }
 _EVENT_AUDIENCES = {
     "payment": {MANAGER},
@@ -45,6 +51,7 @@ _EVENT_AUDIENCES = {
     "packing": {WAREHOUSE},
 }
 _PERMISSION_FEATURES = {
+    "catalog.manage": FEATURE_CATALOG,
     "branding.manage": FEATURE_BRANDING,
     "reports.view": FEATURE_ANALYTICS,
     "staff.manage": FEATURE_STAFF,
@@ -87,7 +94,8 @@ def has_permission_sync(
     legacy_admin_ids: Iterable[int] | None = None,
 ) -> bool:
     role = actor_role_sync(telegram_user_id, legacy_admin_ids=legacy_admin_ids)
-    if not role or ("*" not in _ROLE_PERMISSIONS[role] and permission not in _ROLE_PERMISSIONS[role]):
+    permissions = _ROLE_PERMISSIONS.get(role or "", set())
+    if not role or ("*" not in permissions and permission not in permissions):
         return False
     context = maybe_current_tenant_context()
     feature = _PERMISSION_FEATURES.get(permission)

@@ -95,6 +95,38 @@ class TenantEntitlementAuthorizationTests(unittest.TestCase):
             with self.assertRaises(QuotaExceededError):
                 asyncio.run(add_book("Вторая", 100, 0))
 
+    def test_editor_requires_business_or_pro_and_only_gets_catalog_capabilities(self):
+        with self.context(Plan.START).scope():
+            with self.assertRaisesRegex(ValueError, "Business or Pro"):
+                set_staff_member_sync(201, "editor", active=True, actor_user_id=101)
+
+        with self.context(Plan.BUSINESS).scope():
+            set_staff_member_sync(201, "editor", active=True, actor_user_id=101)
+            self.assertTrue(has_permission_sync(201, "catalog.manage"))
+            self.assertTrue(has_permission_sync(201, "admin.access"))
+            self.assertFalse(has_permission_sync(201, "inventory.adjust"))
+            self.assertFalse(has_permission_sync(201, "staff.manage"))
+            self.assertEqual(
+                ["admin.access", "catalog.manage"],
+                capabilities_for_role("editor"),
+            )
+
+        disabled_catalog = TenantContext(
+            tenant_id="tenant",
+            canonical_host="tenant.example.test",
+            database_path=self.database_path,
+            media_root=self.root / "media",
+            backup_root=self.root / "backups",
+            owner_telegram_id=101,
+            entitlements=effective_entitlements(
+                Plan.BUSINESS, feature_overrides={"catalog": False}
+            ),
+            runtime_generation=1,
+        )
+        with disabled_catalog.scope():
+            self.assertFalse(has_permission_sync(201, "catalog.manage"))
+            self.assertNotIn("catalog.manage", capabilities_for_role("editor"))
+
     def test_staff_limit_is_enforced_at_the_repository_write_boundary(self):
         context = TenantContext(
             tenant_id="tenant",

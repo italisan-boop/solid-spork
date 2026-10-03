@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
-from authz import has_permission_sync
+from authz import is_owner_sync
 from content_defaults import TEMPLATES_BY_KEY, templates_for_group
 from db.message_templates import TemplateValidationError
 from states import TextSettingsState
@@ -14,10 +14,6 @@ from states import TextSettingsState
 
 router = Router()
 
-_GROUP_PERMISSIONS = {
-    "support": "catalog.manage",
-    "branding": "branding.manage",
-}
 _GROUP_MENUS = {
     "support": "admin_texts",
     "branding": "admin_branding",
@@ -39,9 +35,7 @@ def _template_key(template_id: str) -> str | None:
 
 
 def _is_allowed(user_id: int, key: str) -> bool:
-    return has_permission_sync(
-        user_id, _GROUP_PERMISSIONS[TEMPLATES_BY_KEY[key].group]
-    )
+    return is_owner_sync(user_id)
 
 
 def _escaped_preview(value: str, limit: int = 800) -> str:
@@ -87,8 +81,7 @@ async def _show_template(callback: CallbackQuery, key: str) -> None:
 
 
 async def _open_group(callback: CallbackQuery, state: FSMContext, group: str) -> None:
-    permission = _GROUP_PERMISSIONS[group]
-    if not has_permission_sync(callback.from_user.id, permission):
+    if not is_owner_sync(callback.from_user.id):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
     await state.clear()

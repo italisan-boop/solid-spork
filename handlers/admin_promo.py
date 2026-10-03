@@ -7,7 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 import db
-from authz import has_permission_sync
+from authz import is_owner_sync
 from config import settings
 from states import PromoCodeState
 
@@ -16,7 +16,7 @@ router = Router()
 
 
 def is_admin(user_id: int) -> bool:
-    return has_permission_sync(user_id, "catalog.manage")
+    return is_owner_sync(user_id)
 
 
 def _format_promo_line(promo: dict) -> str:

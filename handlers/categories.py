@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 import logging
 
 import db
-from authz import has_permission_sync
+from authz import is_owner_sync
 from config import settings
 from states import CategoryState
 
@@ -16,7 +16,7 @@ CATEGORY_PAGE_SIZE = 20  # сколько категорий показыват�
 
 
 def is_admin(user_id: int) -> bool:
-    return has_permission_sync(user_id, "catalog.manage")
+    return is_owner_sync(user_id)
 
 
 async def show_categories_list(callback: CallbackQuery, page: int):

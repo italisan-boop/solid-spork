@@ -5,7 +5,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncio
 import json
-from authz import has_permission_sync
+from authz import is_owner_sync
 from config.settings import settings
 from db.books import add_book, get_all_books, update_book, update_book_full, delete_book, archive_books, reassign_active_books_category, restore_book, get_archived_books, get_archived_books_count, classify_archived_book_ids, purge_archived_books, get_book, get_books_count, get_all_books_paginated, find_book_by_title_author
 from db.categories import get_all_categories, add_category, get_category_by_id, category_display, NO_CATEGORY_NAME
@@ -73,8 +73,8 @@ PAGE_PHOTOS_LIMIT_NOTE = (
 
 
 def is_admin(user_id: int) -> bool:
-    """Catalog mutations remain owner-only."""
-    return has_permission_sync(user_id, "catalog.manage")
+    """Legacy Bot catalog mutations remain owner-only."""
+    return is_owner_sync(user_id)
 
 
 class AdminBooksMiddleware(BaseMiddleware):
