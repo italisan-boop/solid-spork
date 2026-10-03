@@ -304,12 +304,17 @@
     .image-lightbox-caption { margin: 0; padding: 13px 16px 16px; color: var(--muted); font-size: 14px; }
     .birthday-surprise { width: 100%; max-width: none; height: 100svh; height: 100dvh; max-height: none; padding: 0; margin: 0; overflow: hidden; border: 0; color: var(--ink); background: #120710; }
     .birthday-surprise::backdrop { background: rgba(5,2,7,.88); backdrop-filter: blur(9px); }
-    .birthday-scene { position: relative; isolation: isolate; display: grid; width: 100%; min-height: 100svh; min-height: 100dvh; place-items: center; padding: max(28px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); overflow: hidden; text-align: center; background: radial-gradient(circle at 50% 38%, #8f1b63 0, #42112d 28%, #1c0817 59%, #120710 78%); }
+    .birthday-scene { --birthday-beat: 3.6s; --birthday-slow-beat: 7.2s; --birthday-ease: cubic-bezier(.45, 0, .55, 1); position: relative; isolation: isolate; display: grid; width: 100%; min-height: 100svh; min-height: 100dvh; place-items: center; padding: max(28px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); overflow: hidden; text-align: center; background: radial-gradient(circle at 50% 38%, #8f1b63 0, #42112d 28%, #1c0817 59%, #120710 78%); }
     .birthday-scene::before { position: absolute; z-index: 0; inset: 10%; border: 1px solid rgba(255, 217, 237, .22); border-radius: 50%; box-shadow: 0 0 90px rgba(255, 96, 174, .25), inset 0 0 75px rgba(255, 159, 207, .08); content: ""; }
     .birthday-scene::after { position: absolute; z-index: 0; inset: 0; opacity: .72; background-image: radial-gradient(circle at 8% 18%, #fff5fa 0 1px, transparent 2px), radial-gradient(circle at 91% 16%, #ffd1e8 0 1px, transparent 2px), radial-gradient(circle at 21% 77%, #fff5fa 0 2px, transparent 3px), radial-gradient(circle at 78% 82%, #ffd1e8 0 1px, transparent 2px), radial-gradient(circle at 63% 11%, #fff 0 1px, transparent 2px), radial-gradient(circle at 42% 91%, #fff 0 1px, transparent 2px); content: ""; pointer-events: none; }
     .birthday-aurora { position: absolute; z-index: 0; width: 120%; aspect-ratio: 1.8; border-radius: 50%; opacity: .62; background: conic-gradient(from 140deg, transparent, rgba(255, 83, 165, .2), rgba(177, 109, 255, .16), transparent, rgba(255, 203, 231, .17), transparent); filter: blur(36px); pointer-events: none; }
+    .birthday-constellation { position: absolute; z-index: 1; top: max(5%, env(safe-area-inset-top)); left: 50%; width: min(43vw, 430px); min-width: 170px; opacity: .34; pointer-events: none; translate: -50% 0; transition: opacity .5s ease, filter .5s ease; }
+    .birthday-constellation svg { display: block; width: 100%; height: auto; overflow: visible; }
+    .birthday-constellation-line { fill: none; stroke: rgba(255, 225, 243, .64); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.3; }
+    .birthday-constellation-star { fill: #fff7fc; filter: drop-shadow(0 0 5px rgba(255, 181, 219, .95)); }
+    .birthday-surprise.is-finale .birthday-constellation { opacity: .88; filter: drop-shadow(0 0 18px rgba(255, 141, 199, .66)); }
     .birthday-cat-layer, .birthday-confetti { position: absolute; inset: 0; pointer-events: none; }
-    .birthday-cat-layer { z-index: 1; }
+    .birthday-cat-layer { z-index: 2; }
     .birthday-cat { position: absolute; width: clamp(118px, 20vw, 248px); height: clamp(130px, 22vw, 270px); opacity: .92; filter: drop-shadow(0 18px 18px rgba(0,0,0,.28)); }
     .birthday-cat--left { left: max(2.5%, env(safe-area-inset-left)); bottom: max(1.5%, env(safe-area-inset-bottom)); }
     .birthday-cat--right { right: max(2.5%, env(safe-area-inset-right)); bottom: max(1.5%, env(safe-area-inset-bottom)); transform: scaleX(-1); }
@@ -331,15 +336,21 @@
     .birthday-cat-tail { position: absolute; right: -3%; bottom: 20%; width: 42%; height: 50%; border: clamp(10px, 1.8vw, 20px) solid var(--cat-main); border-bottom: 0; border-left: 0; border-radius: 0 100% 0 0; transform: rotate(-23deg); transform-origin: bottom left; }
     .birthday-cat--dark { --cat-main: #332333; --cat-shade: #130b18; --cat-ear: #bf6b9d; --cat-paw: #4a304b; }
     .birthday-cat--warm { --cat-main: #d48c63; --cat-shade: #8b3e46; --cat-ear: #ffd1bd; --cat-paw: #eab082; }
-    .birthday-content { position: relative; z-index: 3; display: grid; justify-items: center; gap: 12px; max-width: 680px; }
+    .birthday-cat-gift { position: absolute; z-index: 5; top: 49%; right: -1%; display: grid; width: 29%; aspect-ratio: 1; place-items: center; border: 2px solid rgba(255, 235, 246, .72); border-radius: 42% 42% 48% 48%; color: #fff4fa; background: linear-gradient(145deg, #ff78b9, #9a225d); box-shadow: 0 8px 16px rgba(0,0,0,.26), 0 0 14px rgba(255, 130, 188, .46); font-size: clamp(15px, 3vw, 28px); transform: rotate(-12deg); transform-origin: 20% 80%; }
+    .birthday-cat-receiving-paw { position: absolute; z-index: 4; top: 46%; right: -1%; width: 28%; height: 34%; border: 3px solid rgba(255,255,255,.18); border-radius: 55% 55% 38% 38%; background: var(--cat-paw); box-shadow: inset 0 5px 8px rgba(255,255,255,.17); transform: rotate(28deg); transform-origin: bottom right; }
+    .birthday-surprise.is-finale .birthday-cat-gift { filter: drop-shadow(0 0 12px rgba(255, 210, 234, .92)); translate: 18% -18%; }
+    .birthday-surprise.is-finale .birthday-cat-receiving-paw { translate: 7% -16%; }
+    .birthday-content { position: relative; z-index: 4; display: grid; justify-items: center; gap: 12px; max-width: 680px; }
     .birthday-kicker { margin: 0; color: #ffd1e6; font-size: clamp(13px, 3vw, 17px); font-weight: 800; letter-spacing: .17em; text-transform: uppercase; }
     .birthday-number { margin: 0; color: #fff1f8; font-size: clamp(150px, 45vw, 390px); font-weight: 900; letter-spacing: -.12em; line-height: .76; text-shadow: 0 0 48px rgba(255, 139, 198, .66); }
     .birthday-title { margin: 8px 0 6px; color: #fff4fa; font-size: clamp(32px, 8vw, 72px); letter-spacing: -.065em; line-height: .98; }
     .birthday-copy { max-width: 430px; margin: 0; color: #ffd3e7; font-size: clamp(16px, 3.5vw, 21px); }
+    .birthday-finale { max-width: 460px; margin: 3px 0 -2px; padding: 9px 13px; border: 1px solid rgba(255, 222, 242, .52); border-radius: 16px; color: #fff4fa; background: rgba(71, 15, 53, .66); box-shadow: 0 0 28px rgba(255, 118, 184, .22); font-weight: 800; }
+    .birthday-finale[hidden] { display: none; }
     .birthday-close { min-height: 46px; margin-top: 15px; padding: 10px 18px; border: 1px solid rgba(255, 224, 240, .58); border-radius: 999px; color: #2a0719; background: #ffd4e8; font: inherit; font-weight: 850; }
     .birthday-close:hover { background: #fff1f8; transform: translateY(-2px); }
     .birthday-close:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
-    .birthday-confetti { z-index: 2; }
+    .birthday-confetti { z-index: 3; }
     .birthday-token { position: absolute; display: grid; width: clamp(38px, 9vw, 72px); aspect-ratio: 1; place-items: center; border: 1px solid rgba(255,255,255,.34); border-radius: 18px; color: #fff4fa; background: linear-gradient(145deg, rgba(255,123,183,.72), rgba(86,19,61,.82)); box-shadow: 0 14px 32px rgba(0,0,0,.28); font-size: clamp(24px, 5vw, 42px); transform: rotate(var(--tilt, 0deg)); }
     .birthday-token:nth-child(1) { top: 7%; left: 7%; --tilt: -17deg; }
     .birthday-token:nth-child(2) { top: 17%; right: 8%; --tilt: 15deg; }
@@ -353,15 +364,20 @@
     .birthday-token:nth-child(10) { top: 24%; right: 31%; --tilt: -7deg; }
     .birthday-token:nth-child(11) { bottom: 23%; right: 4%; --tilt: 12deg; }
     @media (prefers-reduced-motion: no-preference) {
-      .birthday-token { animation: birthday-float 4.8s ease-in-out infinite alternate; }
-      .birthday-token:nth-child(2n) { animation-delay: -2.1s; }
-      .birthday-token:nth-child(3n) { animation-duration: 5.9s; }
-      .birthday-aurora { animation: birthday-aurora 12s ease-in-out infinite alternate; }
-      .birthday-scene::after { animation: birthday-sparkle 4.6s ease-in-out infinite alternate; }
-      .birthday-cat-tail { animation: birthday-tail 3.4s ease-in-out infinite alternate; }
-      .birthday-cat-ear--right { animation: birthday-ear 4.2s ease-in-out infinite alternate; }
+      .birthday-token { animation: birthday-float var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
+      .birthday-token:nth-child(2n) { animation-delay: -1.8s; }
+      .birthday-token:nth-child(3n) { animation-duration: 9s; }
+      .birthday-aurora { animation: birthday-aurora 14.4s var(--birthday-ease) infinite alternate; }
+      .birthday-scene::after { animation: birthday-sparkle var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
+      .birthday-constellation { animation: birthday-constellation var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
+      .birthday-cat-tail { animation: birthday-tail var(--birthday-beat) var(--birthday-ease) infinite alternate; }
+      .birthday-cat-ear--right { animation: birthday-ear var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
+      .birthday-cat-gift { animation: birthday-gift-offer var(--birthday-beat) var(--birthday-ease) infinite alternate; }
+      .birthday-cat-receiving-paw { animation: birthday-receiving-paw var(--birthday-beat) var(--birthday-ease) infinite alternate; animation-delay: -1.8s; }
       .birthday-surprise[open] .birthday-content { animation: birthday-settle .72s cubic-bezier(.16,1,.3,1) both; }
-      .birthday-surprise[open] .birthday-number { animation: birthday-number-glow 2.8s ease-in-out infinite alternate; }
+      .birthday-surprise[open] .birthday-number { animation: birthday-number-glow var(--birthday-beat) var(--birthday-ease) infinite alternate; }
+      .birthday-surprise.is-finale .birthday-cat-gift, .birthday-surprise.is-finale .birthday-cat-receiving-paw { animation: none; }
+      .birthday-surprise.is-finale .birthday-constellation { animation: birthday-finale-glow var(--birthday-beat) var(--birthday-ease) infinite alternate; }
     }
     .demo-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
     .demo-evidence-grid .demo-evidence { margin: 0; }
@@ -459,6 +475,10 @@
     @keyframes birthday-ear { 0%, 82% { transform: scaleX(-1) rotate(-24deg); } 90%, 100% { transform: scaleX(-1) rotate(-12deg); } }
     @keyframes birthday-settle { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
     @keyframes birthday-number-glow { from { text-shadow: 0 0 34px rgba(255, 139, 198, .42); } to { text-shadow: 0 0 62px rgba(255, 139, 198, .78), 0 0 120px rgba(209, 106, 255, .22); } }
+    @keyframes birthday-constellation { from { opacity: .26; scale: .97; } to { opacity: .5; scale: 1.02; } }
+    @keyframes birthday-gift-offer { from { translate: 0 2%; rotate: -12deg; } to { translate: 12% -8%; rotate: 3deg; } }
+    @keyframes birthday-receiving-paw { from { translate: 0 2%; rotate: 28deg; } to { translate: 7% -11%; rotate: 12deg; } }
+    @keyframes birthday-finale-glow { from { filter: drop-shadow(0 0 13px rgba(255, 141, 199, .48)); } to { filter: drop-shadow(0 0 25px rgba(255, 219, 241, .88)); } }
     @media (max-width: 900px) {
       .topnav { display: none; }
       .hero, .support { grid-template-columns: 1fr; }
@@ -501,6 +521,8 @@
       .birthday-cat--left { left: max(-3%, env(safe-area-inset-left)); bottom: max(-1%, env(safe-area-inset-bottom)); }
       .birthday-cat--right { right: max(-3%, env(safe-area-inset-right)); bottom: max(-1%, env(safe-area-inset-bottom)); }
       .birthday-aurora { width: 154%; opacity: .46; }
+      .birthday-constellation { top: max(3%, env(safe-area-inset-top)); width: min(58vw, 280px); min-width: 132px; opacity: .26; }
+      .birthday-finale { max-width: min(100%, 330px); font-size: 14px; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
@@ -641,9 +663,10 @@
   <dialog id="birthday-surprise" class="birthday-surprise" aria-labelledby="birthday-title" aria-describedby="birthday-copy">
     <div class="birthday-scene">
       <div class="birthday-aurora" aria-hidden="true"></div>
-      <div class="birthday-cat-layer" aria-hidden="true"><div class="birthday-cat birthday-cat--left birthday-cat--dark"><span class="birthday-cat-body"></span><span class="birthday-cat-tail"></span><span class="birthday-cat-head"><span class="birthday-cat-ear birthday-cat-ear--left"></span><span class="birthday-cat-ear birthday-cat-ear--right"></span><span class="birthday-cat-eye birthday-cat-eye--left"></span><span class="birthday-cat-eye birthday-cat-eye--right"></span><span class="birthday-cat-nose"></span><span class="birthday-cat-whiskers"></span></span><span class="birthday-cat-paw birthday-cat-paw--left"></span><span class="birthday-cat-paw birthday-cat-paw--right"></span></div><div class="birthday-cat birthday-cat--right birthday-cat--warm"><span class="birthday-cat-body"></span><span class="birthday-cat-tail"></span><span class="birthday-cat-head"><span class="birthday-cat-ear birthday-cat-ear--left"></span><span class="birthday-cat-ear birthday-cat-ear--right"></span><span class="birthday-cat-eye birthday-cat-eye--left"></span><span class="birthday-cat-eye birthday-cat-eye--right"></span><span class="birthday-cat-nose"></span><span class="birthday-cat-whiskers"></span></span><span class="birthday-cat-paw birthday-cat-paw--left"></span><span class="birthday-cat-paw birthday-cat-paw--right"></span></div></div>
+      <div class="birthday-constellation" aria-hidden="true"><svg viewBox="0 0 280 150" focusable="false"><path class="birthday-constellation-line" d="M18 33 92 13 151 45 27 136 154 136"></path><path class="birthday-constellation-line" d="M205 43 242 14 242 136"></path><g class="birthday-constellation-stars"><circle class="birthday-constellation-star" cx="18" cy="33" r="4"></circle><circle class="birthday-constellation-star" cx="92" cy="13" r="4"></circle><circle class="birthday-constellation-star" cx="151" cy="45" r="4"></circle><circle class="birthday-constellation-star" cx="27" cy="136" r="4"></circle><circle class="birthday-constellation-star" cx="154" cy="136" r="4"></circle><circle class="birthday-constellation-star" cx="205" cy="43" r="4"></circle><circle class="birthday-constellation-star" cx="242" cy="14" r="4"></circle><circle class="birthday-constellation-star" cx="242" cy="136" r="4"></circle></g></svg></div>
+      <div class="birthday-cat-layer" aria-hidden="true"><div class="birthday-cat birthday-cat--left birthday-cat--dark birthday-cat--giver"><span class="birthday-cat-body"></span><span class="birthday-cat-tail"></span><span class="birthday-cat-gift">♥</span><span class="birthday-cat-head"><span class="birthday-cat-ear birthday-cat-ear--left"></span><span class="birthday-cat-ear birthday-cat-ear--right"></span><span class="birthday-cat-eye birthday-cat-eye--left"></span><span class="birthday-cat-eye birthday-cat-eye--right"></span><span class="birthday-cat-nose"></span><span class="birthday-cat-whiskers"></span></span><span class="birthday-cat-paw birthday-cat-paw--left"></span><span class="birthday-cat-paw birthday-cat-paw--right"></span></div><div class="birthday-cat birthday-cat--right birthday-cat--warm birthday-cat--receiver"><span class="birthday-cat-body"></span><span class="birthday-cat-tail"></span><span class="birthday-cat-receiving-paw"></span><span class="birthday-cat-head"><span class="birthday-cat-ear birthday-cat-ear--left"></span><span class="birthday-cat-ear birthday-cat-ear--right"></span><span class="birthday-cat-eye birthday-cat-eye--left"></span><span class="birthday-cat-eye birthday-cat-eye--right"></span><span class="birthday-cat-nose"></span><span class="birthday-cat-whiskers"></span></span><span class="birthday-cat-paw birthday-cat-paw--left"></span><span class="birthday-cat-paw birthday-cat-paw--right"></span></div></div>
       <div class="birthday-confetti" aria-hidden="true"><span class="birthday-token">♥</span><span class="birthday-token">🂡</span><span class="birthday-token">♥</span><span class="birthday-token">🂱</span><span class="birthday-token">♦</span><span class="birthday-token">🂽</span><span class="birthday-token">♥</span><span class="birthday-token">♠</span><span class="birthday-token">🎈</span><span class="birthday-token">🎈</span><span class="birthday-token">🎈</span></div>
-      <div class="birthday-content"><p class="birthday-kicker">Секретная раздача</p><p class="birthday-number" aria-hidden="true">21</p><h2 id="birthday-title" class="birthday-title">С днем рождения Лера &lt;3</h2><p id="birthday-copy" class="birthday-copy">Пусть новый год жизни приносит счастливые карты, тёплые сердца и только лучшие истории.</p><button id="birthday-surprise-close" class="birthday-close" type="button">Спасибо ♥</button></div>
+      <div class="birthday-content"><p class="birthday-kicker">Секретная раздача</p><p class="birthday-number" aria-hidden="true">21</p><h2 id="birthday-title" class="birthday-title">С днем рождения Лера &lt;3</h2><p id="birthday-copy" class="birthday-copy">Пусть новый, 21-й год жизни приносит счастливые карты, тёплые сердца и только лучшие истории.</p><p id="birthday-finale" class="birthday-finale" role="status" aria-live="polite" hidden>Созвездие собрано: коты передали счастливую карту. Уровень 21 открыт.</p><button id="birthday-surprise-close" class="birthday-close" type="button">Спасибо ♥</button></div>
     </div>
   </dialog>
   <footer class="page"><p>#Ваша_платформа · демонстрационная страница универсальной платформы продаж в Telegram</p><p class="legal-notice">Сайт и показанные данные демонстрационные и не являются публичной офертой. Возможности, стоимость, состав запуска и итоговые условия согласуются индивидуально в Telegram.</p></footer>
@@ -1318,9 +1341,30 @@
       const birthdayTrigger = byId('birthday-trigger');
       const birthdaySurprise = byId('birthday-surprise');
       const birthdaySurpriseClose = byId('birthday-surprise-close');
+      const birthdayFinale = byId('birthday-finale');
       const birthdayTriggerWindowMs = 2500;
       const birthdayTriggerCount = 7;
+      const birthdayFinaleDelayMs = 21000;
       let birthdayTriggerPresses = [];
+      let birthdayFinaleTimer = null;
+      const resetBirthdayFinale = () => {
+        if (birthdayFinaleTimer !== null) {
+          window.clearTimeout(birthdayFinaleTimer);
+          birthdayFinaleTimer = null;
+        }
+        birthdaySurprise.classList.remove('is-finale');
+        birthdayFinale.hidden = true;
+      };
+      const openBirthdaySurprise = () => {
+        resetBirthdayFinale();
+        birthdaySurprise.showModal();
+        birthdayFinaleTimer = window.setTimeout(() => {
+          birthdayFinaleTimer = null;
+          if (!birthdaySurprise.open) return;
+          birthdaySurprise.classList.add('is-finale');
+          birthdayFinale.hidden = false;
+        }, birthdayFinaleDelayMs);
+      };
       const closeBirthdaySurprise = () => {
         if (birthdaySurprise.open) birthdaySurprise.close();
       };
@@ -1330,7 +1374,7 @@
         birthdayTriggerPresses.push(now);
         if (birthdayTriggerPresses.length < birthdayTriggerCount) return;
         birthdayTriggerPresses = [];
-        birthdaySurprise.showModal();
+        openBirthdaySurprise();
       });
       birthdaySurpriseClose.addEventListener('click', closeBirthdaySurprise);
       birthdaySurprise.addEventListener('click', event => {
@@ -1338,6 +1382,7 @@
       });
       birthdaySurprise.addEventListener('close', () => {
         birthdayTriggerPresses = [];
+        resetBirthdayFinale();
         if (birthdayTrigger.isConnected) birthdayTrigger.focus({ preventScroll: true });
       });
       const setupSectionReveals = () => {
