@@ -19,6 +19,9 @@ controlplane/platform_index.html
 controlplane/provisioning.py
 controlplane/root_adapter.py
 controlplane/route_templates.py
+controlplane/sales_assets/birthday-kitten-gray.webp
+controlplane/sales_assets/birthday-kitten-party.webp
+controlplane/sales_assets/birthday-kittens-couch.webp
 controlplane/sales_assets/bot-analytics.webp
 controlplane/sales_assets/bot-branding.webp
 controlplane/sales_assets/bot-broadcast.webp

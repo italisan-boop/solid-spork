@@ -37,6 +37,9 @@ from telegram_auth import TelegramInitDataError, validate_telegram_init_data
 
 SALES_ASSET_DIRECTORY = Path(__file__).parent / "sales_assets"
 SALES_ASSET_FILENAMES = frozenset({
+    "birthday-kitten-gray.webp",
+    "birthday-kitten-party.webp",
+    "birthday-kittens-couch.webp",
     "bot-analytics.webp",
     "bot-branding.webp",
     "bot-broadcast.webp",

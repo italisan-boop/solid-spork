@@ -58,6 +58,9 @@ class SalesLandingTests(unittest.TestCase):
     def test_sales_assets_are_allowlisted_same_origin_webp(self):
         self.assertEqual(
             {
+                "birthday-kitten-gray.webp",
+                "birthday-kitten-party.webp",
+                "birthday-kittens-couch.webp",
                 "bot-analytics.webp",
                 "bot-branding.webp",
                 "bot-broadcast.webp",
@@ -597,8 +600,8 @@ class SalesLandingTests(unittest.TestCase):
         self.assertEqual(1, source.count('<dialog id="image-lightbox"'))
         self.assertEqual(1, source.count('id="image-lightbox-image"'))
         self.assertNotIn('id="image-lightbox-image" class="image-lightbox-image" src=', source)
-        self.assertEqual(len(SALES_ASSET_FILENAMES) - 4, gallery.count('data-image-lightbox-trigger'))
-        self.assertEqual(len(SALES_ASSET_FILENAMES) - 4, gallery.count('aria-haspopup="dialog"'))
+        self.assertEqual(len(SALES_ASSET_FILENAMES) - 7, gallery.count('data-image-lightbox-trigger'))
+        self.assertEqual(len(SALES_ASSET_FILENAMES) - 7, gallery.count('aria-haspopup="dialog"'))
         self.assertNotIn('<a ', gallery)
         for marker in (
             'const imageLightbox = byId(\'image-lightbox\');',
@@ -709,38 +712,42 @@ class SalesLandingTests(unittest.TestCase):
             'class="birthday-number" aria-hidden="true">21',
             '<span class="birthday-token">🎈</span>',
             '<div class="birthday-aurora" aria-hidden="true"></div>',
-            '<div class="birthday-constellation" aria-hidden="true">',
-            'viewBox="0 0 280 150" focusable="false"',
-            'birthday-constellation-line',
+            '<div class="birthday-star-sky" aria-hidden="true">',
+            'birthday-stars birthday-stars--far',
+            'birthday-stars birthday-stars--near',
+            'birthday-shooting-star',
+            '<div class="birthday-photo-layer" aria-hidden="true">',
+            'birthday-photo birthday-photo--couch',
+            'birthday-photo birthday-photo--party',
+            'birthday-photo birthday-photo--gray',
+            '/sales/assets/birthday-kittens-couch.webp',
+            '/sales/assets/birthday-kitten-party.webp',
+            '/sales/assets/birthday-kitten-gray.webp',
             '<div class="birthday-cat-layer" aria-hidden="true">',
             'birthday-cat--left birthday-cat--dark birthday-cat--giver',
             'birthday-cat--right birthday-cat--warm birthday-cat--receiver',
             'birthday-cat-gift',
             'birthday-cat-receiving-paw',
-            'id="birthday-finale" class="birthday-finale" role="status" aria-live="polite" hidden',
             '--birthday-beat: 3.6s;',
-            '.birthday-surprise.is-finale .birthday-constellation {',
+            '--birthday-sky-drift: 22s;',
             '.birthday-scene::after {',
             '.birthday-cat-tail {',
             '.birthday-aurora { animation: birthday-aurora',
-            '.birthday-constellation { animation: birthday-constellation',
+            '.birthday-stars--far { animation: birthday-star-drift',
+            '.birthday-stars--near { animation: birthday-star-drift-near',
+            '.birthday-shooting-star { animation: birthday-shooting-star',
+            '.birthday-photo { animation: birthday-photo-float',
             '.birthday-cat-gift { animation: birthday-gift-offer',
             '.birthday-cat-receiving-paw { animation: birthday-receiving-paw',
             'birthday-settle',
             'birthday-number-glow',
-            'birthday-finale-glow',
+            'birthday-photo-float',
+            'birthday-shooting-star',
             'const birthdayTriggerWindowMs = 2500;',
             'const birthdayTriggerCount = 7;',
-            'const birthdayFinaleDelayMs = 21000;',
-            'const openBirthdaySurprise = () => {',
-            'window.setTimeout(() => {',
-            'if (!birthdaySurprise.open) return;',
-            "birthdaySurprise.classList.add('is-finale');",
-            'window.clearTimeout(birthdayFinaleTimer);',
             'birthdayTriggerPresses = birthdayTriggerPresses.filter',
             'birthdaySurprise.showModal();',
             "birthdaySurprise.addEventListener('close', () => {",
-            'resetBirthdayFinale();',
             'birthdayTrigger.focus({ preventScroll: true });',
             '@media (prefers-reduced-motion: no-preference) {',
             '.birthday-token { animation: birthday-float',
@@ -752,6 +759,15 @@ class SalesLandingTests(unittest.TestCase):
         self.assertNotIn('max-height: 94vh;', source)
         self.assertNotIn('max-height: min(72vh, 880px);', source)
         self.assertNotIn('height: 100vh;', source)
+        for removed in (
+            'birthday-constellation',
+            'birthday-finale',
+            'birthdayFinaleDelayMs',
+            'birthdayFinaleTimer',
+            'is-finale',
+            'Созвездие собрано',
+        ):
+            self.assertNotIn(removed, source)
 
     def test_plan_comparison_matches_standard_entitlements(self):
         response = self.client.get("/sales")
