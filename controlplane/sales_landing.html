@@ -304,9 +304,10 @@
     .image-lightbox-caption { margin: 0; padding: 13px 16px 16px; color: var(--muted); font-size: 14px; }
     .birthday-surprise { width: 100%; max-width: none; height: 100svh; height: 100dvh; max-height: none; padding: 0; margin: 0; overflow: hidden; border: 0; color: var(--ink); background: #120710; }
     .birthday-surprise::backdrop { background: rgba(5,2,7,.88); backdrop-filter: blur(9px); }
-    .birthday-scene { --birthday-beat: 3.6s; --birthday-slow-beat: 7.2s; --birthday-sky-drift: 22s; --birthday-ease: cubic-bezier(.45, 0, .55, 1); position: relative; isolation: isolate; display: grid; width: 100%; min-height: 100svh; min-height: 100dvh; place-items: center; padding: max(28px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); overflow: hidden; text-align: center; background: radial-gradient(circle at 50% 38%, #8f1b63 0, #42112d 28%, #1c0817 59%, #120710 78%); }
+    .birthday-scene { --birthday-beat: 3.6s; --birthday-slow-beat: 7.2s; --birthday-sky-drift: 22s; --birthday-sky-cycle: 72s; --birthday-ease: cubic-bezier(.45, 0, .55, 1); position: relative; isolation: isolate; display: grid; width: 100%; min-height: 100svh; min-height: 100dvh; place-items: center; padding: max(28px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); overflow: hidden; text-align: center; background: radial-gradient(circle at 50% 38%, #8f1b63 0, #42112d 28%, #1c0817 59%, #120710 78%); }
     .birthday-scene::before { position: absolute; z-index: 0; inset: 10%; border: 1px solid rgba(255, 217, 237, .22); border-radius: 50%; box-shadow: 0 0 90px rgba(255, 96, 174, .25), inset 0 0 75px rgba(255, 159, 207, .08); content: ""; }
     .birthday-scene::after { position: absolute; z-index: 0; inset: 0; opacity: .72; background-image: radial-gradient(circle at 8% 18%, #fff5fa 0 1px, transparent 2px), radial-gradient(circle at 91% 16%, #ffd1e8 0 1px, transparent 2px), radial-gradient(circle at 21% 77%, #fff5fa 0 2px, transparent 3px), radial-gradient(circle at 78% 82%, #ffd1e8 0 1px, transparent 2px), radial-gradient(circle at 63% 11%, #fff 0 1px, transparent 2px), radial-gradient(circle at 42% 91%, #fff 0 1px, transparent 2px); content: ""; pointer-events: none; }
+    .birthday-sky-cycle { position: absolute; z-index: 0; inset: -16%; opacity: .42; background-color: #a43a70; background-image: radial-gradient(circle at 25% 18%, rgba(255, 218, 173, .64), transparent 36%), radial-gradient(circle at 73% 74%, rgba(66, 32, 113, .56), transparent 52%); filter: blur(18px); pointer-events: none; }
     .birthday-aurora { position: absolute; z-index: 0; width: 120%; aspect-ratio: 1.8; border-radius: 50%; opacity: .62; background: conic-gradient(from 140deg, transparent, rgba(255, 83, 165, .2), rgba(177, 109, 255, .16), transparent, rgba(255, 203, 231, .17), transparent); filter: blur(36px); pointer-events: none; }
     .birthday-star-sky, .birthday-stars { position: absolute; pointer-events: none; }
     .birthday-star-sky { z-index: 0; inset: -18%; overflow: hidden; }
@@ -319,8 +320,16 @@
     .birthday-photo { --photo-tilt: 0deg; position: absolute; display: block; width: clamp(94px, 15vw, 188px); padding: 6px; overflow: hidden; border: 1px solid rgba(255, 239, 248, .72); border-radius: 14px; opacity: .8; background: linear-gradient(145deg, rgba(255,255,255,.98), rgba(255,211,232,.87)); box-shadow: 0 18px 36px rgba(0,0,0,.34), 0 0 30px rgba(255, 148, 203, .2); transform: rotate(var(--photo-tilt)); }
     .birthday-photo img { display: block; width: 100%; height: auto; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(74, 10, 43, .12); }
     .birthday-photo--couch { --photo-tilt: -8deg; top: 13%; left: max(4%, env(safe-area-inset-left)); }
-    .birthday-photo--party { --photo-tilt: 7deg; top: 11%; right: max(5%, env(safe-area-inset-right)); }
     .birthday-photo--gray { --photo-tilt: -5deg; right: max(20%, env(safe-area-inset-right)); bottom: max(14%, env(safe-area-inset-bottom)); }
+    .birthday-photo-spotlight { position: absolute; z-index: 4; top: max(10%, env(safe-area-inset-top)); right: max(5%, env(safe-area-inset-right)); width: clamp(112px, 17vw, 206px); margin: 0; text-align: left; transform: rotate(7deg); }
+    .birthday-photo-spotlight button { display: block; width: 100%; padding: 6px; border: 1px solid rgba(255, 243, 250, .86); border-radius: 14px; color: inherit; background: linear-gradient(145deg, rgba(255,255,255,.98), rgba(255,211,232,.91)); box-shadow: 0 20px 42px rgba(0,0,0,.38), 0 0 34px rgba(255, 146, 204, .34); cursor: zoom-in; transition: box-shadow .35s ease, transform .35s cubic-bezier(.2,.8,.2,1), filter .35s ease; }
+    .birthday-photo-spotlight img { display: block; width: 100%; height: auto; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(74, 10, 43, .12); }
+    .birthday-photo-spotlight figcaption { margin-top: 7px; padding: 5px 8px; border: 1px solid rgba(255, 235, 246, .48); border-radius: 10px; color: #551037; background: rgba(255, 233, 244, .9); box-shadow: 0 9px 22px rgba(0,0,0,.22); font-size: clamp(11px, 1.35vw, 14px); font-weight: 750; line-height: 1.15; }
+    .birthday-photo-spotlight figcaption strong, .birthday-photo-spotlight figcaption span { display: block; }
+    .birthday-photo-spotlight figcaption span { margin-top: 2px; font-size: .82em; font-weight: 650; }
+    .birthday-photo-spotlight button:hover, .birthday-photo-spotlight button:focus-visible { box-shadow: 0 24px 50px rgba(0,0,0,.42), 0 0 48px rgba(255, 190, 225, .8); filter: brightness(1.06) saturate(1.08); transform: translate(-4px, -7px) rotate(-2deg) scale(1.045); }
+    .birthday-photo-spotlight button:focus-visible { outline: 3px solid #fff; outline-offset: 4px; }
+    .birthday-photo-spotlight button:active { transform: translate(-2px, -3px) rotate(-1deg) scale(1.015); }
     .birthday-cat-layer { z-index: 2; }
     .birthday-cat { position: absolute; width: clamp(118px, 20vw, 248px); height: clamp(130px, 22vw, 270px); opacity: .92; filter: drop-shadow(0 18px 18px rgba(0,0,0,.28)); }
     .birthday-cat--left { left: max(2.5%, env(safe-area-inset-left)); bottom: max(1.5%, env(safe-area-inset-bottom)); }
@@ -370,14 +379,15 @@
       .birthday-token { animation: birthday-float var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
       .birthday-token:nth-child(2n) { animation-delay: -1.8s; }
       .birthday-token:nth-child(3n) { animation-duration: 9s; }
+      .birthday-sky-cycle { animation: birthday-sky-cycle var(--birthday-sky-cycle) var(--birthday-ease) infinite alternate; }
       .birthday-aurora { animation: birthday-aurora 14.4s var(--birthday-ease) infinite alternate; }
       .birthday-scene::after { animation: birthday-sparkle var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
       .birthday-stars--far { animation: birthday-star-drift var(--birthday-sky-drift) linear infinite alternate; }
       .birthday-stars--near { animation: birthday-star-drift-near calc(var(--birthday-sky-drift) * .7) linear infinite alternate; }
       .birthday-shooting-star { animation: birthday-shooting-star 11.5s var(--birthday-ease) infinite; }
       .birthday-photo { animation: birthday-photo-float var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
-      .birthday-photo--party { animation-delay: -2.4s; }
       .birthday-photo--gray { animation-delay: -4.8s; animation-duration: 9s; }
+      .birthday-photo-spotlight { animation: birthday-photo-spotlight calc(var(--birthday-slow-beat) * 1.25) var(--birthday-ease) infinite alternate; }
       .birthday-cat-tail { animation: birthday-tail var(--birthday-beat) var(--birthday-ease) infinite alternate; }
       .birthday-cat-ear--right { animation: birthday-ear var(--birthday-slow-beat) var(--birthday-ease) infinite alternate; }
       .birthday-cat-gift { animation: birthday-gift-offer var(--birthday-beat) var(--birthday-ease) infinite alternate; }
@@ -477,10 +487,12 @@
     @keyframes birthday-float { from { translate: 0 -10px; } to { translate: 0 18px; } }
     @keyframes birthday-aurora { from { transform: rotate(-8deg) scale(.96); opacity: .42; } to { transform: rotate(9deg) scale(1.07); opacity: .72; } }
     @keyframes birthday-sparkle { from { opacity: .38; } to { opacity: .86; } }
+    @keyframes birthday-sky-cycle { from { background-color: #a43a70; opacity: .42; filter: blur(18px) hue-rotate(0deg) saturate(1); } to { background-color: #102b59; opacity: .62; filter: blur(18px) hue-rotate(22deg) saturate(.84); } }
     @keyframes birthday-star-drift { from { translate: -1.5% -1%; } to { translate: 1.5% 2%; } }
     @keyframes birthday-star-drift-near { from { translate: 2% -1%; } to { translate: -2% 2.5%; } }
     @keyframes birthday-shooting-star { 0%, 68% { opacity: 0; translate: 0 0; } 72% { opacity: .92; } 80% { opacity: 0; translate: 165vw 44vh; } 100% { opacity: 0; translate: 165vw 44vh; } }
     @keyframes birthday-photo-float { from { translate: 0 -7px; filter: brightness(.96); } to { translate: 0 9px; filter: brightness(1.06); } }
+    @keyframes birthday-photo-spotlight { from { translate: 0 -5px; } to { translate: 0 8px; } }
     @keyframes birthday-tail { from { transform: rotate(-31deg); } to { transform: rotate(-11deg); } }
     @keyframes birthday-ear { 0%, 82% { transform: scaleX(-1) rotate(-24deg); } 90%, 100% { transform: scaleX(-1) rotate(-12deg); } }
     @keyframes birthday-settle { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
@@ -527,8 +539,10 @@
       .birthday-token { border-radius: 13px; }
       .birthday-photo { width: clamp(72px, 25vw, 108px); padding: 4px; opacity: .62; border-radius: 10px; }
       .birthday-photo--couch { top: 22%; left: max(-2%, env(safe-area-inset-left)); }
-      .birthday-photo--party { top: 13%; right: max(-2%, env(safe-area-inset-right)); }
       .birthday-photo--gray { right: max(4%, env(safe-area-inset-right)); bottom: max(17%, env(safe-area-inset-bottom)); }
+      .birthday-photo-spotlight { top: max(5%, env(safe-area-inset-top)); right: max(3%, env(safe-area-inset-right)); width: clamp(92px, 29vw, 126px); }
+      .birthday-photo-spotlight button { padding: 4px; border-radius: 10px; }
+      .birthday-photo-spotlight figcaption { margin-top: 4px; padding: 4px 6px; border-radius: 8px; font-size: 10px; }
       .birthday-cat { width: clamp(88px, 31vw, 144px); height: clamp(98px, 34vw, 158px); opacity: .72; }
       .birthday-cat--left { left: max(-3%, env(safe-area-inset-left)); bottom: max(-1%, env(safe-area-inset-bottom)); }
       .birthday-cat--right { right: max(-3%, env(safe-area-inset-right)); bottom: max(-1%, env(safe-area-inset-bottom)); }
@@ -673,13 +687,14 @@
   </dialog>
   <dialog id="birthday-surprise" class="birthday-surprise" aria-labelledby="birthday-title" aria-describedby="birthday-copy">
     <div class="birthday-scene">
+      <div class="birthday-sky-cycle" aria-hidden="true"></div>
       <div class="birthday-aurora" aria-hidden="true"></div>
       <div class="birthday-star-sky" aria-hidden="true"><span class="birthday-stars birthday-stars--far"></span><span class="birthday-stars birthday-stars--near"></span><span class="birthday-shooting-star"></span></div>
       <div class="birthday-photo-layer" aria-hidden="true">
         <figure class="birthday-photo birthday-photo--couch"><img src="/sales/assets/birthday-kittens-couch.webp" alt="" decoding="async" loading="lazy"></figure>
-        <figure class="birthday-photo birthday-photo--party"><img src="/sales/assets/birthday-kitten-party.webp" alt="" decoding="async" loading="lazy"></figure>
         <figure class="birthday-photo birthday-photo--gray"><img src="/sales/assets/birthday-kitten-gray.webp" alt="" decoding="async" loading="lazy"></figure>
       </div>
+      <figure class="birthday-photo-spotlight"><button type="button" data-image-lightbox-trigger aria-haspopup="dialog" aria-label="Открыть фото: главный кот вечера"><img src="/sales/assets/birthday-kitten-party.webp" alt="Котёнок в праздничном колпаке Happy Birthday" decoding="async" loading="lazy"></button><figcaption><strong>Главный кот вечера</strong><span>Нажмите, чтобы оживить полароид</span></figcaption></figure>
       <div class="birthday-cat-layer" aria-hidden="true"><div class="birthday-cat birthday-cat--left birthday-cat--dark birthday-cat--giver"><span class="birthday-cat-body"></span><span class="birthday-cat-tail"></span><span class="birthday-cat-gift">♥</span><span class="birthday-cat-head"><span class="birthday-cat-ear birthday-cat-ear--left"></span><span class="birthday-cat-ear birthday-cat-ear--right"></span><span class="birthday-cat-eye birthday-cat-eye--left"></span><span class="birthday-cat-eye birthday-cat-eye--right"></span><span class="birthday-cat-nose"></span><span class="birthday-cat-whiskers"></span></span><span class="birthday-cat-paw birthday-cat-paw--left"></span><span class="birthday-cat-paw birthday-cat-paw--right"></span></div><div class="birthday-cat birthday-cat--right birthday-cat--warm birthday-cat--receiver"><span class="birthday-cat-body"></span><span class="birthday-cat-tail"></span><span class="birthday-cat-receiving-paw"></span><span class="birthday-cat-head"><span class="birthday-cat-ear birthday-cat-ear--left"></span><span class="birthday-cat-ear birthday-cat-ear--right"></span><span class="birthday-cat-eye birthday-cat-eye--left"></span><span class="birthday-cat-eye birthday-cat-eye--right"></span><span class="birthday-cat-nose"></span><span class="birthday-cat-whiskers"></span></span><span class="birthday-cat-paw birthday-cat-paw--left"></span><span class="birthday-cat-paw birthday-cat-paw--right"></span></div></div>
       <div class="birthday-confetti" aria-hidden="true"><span class="birthday-token">♥</span><span class="birthday-token">🂡</span><span class="birthday-token">♥</span><span class="birthday-token">🂱</span><span class="birthday-token">♦</span><span class="birthday-token">🂽</span><span class="birthday-token">♥</span><span class="birthday-token">♠</span><span class="birthday-token">🎈</span><span class="birthday-token">🎈</span><span class="birthday-token">🎈</span></div>
       <div class="birthday-content"><p class="birthday-kicker">Секретная раздача</p><p class="birthday-number" aria-hidden="true">21</p><h2 id="birthday-title" class="birthday-title">С днем рождения Лера &lt;3</h2><p id="birthday-copy" class="birthday-copy">Пусть новый, 21-й год жизни приносит счастливые карты, тёплые сердца и только лучшие истории.</p><button id="birthday-surprise-close" class="birthday-close" type="button">Спасибо ♥</button></div>
@@ -1329,9 +1344,9 @@
       const closeImageLightbox = () => {
         if (imageLightbox.open) imageLightbox.close();
       };
-      document.querySelectorAll('#miniapp-screenshots [data-image-lightbox-trigger]').forEach(trigger => trigger.addEventListener('click', () => {
+      document.querySelectorAll('#miniapp-screenshots [data-image-lightbox-trigger], #birthday-surprise [data-image-lightbox-trigger]').forEach(trigger => trigger.addEventListener('click', () => {
         const image = trigger.querySelector('img');
-        const figure = trigger.closest('.screenshot-figure');
+        const figure = trigger.closest('figure');
         const caption = figure?.querySelector('figcaption');
         const title = caption?.querySelector('strong')?.textContent || 'Снимок рабочего пространства';
         if (!image) return;
